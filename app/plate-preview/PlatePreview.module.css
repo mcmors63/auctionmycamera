@@ -1,0 +1,45 @@
+.plate {
+  background-color: #ffeb3b;
+  border: 5px solid black;
+  border-radius: 8px;
+  width: 400px;
+  height: 100px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+}
+
+.plate::before {
+  content: "";
+  background-color: #003399;
+  width: 55px;
+  height: 100%;
+  position: absolute;
+  left: 0;
+  top: 0;
+  border-top-left-radius: 6px;
+  border-bottom-left-radius: 6px;
+}
+
+.plate::after {
+  content: "GB";
+  color: white;
+  font-weight: bold;
+  position: absolute;
+  left: 13px;
+  top: 35px;
+  font-size: 18px;
+}
+
+.input {
+  font-family: "Arial Black", sans-serif;
+  font-size: 36px;
+  letter-spacing: 5px;
+  border: none;
+  background: transparent;
+  text-align: center;
+  width: 300px;
+  outline: none;
+  text-transform: uppercase;
+}
