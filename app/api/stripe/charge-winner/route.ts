@@ -5,21 +5,6 @@ import Stripe from "stripe";
 export const runtime = "nodejs";
 
 // -----------------------------
-// ENV
-// -----------------------------
-const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY;
-
-if (!STRIPE_SECRET_KEY) {
-  console.warn(
-    "[charge-winner] STRIPE_SECRET_KEY is not set. This route will fail until configured."
-  );
-}
-
-const stripe = new Stripe(STRIPE_SECRET_KEY || "", {
-  apiVersion: "2025-11-17.clover" as any,
-});
-
-// -----------------------------
 // DVLA policy
 // -----------------------------
 // £80 DVLA fee (in pence)
@@ -45,12 +30,18 @@ type ChargeWinnerBody = {
 
 export async function POST(req: NextRequest) {
   try {
+    const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY;
+
     if (!STRIPE_SECRET_KEY) {
+      console.warn("[charge-winner] STRIPE_SECRET_KEY is not set.");
       return NextResponse.json(
         { ok: false, error: "Stripe is not configured on the server." },
         { status: 500 }
       );
     }
+
+    // Create Stripe ONLY after key exists (prevents Vercel build-time crash)
+    const stripe = new Stripe(STRIPE_SECRET_KEY);
 
     const body = (await req.json().catch(() => ({}))) as Partial<ChargeWinnerBody>;
 
