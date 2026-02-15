@@ -14,17 +14,23 @@ const endpoint = process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT!;
 const projectId = process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID!;
 const apiKey = process.env.APPWRITE_API_KEY!;
 
-const PLATES_DB_ID =
+// ✅ Keep backwards compatibility with cloned AuctionMyPlate env names
+const LISTINGS_DB_ID =
+  process.env.APPWRITE_LISTINGS_DATABASE_ID ||
+  process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID ||
   process.env.APPWRITE_PLATES_DATABASE_ID ||
   process.env.NEXT_PUBLIC_APPWRITE_PLATES_DATABASE_ID ||
   "690fc34a0000ce1baa63";
 
-const PLATES_COLLECTION_ID =
+// ✅ Keep backwards compatibility with cloned AuctionMyPlate collection name
+const LISTINGS_COLLECTION_ID =
+  process.env.APPWRITE_LISTINGS_COLLECTION_ID ||
+  process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_COLLECTION_ID ||
   process.env.APPWRITE_PLATES_COLLECTION_ID ||
   process.env.NEXT_PUBLIC_APPWRITE_PLATES_COLLECTION_ID ||
   "plates";
 
-const SITE_URL = (process.env.NEXT_PUBLIC_SITE_URL || "https://auctionmyplate.co.uk").replace(
+const SITE_URL = (process.env.NEXT_PUBLIC_SITE_URL || "https://auctionmycamera.co.uk").replace(
   /\/$/,
   ""
 );
@@ -36,18 +42,18 @@ const RAW_FROM_EMAIL =
   process.env.EMAIL_FROM ||
   process.env.SMTP_FROM ||
   process.env.SMTP_USER ||
-  "no-reply@auctionmyplate.co.uk";
+  "no-reply@auctionmycamera.co.uk";
 
-const FROM_NAME = (process.env.FROM_NAME || "AuctionMyPlate").trim();
+const FROM_NAME = (process.env.FROM_NAME || "AuctionMyCamera").trim();
 
 const REPLY_TO_EMAIL = (
   process.env.REPLY_TO_EMAIL ||
   process.env.SUPPORT_EMAIL ||
-  "support@auctionmyplate.co.uk"
+  "support@auctionmycamera.co.uk"
 ).trim();
 
 // Optional: set this in Vercel if you want a copy of every approval email
-// e.g. APPROVAL_EMAIL_BCC=admin@auctionmyplate.co.uk
+// e.g. APPROVAL_EMAIL_BCC=admin@auctionmycamera.co.uk
 const APPROVAL_EMAIL_BCC = (process.env.APPROVAL_EMAIL_BCC || "").trim();
 
 function normalizeEmailAddress(input: string) {
@@ -68,6 +74,22 @@ function normalizeEmailAddress(input: string) {
 
 function isValidEmail(email: string) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
+// Prevent header injection via subjects/names (strip CR/LF)
+function safeHeaderValue(v: unknown, fallback = "") {
+  const s = String(v ?? fallback);
+  return s.replace(/[\r\n]+/g, " ").trim();
+}
+
+function escapeHtml(s: unknown) {
+  const v = String(s ?? "");
+  return v
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
 }
 
 const FROM_ADDRESS = normalizeEmailAddress(RAW_FROM_EMAIL);
@@ -114,32 +136,38 @@ export async function POST(req: NextRequest) {
 
     const databases = getDatabases();
 
-    // Load existing plate
-    const plate: any = await databases.getDocument(PLATES_DB_ID, PLATES_COLLECTION_ID, listingId);
+    // Load existing listing (may still be the old “plates” document shape)
+    const listing: any = await databases.getDocument(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, listingId);
 
-    const registration = safeString(plate.registration, "").trim();
+    // Best-effort title (new camera fields first, then legacy)
+    const itemTitle =
+      safeString(listing.item_title, "").trim() ||
+      safeString(listing.title, "").trim() ||
+      safeString(listing.registration, "").trim() ||
+      `Listing ${listingId}`;
+
     const sellerEmailFromBody = safeString(body.sellerEmail, "").trim();
-    const sellerEmail = sellerEmailFromBody || safeString(plate.seller_email, "").trim() || "";
+    const sellerEmail = sellerEmailFromBody || safeString(listing.seller_email, "").trim() || "";
 
     // Normalise fields (use admin input if provided, else keep existing)
     const startingPrice = toNumberOrFallback(
       body.starting_price,
-      typeof plate.starting_price === "number" ? plate.starting_price : 0
+      typeof listing.starting_price === "number" ? listing.starting_price : 0
     );
 
     const reservePrice = toNumberOrFallback(
       body.reserve_price,
-      typeof plate.reserve_price === "number" ? plate.reserve_price : 0
+      typeof listing.reserve_price === "number" ? listing.reserve_price : 0
     );
 
     const buyNowPrice = toNumberOrFallback(
       body.buy_now,
-      typeof plate.buy_now === "number" ? plate.buy_now : 0
+      typeof listing.buy_now === "number" ? listing.buy_now : 0
     );
 
     const interestingFactRaw = safeString(body.interesting_fact, "").trim();
     const interestingFact =
-      interestingFactRaw.length > 0 ? interestingFactRaw : safeString(plate.interesting_fact, "");
+      interestingFactRaw.length > 0 ? interestingFactRaw : safeString(listing.interesting_fact, "");
 
     // Basic sanity checks
     if (reservePrice > 0 && startingPrice > 0 && startingPrice >= reservePrice) {
@@ -180,7 +208,7 @@ export async function POST(req: NextRequest) {
     });
 
     // Approve & queue for the upcoming auction
-    const updated = await databases.updateDocument(PLATES_DB_ID, PLATES_COLLECTION_ID, listingId, {
+    const updated = await databases.updateDocument(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, listingId, {
       status: "queued",
       starting_price: startingPrice,
       reserve_price: reservePrice,
@@ -191,7 +219,7 @@ export async function POST(req: NextRequest) {
     });
 
     // -----------------------------
-    // Email seller (non-fatal) + logging to prove it was sent
+    // Email seller (non-fatal)
     // -----------------------------
     let emailStatus: {
       attempted: boolean;
@@ -211,6 +239,8 @@ export async function POST(req: NextRequest) {
 
       if (!sellerEmail) {
         console.warn("⚠️ Skipping approval email (missing sellerEmail).", { listingId });
+      } else if (!isValidEmail(String(sellerEmail))) {
+        console.warn("⚠️ Skipping approval email (invalid sellerEmail).", { listingId, sellerEmail });
       } else if (!hasSmtp) {
         console.warn("⚠️ Skipping approval email (SMTP not fully configured).", {
           listingId,
@@ -236,34 +266,34 @@ export async function POST(req: NextRequest) {
           },
         });
 
-        const regText = registration || "your registration";
+        const safeTitle = escapeHtml(itemTitle);
         const dashboardLink = `${SITE_URL}/dashboard`;
 
         const info = await transporter.sendMail({
-          from: { name: FROM_NAME, address: FROM_ADDRESS },
-          to: sellerEmail,
-          // Optional safety net: get a copy of every approval email
+          from: { name: safeHeaderValue(FROM_NAME, "AuctionMyCamera"), address: FROM_ADDRESS },
+          to: String(sellerEmail),
           ...(APPROVAL_EMAIL_BCC ? { bcc: APPROVAL_EMAIL_BCC } : {}),
-          replyTo: REPLY_TO_EMAIL,
-          subject: `✅ Approved: ${regText} is now in Coming Soon`,
+          ...(isValidEmail(REPLY_TO_EMAIL) ? { replyTo: REPLY_TO_EMAIL } : {}),
+          subject: safeHeaderValue("✅ Approved: your listing is queued for the next auction"),
           headers: {
-            "X-AuctionMyPlate-Event": "listing-approved",
-            "X-AuctionMyPlate-ListingId": listingId,
+            "X-AuctionMyCamera-Event": "listing-approved",
+            "X-AuctionMyCamera-ListingId": listingId,
           },
           html: `
             <p>Good news!</p>
-            <p>Your number plate <strong>${regText}</strong> has been approved and is now listed in <strong>Coming Soon</strong>.</p>
-            <p><strong>Next auction window:</strong><br/>
-              Start: ${fmtLondon(start)}<br/>
-              End: ${fmtLondon(end)}
+            <p>Your listing <strong>${safeTitle}</strong> has been approved and queued for the next weekly auction.</p>
+            <p><strong>Next auction window (UK time):</strong><br/>
+              Start: ${escapeHtml(fmtLondon(start))}<br/>
+              End: ${escapeHtml(fmtLondon(end))}
             </p>
-            <p>You can view and manage your listing here:</p>
-            <p><a href="${dashboardLink}" target="_blank" rel="noopener noreferrer">${dashboardLink}</a></p>
-            <p>— AuctionMyPlate Team</p>
+            <p>You can view and manage your listings here:</p>
+            <p><a href="${dashboardLink}" target="_blank" rel="noopener noreferrer">${escapeHtml(
+              dashboardLink
+            )}</a></p>
+            <p>— AuctionMyCamera Team</p>
           `,
         });
 
-        // This is your proof in logs that SMTP accepted it
         emailStatus.sent = true;
         emailStatus.messageId = info.messageId;
         emailStatus.accepted = (info.accepted || []).map(String);
@@ -286,12 +316,14 @@ export async function POST(req: NextRequest) {
         sellerEmail,
         error: emailStatus.error,
       });
-      // never fail the approval because email failed
     }
 
-    return NextResponse.json({ ok: true, plate: updated, email: emailStatus }, { status: 200 });
+    return NextResponse.json({ ok: true, listing: updated, email: emailStatus }, { status: 200 });
   } catch (err: any) {
     console.error("❌ APPROVE-LISTING error:", err);
-    return NextResponse.json({ error: err?.message || "Failed to approve listing." }, { status: 500 });
+    return NextResponse.json(
+      { error: err?.message || "Failed to approve listing." },
+      { status: 500 }
+    );
   }
 }

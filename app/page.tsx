@@ -3,6 +3,7 @@ import type React from "react";
 import type { Metadata } from "next";
 import Script from "next/script";
 import Link from "next/link";
+import Image from "next/image";
 import HomeBannerCarousel from "@/components/ui/HomeBannerCarousel";
 
 const SITE_URL =
@@ -33,6 +34,9 @@ export const metadata: Metadata = {
       "List your camera, lens, or photography gear for free. Weekly auctions, secure Stripe payments, optional free auto-relist until sold, and a clear step-by-step selling process.",
   },
 };
+
+const HERO_BG_SRC = "/hero/modern-lens.jpg";
+const ANTIQUE_BG_SRC = "/hero/antique-cameras.jpg";
 
 export default function HomePage() {
   const jsonLdOrg = {
@@ -134,12 +138,23 @@ export default function HomePage() {
 
       {/* HERO */}
       <section className="relative overflow-hidden border-b border-border">
-        {/* Subtle “lens glow” background */}
+        {/* Background photo (modern lens) */}
         <div className="absolute inset-0">
-          <div className="absolute -top-28 -left-28 h-80 w-80 rounded-full bg-primary/15 blur-3xl" />
+          <Image
+            src={HERO_BG_SRC}
+            alt=""
+            aria-hidden="true"
+            fill
+            priority
+            sizes="100vw"
+            className="object-cover"
+            style={{ opacity: 0.18 }}
+          />
+          {/* Readability overlay */}
+          <div className="absolute inset-0 bg-gradient-to-b from-background/10 via-background/45 to-background" />
+          {/* Extra “copper” glow to match your palette */}
+          <div className="absolute -top-28 -left-28 h-80 w-80 rounded-full bg-primary/12 blur-3xl" />
           <div className="absolute -top-36 right-[-10rem] h-[28rem] w-[28rem] rounded-full bg-primary/10 blur-3xl" />
-          <div className="absolute bottom-[-12rem] left-[20%] h-[26rem] w-[26rem] rounded-full bg-primary/10 blur-3xl" />
-          <div className="absolute inset-0 bg-gradient-to-b from-background via-background to-background" />
         </div>
 
         <div className="relative mx-auto max-w-6xl px-6 py-16 sm:py-18 lg:py-22">
@@ -151,7 +166,7 @@ export default function HomePage() {
                 <span className="text-muted-foreground">•</span>
                 <span className="text-muted-foreground">Secure payments</span>
                 <span className="text-muted-foreground">•</span>
-                <span className="text-muted-foreground">Cameras & gear</span>
+                <span className="text-muted-foreground">Modern + antique gear</span>
               </div>
 
               <h1 className="mt-6 text-4xl sm:text-5xl lg:text-6xl font-extrabold leading-[1.02] tracking-tight">
@@ -168,7 +183,10 @@ export default function HomePage() {
 
               <p className="mt-3 text-sm text-muted-foreground max-w-xl">
                 New here? Start with{" "}
-                <Link href="/how-it-works" className="text-foreground underline hover:opacity-80">
+                <Link
+                  href="/how-it-works"
+                  className="text-foreground underline hover:opacity-80"
+                >
                   how it works
                 </Link>{" "}
                 and{" "}
@@ -178,7 +196,6 @@ export default function HomePage() {
                 .
               </p>
 
-              {/* Auto-relist strip */}
               <div className="mt-5 rounded-2xl border border-border bg-card px-4 py-3 max-w-xl">
                 <p className="text-sm font-semibold">Free auto-relist until sold</p>
                 <p className="mt-1 text-xs text-muted-foreground leading-relaxed">
@@ -187,7 +204,6 @@ export default function HomePage() {
                 </p>
               </div>
 
-              {/* Benefit row */}
               <div className="mt-7 grid sm:grid-cols-2 lg:grid-cols-4 gap-3 max-w-3xl">
                 <Benefit title="Free to list" body="No listing fee to get started." />
                 <Benefit title="Stripe payments" body="Secure checkout and clear steps." />
@@ -198,7 +214,6 @@ export default function HomePage() {
                 />
               </div>
 
-              {/* CTAs */}
               <div className="mt-8 flex flex-wrap gap-4">
                 <Link
                   href="/current-listings"
@@ -229,7 +244,6 @@ export default function HomePage() {
 
             {/* RIGHT */}
             <div className="lg:col-span-5 space-y-4">
-              {/* Seller promise card */}
               <div className="rounded-3xl p-6 sm:p-7 border border-border bg-card shadow-sm">
                 <p className="text-[11px] font-semibold tracking-[0.22em] text-muted-foreground uppercase">
                   Seller promise
@@ -274,7 +288,6 @@ export default function HomePage() {
                 </p>
               </div>
 
-              {/* Schedule card */}
               <div className="rounded-3xl p-6 sm:p-7 border border-border bg-card shadow-sm">
                 <p className="text-[11px] font-semibold tracking-[0.22em] text-muted-foreground uppercase">
                   Auction schedule
@@ -321,7 +334,6 @@ export default function HomePage() {
                 </div>
               </div>
 
-              {/* Useful pages */}
               <div className="rounded-3xl p-6 sm:p-7 border border-border bg-card">
                 <p className="text-[11px] font-semibold tracking-[0.22em] text-muted-foreground uppercase">
                   Useful pages
@@ -345,14 +357,25 @@ export default function HomePage() {
         <HomeBannerCarousel />
       </section>
 
-      {/* HOW IT WORKS */}
-      <section className="border-b border-border bg-background">
-        <div className="max-w-5xl mx-auto px-6 py-16">
-          <h2 className="text-3xl sm:text-4xl font-bold text-center">
-            How it works
-          </h2>
+      {/* HOW IT WORKS (with antique background texture) */}
+      <section className="relative border-b border-border bg-background overflow-hidden">
+        <div className="absolute inset-0">
+          <Image
+            src={ANTIQUE_BG_SRC}
+            alt=""
+            aria-hidden="true"
+            fill
+            sizes="100vw"
+            className="object-cover"
+            style={{ opacity: 0.18 }}
+          />
+         <div className="absolute inset-0 bg-background/60" />
+        </div>
+
+        <div className="relative max-w-5xl mx-auto px-6 py-16">
+          <h2 className="text-3xl sm:text-4xl font-bold text-center">How it works</h2>
           <p className="mt-3 text-center text-muted-foreground max-w-2xl mx-auto">
-            A simple weekly auction for cameras, lenses, and photography gear.
+            A simple weekly auction for cameras, lenses, and photography gear — modern and antique.
           </p>
 
           <div className="mt-10 grid md:grid-cols-4 gap-7">
@@ -392,12 +415,10 @@ export default function HomePage() {
       {/* TRUST / POSITIONING */}
       <section className="py-16 px-6">
         <div className="max-w-4xl mx-auto rounded-3xl p-8 sm:p-10 border border-border bg-card shadow-sm text-center">
-          <h2 className="text-3xl font-bold">
-            A calmer, safer way to trade camera gear
-          </h2>
+          <h2 className="text-3xl font-bold">A calmer, safer way to trade camera gear</h2>
           <p className="mt-4 text-lg text-muted-foreground">
-            Built for genuine buyers and sellers — with a clear weekly schedule,
-            secure payments, optional free relist, and straightforward post-sale steps.
+            Built for genuine buyers and sellers — with a clear weekly schedule, secure payments,
+            optional free relist, and straightforward post-sale steps.
           </p>
 
           <div className="mt-7 grid sm:grid-cols-3 gap-3 text-left">
@@ -442,20 +463,16 @@ export default function HomePage() {
 
           <div className="mt-8 space-y-3">
             <FAQItem q="Is it free to list?">
-              Yes — listing is free during our launch period. You only pay commission
-              if your item sells.
+              Yes — listing is free during our launch period. You only pay commission if your item sells.
             </FAQItem>
             <FAQItem q="When do auctions run?">
-              Weekly from Monday 01:00 to Sunday 23:00 (UK time). Approved listings are
-              queued into the next weekly window.
+              Weekly from Monday 01:00 to Sunday 23:00 (UK time). Approved listings are queued into the next weekly window.
             </FAQItem>
             <FAQItem q="What can I sell?">
-              Cameras, lenses, and photography gear. Create a listing with photos and
-              details, then it’s reviewed before it goes live.
+              Cameras, lenses, and photography gear. Create a listing with photos and details, then it’s reviewed before it goes live.
             </FAQItem>
             <FAQItem q="How do payments work?">
-              Payments are handled securely through Stripe. Buyers and sellers follow
-              clear steps during and after the sale.
+              Payments are handled securely through Stripe. Buyers and sellers follow clear steps during and after the sale.
             </FAQItem>
           </div>
 
