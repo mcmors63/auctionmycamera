@@ -10,7 +10,18 @@ import AutoLogout from "@/components/ui/AutoLogout";
 import CookieBanner from "@/components/ui/CookieBanner";
 import GoogleAdsLoader from "@/components/ui/GoogleAdsLoader";
 
-const PROD_SITE_URL = "https://auctionmyplate.co.uk";
+/**
+ * ✅ PRODUCTION CANONICAL (hard-locked)
+ * This prevents Google ever seeing a vercel.app URL as canonical in production.
+ */
+const PROD_SITE_URL = "https://auctionmycamera.co.uk";
+
+/**
+ * Brand/SEO strings
+ */
+const BRAND_NAME = "Auction My Camera";
+const BRAND_TEMPLATE = "%s | Auction My Camera";
+const BRAND_DESCRIPTION = "Buy and sell cameras through weekly auctions";
 
 function isProdEnv() {
   // On Vercel Preview, NODE_ENV is still "production" — so ONLY trust VERCEL_ENV when present.
@@ -58,13 +69,12 @@ export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
 
   title: {
-    default: "Auction My Plate",
-    template: "%s | Auction My Plate",
+    default: BRAND_NAME,
+    template: BRAND_TEMPLATE,
   },
-  description: "Buy and sell cherished number plates through weekly auctions",
+  description: BRAND_DESCRIPTION,
 
-  // ✅ Use an absolute canonical URL with a trailing slash for the homepage.
-  // This remains stable even if metadataBase resolution behavior changes.
+  // ✅ Absolute canonical URL with trailing slash for homepage consistency
   alternates: { canonical: CANONICAL_HOME },
 
   robots: IS_PROD
@@ -74,9 +84,15 @@ export const metadata: Metadata = {
   openGraph: {
     type: "website",
     url: CANONICAL_HOME,
-    siteName: "Auction My Plate",
-    title: "Auction My Plate",
-    description: "Buy and sell cherished number plates through weekly auctions",
+    siteName: BRAND_NAME,
+    title: BRAND_NAME,
+    description: BRAND_DESCRIPTION,
+  },
+
+  twitter: {
+    card: "summary_large_image",
+    title: BRAND_NAME,
+    description: BRAND_DESCRIPTION,
   },
 
   ...(GOOGLE_VERIFICATION ? { verification: { google: GOOGLE_VERIFICATION } } : {}),

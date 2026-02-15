@@ -6,42 +6,39 @@ import Link from "next/link";
 import HomeBannerCarousel from "@/components/ui/HomeBannerCarousel";
 
 const SITE_URL =
-  (process.env.NEXT_PUBLIC_SITE_URL || "https://auctionmyplate.co.uk").replace(
+  (process.env.NEXT_PUBLIC_SITE_URL || "https://auctionmycamera.co.uk").replace(
     /\/+$/,
     ""
   );
 
 export const metadata: Metadata = {
-  title: "AuctionMyPlate | UK Cherished Number Plate Auctions",
+  title: "AuctionMyCamera | UK Camera & Photography Gear Auctions",
   description:
-    "List your cherished number plate for free. Weekly DVLA-style auctions, secure Stripe payments, optional free auto-relist until sold, and transfer handled on your behalf after sale.",
+    "List your camera, lens, or photography gear for free. Weekly auctions, secure Stripe payments, optional free auto-relist until sold, and a clear step-by-step selling process.",
   alternates: {
     canonical: `${SITE_URL}/`,
   },
   openGraph: {
     type: "website",
     url: `${SITE_URL}/`,
-    title: "AuctionMyPlate | UK Cherished Number Plate Auctions",
+    title: "AuctionMyCamera | UK Camera & Photography Gear Auctions",
     description:
-      "List your cherished number plate for free. Weekly DVLA-style auctions, secure Stripe payments, optional free auto-relist until sold, and transfer handled on your behalf after sale.",
-    siteName: "AuctionMyPlate",
+      "List your camera, lens, or photography gear for free. Weekly auctions, secure Stripe payments, optional free auto-relist until sold, and a clear step-by-step selling process.",
+    siteName: "AuctionMyCamera",
   },
   twitter: {
     card: "summary_large_image",
-    title: "AuctionMyPlate | UK Cherished Number Plate Auctions",
+    title: "AuctionMyCamera | UK Camera & Photography Gear Auctions",
     description:
-      "List your cherished number plate for free. Weekly DVLA-style auctions, secure Stripe payments, optional free auto-relist until sold, and transfer handled on your behalf after sale.",
+      "List your camera, lens, or photography gear for free. Weekly auctions, secure Stripe payments, optional free auto-relist until sold, and a clear step-by-step selling process.",
   },
 };
-
-const ACCENT = "#d6b45f"; // warm gold
-const BG = "#0b0c10"; // deep charcoal
 
 export default function HomePage() {
   const jsonLdOrg = {
     "@context": "https://schema.org",
     "@type": "Organization",
-    name: "AuctionMyPlate",
+    name: "AuctionMyCamera",
     url: `${SITE_URL}/`,
     logo: `${SITE_URL}/brand/logo.png`,
   };
@@ -49,7 +46,7 @@ export default function HomePage() {
   const jsonLdWebsite = {
     "@context": "https://schema.org",
     "@type": "WebSite",
-    name: "AuctionMyPlate",
+    name: "AuctionMyCamera",
     url: `${SITE_URL}/`,
     potentialAction: {
       "@type": "SearchAction",
@@ -61,13 +58,13 @@ export default function HomePage() {
   const jsonLdWebPage = {
     "@context": "https://schema.org",
     "@type": "WebPage",
-    name: "AuctionMyPlate | UK Cherished Number Plate Auctions",
+    name: "AuctionMyCamera | UK Camera & Photography Gear Auctions",
     url: `${SITE_URL}/`,
     description:
-      "List your cherished number plate for free. Weekly auctions, secure payments, optional free auto-relist until sold, and transfer handled after sale.",
+      "List your camera, lens, or photography gear for free. Weekly auctions, secure payments, optional free auto-relist until sold, and a clear selling process.",
     isPartOf: {
       "@type": "WebSite",
-      name: "AuctionMyPlate",
+      name: "AuctionMyCamera",
       url: `${SITE_URL}/`,
     },
   };
@@ -78,10 +75,10 @@ export default function HomePage() {
     mainEntity: [
       {
         "@type": "Question",
-        name: "Is it free to list a number plate on AuctionMyPlate?",
+        name: "Is it free to list on AuctionMyCamera?",
         acceptedAnswer: {
           "@type": "Answer",
-          text: "Yes. Listing is free during our launch period. You only pay commission if your plate sells.",
+          text: "Yes. Listing is free during our launch period. You only pay commission if your item sells.",
         },
       },
       {
@@ -94,31 +91,25 @@ export default function HomePage() {
       },
       {
         "@type": "Question",
-        name: "Who pays the DVLA £80 fee?",
+        name: "What can I sell?",
         acceptedAnswer: {
           "@type": "Answer",
-          text: "By default the seller covers the DVLA £80 assignment fee and it is deducted from the seller payout when a sale completes. A small number of older legacy listings charge this to the buyer and will be clearly labelled on the listing and at checkout.",
+          text: "Cameras, lenses, and photography gear. Create a listing with photos and details, then we’ll review and approve it for the next auction window.",
         },
       },
       {
         "@type": "Question",
-        name: "Is AuctionMyPlate affiliated with the DVLA?",
+        name: "How do payments work?",
         acceptedAnswer: {
           "@type": "Answer",
-          text: "No. AuctionMyPlate is an independent marketplace and is not affiliated with, authorised by, endorsed by, or associated with the DVLA.",
+          text: "Payments are handled securely through Stripe. Buyers and sellers follow clear steps during and after the sale.",
         },
       },
     ],
   };
 
   return (
-    <main
-      className="min-h-screen"
-      style={{
-        backgroundColor: BG,
-        color: "#e8e8e8",
-      }}
-    >
+    <main className="min-h-screen bg-background text-foreground">
       {/* Structured data (SEO) */}
       <Script
         id="ld-org"
@@ -142,96 +133,68 @@ export default function HomePage() {
       />
 
       {/* HERO */}
-      <section className="relative overflow-hidden">
-        {/* Premium background */}
-        <div
-          className="absolute inset-0"
-          style={{
-            background:
-              "radial-gradient(900px 500px at 12% 20%, rgba(214,180,95,0.14), transparent 60%)," +
-              "radial-gradient(800px 500px at 82% 10%, rgba(255,255,255,0.06), transparent 62%)," +
-              "linear-gradient(180deg, rgba(0,0,0,0.82), rgba(0,0,0,0.96))",
-          }}
-        />
-        <div className="absolute inset-0 bg-black/55" />
+      <section className="relative overflow-hidden border-b border-border">
+        {/* Subtle “lens glow” background */}
+        <div className="absolute inset-0">
+          <div className="absolute -top-28 -left-28 h-80 w-80 rounded-full bg-primary/15 blur-3xl" />
+          <div className="absolute -top-36 right-[-10rem] h-[28rem] w-[28rem] rounded-full bg-primary/10 blur-3xl" />
+          <div className="absolute bottom-[-12rem] left-[20%] h-[26rem] w-[26rem] rounded-full bg-primary/10 blur-3xl" />
+          <div className="absolute inset-0 bg-gradient-to-b from-background via-background to-background" />
+        </div>
 
-        <div className="relative z-10 max-w-6xl mx-auto px-6 py-18 sm:py-20 lg:py-24">
+        <div className="relative mx-auto max-w-6xl px-6 py-16 sm:py-18 lg:py-22">
           <div className="grid lg:grid-cols-12 gap-10 items-start">
             {/* LEFT */}
             <div className="lg:col-span-7">
-              <div
-                className="inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-semibold tracking-wide border"
-                style={{
-                  borderColor: "rgba(214,180,95,0.32)",
-                  backgroundColor: "rgba(0,0,0,0.45)",
-                  color: "rgba(214,180,95,0.95)",
-                }}
-              >
-                Weekly auctions • Secure payments • Transfer handled for you
+              <div className="inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-semibold tracking-wide border border-border bg-card">
+                <span className="text-primary">Weekly auctions</span>
+                <span className="text-muted-foreground">•</span>
+                <span className="text-muted-foreground">Secure payments</span>
+                <span className="text-muted-foreground">•</span>
+                <span className="text-muted-foreground">Cameras & gear</span>
               </div>
 
-              <h1 className="mt-6 text-4xl sm:text-5xl lg:text-6xl font-extrabold leading-[1.02] tracking-tight text-white">
-                Sell a cherished number plate
-                <span className="block" style={{ color: ACCENT }}>
-                  through a weekly auction
-                </span>
+              <h1 className="mt-6 text-4xl sm:text-5xl lg:text-6xl font-extrabold leading-[1.02] tracking-tight">
+                Sell camera gear
+                <span className="block text-primary">through a weekly auction</span>
               </h1>
 
-              <p className="mt-5 text-base sm:text-lg text-white/80 max-w-xl leading-relaxed">
+              <p className="mt-5 text-base sm:text-lg text-muted-foreground max-w-xl leading-relaxed">
                 List for free and reach serious UK buyers. Auctions run{" "}
-                <span className="font-semibold text-white">Monday 01:00</span> to{" "}
-                <span className="font-semibold text-white">Sunday 23:00</span>.
-                When your plate sells,{" "}
-                <span className="font-semibold text-white">
-                  we handle the transfer on your behalf
-                </span>
-                .
+                <span className="font-semibold text-foreground">Monday 01:00</span>{" "}
+                to <span className="font-semibold text-foreground">Sunday 23:00</span>{" "}
+                (UK time). Clear steps for sellers and secure Stripe checkout for buyers.
               </p>
 
-              <p className="mt-3 text-sm text-white/70 max-w-xl">
+              <p className="mt-3 text-sm text-muted-foreground max-w-xl">
                 New here? Start with{" "}
-                <Link
-                  href="/how-it-works"
-                  className="text-amber-200 hover:text-amber-100 underline"
-                >
+                <Link href="/how-it-works" className="text-foreground underline hover:opacity-80">
                   how it works
                 </Link>{" "}
                 and{" "}
-                <Link
-                  href="/fees"
-                  className="text-amber-200 hover:text-amber-100 underline"
-                >
+                <Link href="/fees" className="text-foreground underline hover:opacity-80">
                   fees
                 </Link>
                 .
               </p>
 
-              {/* Reduced “auto-relist” strip (kept at the top) */}
-              <div
-                className="mt-5 rounded-2xl border px-4 py-3 max-w-xl"
-                style={{
-                  borderColor: "rgba(214,180,95,0.18)",
-                  backgroundColor: "rgba(255,255,255,0.03)",
-                }}
-              >
-                <p className="text-sm font-semibold text-white">
-                  Free auto-relist until sold
-                </p>
-                <p className="mt-1 text-xs text-white/70 leading-relaxed">
-                  If it doesn’t sell this week, you can have it automatically
-                  re-entered into future weekly auctions — at no extra cost —
-                  until it sells.
+              {/* Auto-relist strip */}
+              <div className="mt-5 rounded-2xl border border-border bg-card px-4 py-3 max-w-xl">
+                <p className="text-sm font-semibold">Free auto-relist until sold</p>
+                <p className="mt-1 text-xs text-muted-foreground leading-relaxed">
+                  If it doesn’t sell this week, you can have it automatically re-entered
+                  into future weekly auctions — at no extra cost — until it sells.
                 </p>
               </div>
 
-              {/* Premium benefit row */}
+              {/* Benefit row */}
               <div className="mt-7 grid sm:grid-cols-2 lg:grid-cols-4 gap-3 max-w-3xl">
                 <Benefit title="Free to list" body="No listing fee to get started." />
                 <Benefit title="Stripe payments" body="Secure checkout and clear steps." />
-                <Benefit title="Transfer handled" body="We run the DVLA-style process after sale." />
+                <Benefit title="Reserves supported" body="Set a minimum you’re happy with." />
                 <Benefit
                   title="Optional free auto-relist"
-                  body="Unsold plates can re-enter future auctions until sold."
+                  body="Unsold items can re-enter future auctions until sold."
                 />
               </div>
 
@@ -239,69 +202,47 @@ export default function HomePage() {
               <div className="mt-8 flex flex-wrap gap-4">
                 <Link
                   href="/current-listings"
-                  className="px-6 py-3 rounded-xl font-semibold text-sm sm:text-base shadow-lg transition"
-                  style={{ backgroundColor: ACCENT, color: "#0b0c10" }}
+                  className="px-6 py-3 rounded-xl font-semibold text-sm sm:text-base shadow-sm transition bg-primary text-primary-foreground hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-ring"
                 >
                   Browse current auctions
                 </Link>
 
                 <Link
-                  href="/sell-my-plate"
-                  className="px-6 py-3 rounded-xl font-semibold text-sm sm:text-base transition border"
-                  style={{
-                    borderColor: "rgba(255,255,255,0.18)",
-                    backgroundColor: "rgba(255,255,255,0.06)",
-                    color: "#ffffff",
-                  }}
+                  href="/sell"
+                  className="px-6 py-3 rounded-xl font-semibold text-sm sm:text-base transition border border-border bg-card hover:bg-accent focus:outline-none focus:ring-2 focus:ring-ring"
                 >
-                  Sell your plate
+                  Sell your gear
                 </Link>
 
                 <Link
                   href="/login-or-register"
-                  className="px-6 py-3 rounded-xl font-semibold text-sm sm:text-base transition border"
-                  style={{
-                    borderColor: "rgba(255,255,255,0.12)",
-                    backgroundColor: "rgba(255,255,255,0.02)",
-                    color: "#ffffff",
-                  }}
+                  className="px-6 py-3 rounded-xl font-semibold text-sm sm:text-base transition border border-border bg-background hover:bg-accent focus:outline-none focus:ring-2 focus:ring-ring"
                 >
                   Login / Register
                 </Link>
               </div>
 
-              <p className="mt-4 text-xs sm:text-sm text-white/60 max-w-xl">
+              <p className="mt-4 text-xs sm:text-sm text-muted-foreground max-w-xl">
                 Listings are approved, then queued for the next weekly auction window.
-              </p>
-
-              <p className="mt-2 text-[11px] text-white/50 max-w-xl">
-                AuctionMyPlate.co.uk is an independent marketplace and is not affiliated with the DVLA.
               </p>
             </div>
 
             {/* RIGHT */}
             <div className="lg:col-span-5 space-y-4">
-              {/* “Seller promise” card */}
-              <div
-                className="rounded-3xl p-6 sm:p-7 border shadow-2xl"
-                style={{
-                  borderColor: "rgba(214,180,95,0.22)",
-                  backgroundColor: "rgba(214,180,95,0.06)",
-                  backdropFilter: "blur(10px)",
-                }}
-              >
-                <p className="text-[11px] font-semibold tracking-[0.22em] text-white/60 uppercase">
+              {/* Seller promise card */}
+              <div className="rounded-3xl p-6 sm:p-7 border border-border bg-card shadow-sm">
+                <p className="text-[11px] font-semibold tracking-[0.22em] text-muted-foreground uppercase">
                   Seller promise
                 </p>
 
-                <h3 className="mt-3 text-xl sm:text-2xl font-extrabold text-white leading-tight">
+                <h3 className="mt-3 text-xl sm:text-2xl font-extrabold leading-tight">
                   List once.
-                  <span className="block" style={{ color: ACCENT }}>
+                  <span className="block text-primary">
                     Keep it in the weekly auction until it sells.
                   </span>
                 </h3>
 
-                <p className="mt-3 text-sm text-white/75 leading-relaxed">
+                <p className="mt-3 text-sm text-muted-foreground leading-relaxed">
                   You can opt into free auto-relist — if it doesn’t sell, it rolls into the
                   next weekly auction automatically. No extra fees to keep it live.
                 </p>
@@ -310,45 +251,32 @@ export default function HomePage() {
                   <MiniPoint>✓ Free to list</MiniPoint>
                   <MiniPoint>✓ Reserve supported</MiniPoint>
                   <MiniPoint>✓ Stripe checkout</MiniPoint>
-                  <MiniPoint>✓ Transfer handled</MiniPoint>
+                  <MiniPoint>✓ Auto-relist option</MiniPoint>
                 </div>
 
                 <div className="mt-5 flex gap-3">
                   <Link
-                    href="/sell-my-plate"
-                    className="flex-1 px-5 py-3 rounded-xl font-semibold text-sm text-center shadow-lg transition"
-                    style={{ backgroundColor: ACCENT, color: "#0b0c10" }}
+                    href="/sell"
+                    className="flex-1 px-5 py-3 rounded-xl font-semibold text-sm text-center shadow-sm transition bg-primary text-primary-foreground hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-ring"
                   >
                     Start selling
                   </Link>
                   <Link
                     href="/how-it-works"
-                    className="flex-1 px-5 py-3 rounded-xl font-semibold text-sm text-center transition border"
-                    style={{
-                      borderColor: "rgba(255,255,255,0.18)",
-                      backgroundColor: "rgba(255,255,255,0.06)",
-                      color: "#ffffff",
-                    }}
+                    className="flex-1 px-5 py-3 rounded-xl font-semibold text-sm text-center transition border border-border bg-card hover:bg-accent focus:outline-none focus:ring-2 focus:ring-ring"
                   >
                     How it works
                   </Link>
                 </div>
 
-                <p className="mt-3 text-[11px] text-white/55">
+                <p className="mt-3 text-[11px] text-muted-foreground">
                   You’re always in control — auto-relist is optional.
                 </p>
               </div>
 
-              {/* Existing schedule card */}
-              <div
-                className="rounded-3xl p-6 sm:p-7 border shadow-2xl"
-                style={{
-                  borderColor: "rgba(255,255,255,0.12)",
-                  backgroundColor: "rgba(20,20,20,0.72)",
-                  backdropFilter: "blur(10px)",
-                }}
-              >
-                <p className="text-[11px] font-semibold tracking-[0.22em] text-white/55 uppercase">
+              {/* Schedule card */}
+              <div className="rounded-3xl p-6 sm:p-7 border border-border bg-card shadow-sm">
+                <p className="text-[11px] font-semibold tracking-[0.22em] text-muted-foreground uppercase">
                   Auction schedule
                 </p>
 
@@ -357,8 +285,8 @@ export default function HomePage() {
                     label="Opens"
                     value={
                       <>
-                        <span className="font-semibold text-white">Monday</span>{" "}
-                        <span className="text-white/70">01:00</span>
+                        <span className="font-semibold text-foreground">Monday</span>{" "}
+                        <span className="text-muted-foreground">01:00</span>
                       </>
                     }
                   />
@@ -366,57 +294,45 @@ export default function HomePage() {
                     label="Closes"
                     value={
                       <>
-                        <span className="font-semibold text-white">Sunday</span>{" "}
-                        <span className="text-white/70">23:00</span>
+                        <span className="font-semibold text-foreground">Sunday</span>{" "}
+                        <span className="text-muted-foreground">23:00</span>
                       </>
                     }
                   />
                   <InfoRow
                     label="If it doesn’t sell"
-                    value={<span className="text-white/80">Optional free auto-relist.</span>}
+                    value={<span className="text-muted-foreground">Optional free auto-relist.</span>}
                   />
                 </div>
 
                 <div className="mt-6 flex gap-3">
                   <Link
                     href="/current-listings"
-                    className="flex-1 px-5 py-3 rounded-xl font-semibold text-sm text-center transition border"
-                    style={{
-                      borderColor: "rgba(255,255,255,0.18)",
-                      backgroundColor: "rgba(255,255,255,0.06)",
-                      color: "#ffffff",
-                    }}
+                    className="flex-1 px-5 py-3 rounded-xl font-semibold text-sm text-center transition border border-border bg-card hover:bg-accent focus:outline-none focus:ring-2 focus:ring-ring"
                   >
-                    View listings
+                    View auctions
                   </Link>
                   <Link
-                    href="/sell-my-plate"
-                    className="flex-1 px-5 py-3 rounded-xl font-semibold text-sm text-center shadow-lg transition"
-                    style={{ backgroundColor: ACCENT, color: "#0b0c10" }}
+                    href="/sell"
+                    className="flex-1 px-5 py-3 rounded-xl font-semibold text-sm text-center shadow-sm transition bg-primary text-primary-foreground hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-ring"
                   >
                     Start selling
                   </Link>
                 </div>
               </div>
 
-              {/* NEW: quick internal links block (helps crawling + users) */}
-              <div
-                className="rounded-3xl p-6 sm:p-7 border"
-                style={{
-                  borderColor: "rgba(255,255,255,0.12)",
-                  backgroundColor: "rgba(255,255,255,0.03)",
-                }}
-              >
-                <p className="text-[11px] font-semibold tracking-[0.22em] text-white/55 uppercase">
+              {/* Useful pages */}
+              <div className="rounded-3xl p-6 sm:p-7 border border-border bg-card">
+                <p className="text-[11px] font-semibold tracking-[0.22em] text-muted-foreground uppercase">
                   Useful pages
                 </p>
                 <div className="mt-4 grid grid-cols-2 gap-3">
-                  <QuickLink href="/sell-my-plate">Sell your plate</QuickLink>
+                  <QuickLink href="/sell">Sell your gear</QuickLink>
                   <QuickLink href="/current-listings">Current auctions</QuickLink>
                   <QuickLink href="/how-it-works">How it works</QuickLink>
                   <QuickLink href="/fees">Fees</QuickLink>
                   <QuickLink href="/faq">FAQ</QuickLink>
-                  <QuickLink href="/dvla">DVLA info</QuickLink>
+                  <QuickLink href="/about">About</QuickLink>
                 </div>
               </div>
             </div>
@@ -425,29 +341,25 @@ export default function HomePage() {
       </section>
 
       {/* Rotating banner section */}
-      <HomeBannerCarousel />
+      <section className="border-b border-border">
+        <HomeBannerCarousel />
+      </section>
 
       {/* HOW IT WORKS */}
-      <section
-        className="border-t"
-        style={{
-          borderColor: "rgba(255,255,255,0.10)",
-          backgroundColor: "rgba(255,255,255,0.02)",
-        }}
-      >
+      <section className="border-b border-border bg-background">
         <div className="max-w-5xl mx-auto px-6 py-16">
-          <h2 className="text-3xl sm:text-4xl font-bold text-center text-white">
+          <h2 className="text-3xl sm:text-4xl font-bold text-center">
             How it works
           </h2>
-          <p className="mt-3 text-center text-white/70 max-w-2xl mx-auto">
-            A simple weekly auction with a proper post-sale transfer process.
+          <p className="mt-3 text-center text-muted-foreground max-w-2xl mx-auto">
+            A simple weekly auction for cameras, lenses, and photography gear.
           </p>
 
           <div className="mt-10 grid md:grid-cols-4 gap-7">
             <StepCard
               step={1}
-              title="Submit your plate"
-              body="Create an account, add your registration, and upload a photo."
+              title="Create your listing"
+              body="Add details and upload clear photos of your item."
             />
             <StepCard
               step={2}
@@ -461,20 +373,15 @@ export default function HomePage() {
             />
             <StepCard
               step={4}
-              title="Sold → transfer → payout"
-              body="Winner pays securely. We handle the transfer on your behalf and arrange payout."
+              title="Sold → confirm → payout"
+              body="Buyer pays securely. You follow the next steps and payout is arranged."
             />
           </div>
 
           <div className="mt-10 flex justify-center">
             <Link
               href="/how-it-works"
-              className="px-6 py-3 rounded-xl font-semibold text-sm sm:text-base transition border"
-              style={{
-                borderColor: "rgba(255,255,255,0.18)",
-                backgroundColor: "rgba(255,255,255,0.06)",
-                color: "#ffffff",
-              }}
+              className="px-6 py-3 rounded-xl font-semibold text-sm sm:text-base transition border border-border bg-card hover:bg-accent focus:outline-none focus:ring-2 focus:ring-ring"
             >
               Read the full “How it works”
             </Link>
@@ -484,25 +391,19 @@ export default function HomePage() {
 
       {/* TRUST / POSITIONING */}
       <section className="py-16 px-6">
-        <div
-          className="max-w-4xl mx-auto rounded-3xl p-8 sm:p-10 border shadow-2xl text-center"
-          style={{
-            borderColor: "rgba(255,255,255,0.12)",
-            backgroundColor: "rgba(255,255,255,0.03)",
-          }}
-        >
-          <h2 className="text-3xl font-bold text-white">
-            A calmer, safer way to trade plates
+        <div className="max-w-4xl mx-auto rounded-3xl p-8 sm:p-10 border border-border bg-card shadow-sm text-center">
+          <h2 className="text-3xl font-bold">
+            A calmer, safer way to trade camera gear
           </h2>
-          <p className="mt-4 text-lg text-white/75">
+          <p className="mt-4 text-lg text-muted-foreground">
             Built for genuine buyers and sellers — with a clear weekly schedule,
-            secure payments, optional free relist, and a transfer process handled properly after sale.
+            secure payments, optional free relist, and straightforward post-sale steps.
           </p>
 
           <div className="mt-7 grid sm:grid-cols-3 gap-3 text-left">
             <TrustItem
-              title="Verified flow"
-              body="Clear steps for buyers and sellers, with approval before listings go live."
+              title="Clear steps"
+              body="Simple seller flow with approval before listings go live."
             />
             <TrustItem
               title="Secure payments"
@@ -517,75 +418,57 @@ export default function HomePage() {
           <div className="mt-8 flex flex-wrap justify-center gap-4">
             <Link
               href="/current-listings"
-              className="px-6 py-3 rounded-xl font-semibold text-sm sm:text-base shadow-lg transition"
-              style={{ backgroundColor: ACCENT, color: "#0b0c10" }}
+              className="px-6 py-3 rounded-xl font-semibold text-sm sm:text-base shadow-sm transition bg-primary text-primary-foreground hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-ring"
             >
               Browse current auctions
             </Link>
             <Link
-              href="/sell-my-plate"
-              className="px-6 py-3 rounded-xl font-semibold text-sm sm:text-base transition border"
-              style={{
-                borderColor: "rgba(255,255,255,0.18)",
-                backgroundColor: "rgba(255,255,255,0.06)",
-                color: "#ffffff",
-              }}
+              href="/sell"
+              className="px-6 py-3 rounded-xl font-semibold text-sm sm:text-base transition border border-border bg-card hover:bg-accent focus:outline-none focus:ring-2 focus:ring-ring"
             >
-              Sell your plate
+              Sell your gear
             </Link>
           </div>
         </div>
       </section>
 
       {/* FAQ (on-page) */}
-      <section
-        className="border-t"
-        style={{
-          borderColor: "rgba(255,255,255,0.10)",
-          backgroundColor: "rgba(255,255,255,0.02)",
-        }}
-      >
+      <section className="border-t border-border bg-background">
         <div className="max-w-4xl mx-auto px-6 py-16">
-          <h2 className="text-3xl font-bold text-white text-center">Quick answers</h2>
-          <p className="mt-3 text-center text-white/70 max-w-2xl mx-auto">
+          <h2 className="text-3xl font-bold text-center">Quick answers</h2>
+          <p className="mt-3 text-center text-muted-foreground max-w-2xl mx-auto">
             The common questions people ask before they bid or list.
           </p>
 
           <div className="mt-8 space-y-3">
             <FAQItem q="Is it free to list?">
-              Yes — listing is free during our launch period. You only pay commission if your plate sells.
+              Yes — listing is free during our launch period. You only pay commission
+              if your item sells.
             </FAQItem>
             <FAQItem q="When do auctions run?">
-              Weekly from Monday 01:00 to Sunday 23:00 (UK time). Approved listings are queued into the next weekly window.
+              Weekly from Monday 01:00 to Sunday 23:00 (UK time). Approved listings are
+              queued into the next weekly window.
             </FAQItem>
-            <FAQItem q="Who pays the DVLA £80 fee?">
-              By default the seller covers it (deducted from seller payout). A small number of older legacy listings charge it to the buyer and are clearly labelled.
+            <FAQItem q="What can I sell?">
+              Cameras, lenses, and photography gear. Create a listing with photos and
+              details, then it’s reviewed before it goes live.
             </FAQItem>
-            <FAQItem q="Are you affiliated with the DVLA?">
-              No — AuctionMyPlate is independent and not affiliated with, endorsed by, or associated with the DVLA.
+            <FAQItem q="How do payments work?">
+              Payments are handled securely through Stripe. Buyers and sellers follow
+              clear steps during and after the sale.
             </FAQItem>
           </div>
 
           <div className="mt-10 flex flex-wrap justify-center gap-4">
             <Link
               href="/fees"
-              className="px-6 py-3 rounded-xl font-semibold text-sm sm:text-base transition border"
-              style={{
-                borderColor: "rgba(255,255,255,0.18)",
-                backgroundColor: "rgba(255,255,255,0.06)",
-                color: "#ffffff",
-              }}
+              className="px-6 py-3 rounded-xl font-semibold text-sm sm:text-base transition border border-border bg-card hover:bg-accent focus:outline-none focus:ring-2 focus:ring-ring"
             >
               Read Fees
             </Link>
             <Link
               href="/faq"
-              className="px-6 py-3 rounded-xl font-semibold text-sm sm:text-base transition border"
-              style={{
-                borderColor: "rgba(255,255,255,0.12)",
-                backgroundColor: "rgba(255,255,255,0.02)",
-                color: "#ffffff",
-              }}
+              className="px-6 py-3 rounded-xl font-semibold text-sm sm:text-base transition border border-border bg-background hover:bg-accent focus:outline-none focus:ring-2 focus:ring-ring"
             >
               Full FAQ
             </Link>
@@ -604,28 +487,16 @@ export default function HomePage() {
 
 function Benefit({ title, body }: { title: string; body: string }) {
   return (
-    <div
-      className="rounded-2xl p-4 border"
-      style={{
-        borderColor: "rgba(255,255,255,0.10)",
-        backgroundColor: "rgba(255,255,255,0.03)",
-      }}
-    >
-      <p className="text-sm font-semibold text-white">{title}</p>
-      <p className="mt-1 text-xs text-white/70 leading-relaxed">{body}</p>
+    <div className="rounded-2xl p-4 border border-border bg-card">
+      <p className="text-sm font-semibold">{title}</p>
+      <p className="mt-1 text-xs text-muted-foreground leading-relaxed">{body}</p>
     </div>
   );
 }
 
 function MiniPoint({ children }: { children: React.ReactNode }) {
   return (
-    <div
-      className="rounded-xl px-3 py-2 border text-xs text-white/80"
-      style={{
-        borderColor: "rgba(255,255,255,0.10)",
-        backgroundColor: "rgba(0,0,0,0.25)",
-      }}
-    >
+    <div className="rounded-xl px-3 py-2 border border-border text-xs text-muted-foreground bg-background">
       {children}
     </div>
   );
@@ -634,7 +505,7 @@ function MiniPoint({ children }: { children: React.ReactNode }) {
 function InfoRow({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div className="flex items-start justify-between gap-4">
-      <p className="text-xs font-semibold uppercase tracking-wide text-white/55">
+      <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
         {label}
       </p>
       <div className="text-sm text-right">{value}</div>
@@ -644,15 +515,9 @@ function InfoRow({ label, value }: { label: string; value: React.ReactNode }) {
 
 function TrustItem({ title, body }: { title: string; body: string }) {
   return (
-    <div
-      className="rounded-2xl p-5 border"
-      style={{
-        borderColor: "rgba(255,255,255,0.10)",
-        backgroundColor: "rgba(255,255,255,0.03)",
-      }}
-    >
-      <p className="text-sm font-semibold text-white">{title}</p>
-      <p className="mt-1 text-xs text-white/70 leading-relaxed">{body}</p>
+    <div className="rounded-2xl p-5 border border-border bg-background">
+      <p className="text-sm font-semibold">{title}</p>
+      <p className="mt-1 text-xs text-muted-foreground leading-relaxed">{body}</p>
     </div>
   );
 }
@@ -667,22 +532,13 @@ function StepCard({
   body: string;
 }) {
   return (
-    <div
-      className="relative rounded-2xl p-7 border shadow-xl"
-      style={{
-        borderColor: "rgba(255,255,255,0.10)",
-        backgroundColor: "rgba(255,255,255,0.03)",
-      }}
-    >
-      <div
-        className="absolute -top-5 left-6 h-10 w-10 rounded-full flex items-center justify-center font-extrabold text-lg shadow-lg"
-        style={{ backgroundColor: "#d6b45f", color: "#0b0c10" }}
-      >
+    <div className="relative rounded-2xl p-7 border border-border bg-card shadow-sm">
+      <div className="absolute -top-5 left-6 h-10 w-10 rounded-full flex items-center justify-center font-extrabold text-lg shadow-sm bg-primary text-primary-foreground">
         {step}
       </div>
 
-      <h3 className="mt-4 text-lg font-semibold text-white">{title}</h3>
-      <p className="mt-2 text-sm text-white/70 leading-relaxed">{body}</p>
+      <h3 className="mt-4 text-lg font-semibold">{title}</h3>
+      <p className="mt-2 text-sm text-muted-foreground leading-relaxed">{body}</p>
     </div>
   );
 }
@@ -691,31 +547,18 @@ function QuickLink({ href, children }: { href: string; children: React.ReactNode
   return (
     <Link
       href={href}
-      className="rounded-xl px-3 py-2 border text-sm text-center transition"
-      style={{
-        borderColor: "rgba(255,255,255,0.10)",
-        backgroundColor: "rgba(0,0,0,0.20)",
-        color: "#ffffff",
-      }}
+      className="rounded-xl px-3 py-2 border border-border text-sm text-center transition bg-background hover:bg-accent focus:outline-none focus:ring-2 focus:ring-ring"
     >
-      <span className="text-white/90 hover:text-white">{children}</span>
+      {children}
     </Link>
   );
 }
 
 function FAQItem({ q, children }: { q: string; children: React.ReactNode }) {
   return (
-    <details
-      className="rounded-2xl border p-5"
-      style={{
-        borderColor: "rgba(255,255,255,0.10)",
-        backgroundColor: "rgba(255,255,255,0.03)",
-      }}
-    >
-      <summary className="cursor-pointer text-white font-semibold">
-        {q}
-      </summary>
-      <p className="mt-2 text-sm text-white/75 leading-relaxed">{children}</p>
+    <details className="rounded-2xl border border-border p-5 bg-card">
+      <summary className="cursor-pointer font-semibold">{q}</summary>
+      <p className="mt-2 text-sm text-muted-foreground leading-relaxed">{children}</p>
     </details>
   );
 }

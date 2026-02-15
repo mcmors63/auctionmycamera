@@ -1,4 +1,4 @@
-// app/components/ui/Navbar.tsx
+// components/ui/Navbar.tsx
 "use client";
 
 import { useEffect, useRef, useState } from "react";
@@ -72,13 +72,21 @@ export default function Navbar() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [mobileOpen]);
 
-  const isAdmin = user?.email?.toLowerCase() === "admin@auctionmyplate.co.uk";
+  // Allow either admin email while you’re still copying projects around
+  const adminEmails = new Set<string>([
+    "admin@auctionmycamera.co.uk",
+    "admin@auctionmyplate.co.uk",
+  ]);
+
+  const isAdmin = !!user?.email && adminEmails.has(user.email.toLowerCase());
 
   const clearAuthStorage = () => {
     if (typeof window === "undefined") return;
-    // These keys were causing “ghost login” behaviour elsewhere.
+    // clear both old + new keys to avoid “ghost login” when cloning projects
     window.localStorage.removeItem("amp_user_email");
     window.localStorage.removeItem("amp_user_id");
+    window.localStorage.removeItem("amc_user_email");
+    window.localStorage.removeItem("amc_user_id");
   };
 
   const handleLogout = async () => {
@@ -98,11 +106,11 @@ export default function Navbar() {
   const navLinks = [
     { href: "/", label: "Home" },
     { href: "/current-listings", label: "Auctions" },
-    { href: "/sell-my-plate", label: "Sell" },
+    { href: "/sell", label: "Sell" },
     { href: "/how-it-works", label: "How it works" },
     { href: "/fees", label: "Fees" },
     { href: "/faq", label: "FAQ" },
-    { href: "/dvla", label: "DVLA" },
+    { href: "/blog", label: "Blog" },
     { href: "/about", label: "About" },
   ];
 
@@ -112,46 +120,64 @@ export default function Navbar() {
   };
 
   return (
-    <header className="sticky top-0 z-40 bg-[#07080a]/92 backdrop-blur border-b border-white/10">
-      <nav className="max-w-6xl mx-auto flex items-center justify-between px-4 py-3 md:py-4">
+    <header className="sticky top-0 z-40 border-b border-border bg-background/80 backdrop-blur supports-[backdrop-filter]:bg-background/70">
+      <nav className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3 md:py-4">
         {/* LOGO */}
-        <Link href="/" className="flex items-center gap-2">
-          <span className="text-lg md:text-xl font-extrabold tracking-tight text-zinc-100">
-            AuctionMy<span className="text-amber-300">Plate.co.uk</span>
+        <Link href="/" className="flex items-center gap-3" aria-label="AuctionMyCamera home">
+          {/* Simple “lens” mark */}
+          <span className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-border bg-card shadow-sm">
+            <span className="relative h-4 w-4 rounded-full bg-primary/30">
+              <span className="absolute inset-0 m-auto h-2 w-2 rounded-full bg-primary/70" />
+            </span>
+          </span>
+
+          <span className="leading-tight">
+            <span className="block text-[15px] md:text-base font-extrabold tracking-tight text-foreground">
+              AuctionMy<span className="text-primary">Camera</span>
+            </span>
+            <span className="block text-[11px] md:text-xs text-muted-foreground">
+              Auctions for cameras & gear
+            </span>
           </span>
         </Link>
 
         {/* DESKTOP NAV LINKS */}
-        <div className="hidden lg:flex items-center gap-6">
-          {navLinks.map((link) => (
-            <Link
-              key={link.href}
-              href={link.href}
-              aria-current={isActive(link.href) ? "page" : undefined}
-              className={`text-sm font-medium transition-colors ${
-                isActive(link.href)
-                  ? "text-amber-200"
-                  : "text-zinc-200 hover:text-amber-200"
-              }`}
-            >
-              {link.label}
-            </Link>
-          ))}
+        <div className="hidden lg:flex items-center gap-1">
+          {navLinks.map((link) => {
+            const active = isActive(link.href);
+            return (
+              <Link
+                key={link.href}
+                href={link.href}
+                aria-current={active ? "page" : undefined}
+                className={[
+                  "relative rounded-lg px-3 py-2 text-sm font-medium transition",
+                  "text-muted-foreground hover:text-foreground hover:bg-accent",
+                  active ? "text-foreground bg-accent" : "",
+                ].join(" ")}
+              >
+                {link.label}
+                {active ? (
+                  <span className="absolute left-3 right-3 -bottom-[7px] h-[2px] rounded-full bg-primary" />
+                ) : null}
+              </Link>
+            );
+          })}
         </div>
 
         {/* DESKTOP AUTH BUTTONS */}
-        <div className="hidden md:flex items-center gap-3">
+        <div className="hidden md:flex items-center gap-2">
           {loadingUser ? null : user ? (
             <>
               <Link
                 href={isAdmin ? "/admin" : "/dashboard"}
-                className="px-4 py-2 text-sm font-semibold rounded-lg border border-white/15 bg-white/5 text-zinc-100 hover:bg-white/10 transition"
+                className="px-4 py-2 text-sm font-semibold rounded-lg border border-border bg-card hover:bg-accent transition focus:outline-none focus:ring-2 focus:ring-ring"
               >
-                {isAdmin ? "Admin" : "My Dashboard"}
+                {isAdmin ? "Admin" : "Dashboard"}
               </Link>
               <button
                 onClick={handleLogout}
-                className="px-4 py-2 text-sm font-semibold rounded-lg bg-white/10 text-zinc-100 hover:bg-white/15 transition"
+                className="px-4 py-2 text-sm font-semibold rounded-lg bg-secondary text-secondary-foreground hover:bg-accent transition focus:outline-none focus:ring-2 focus:ring-ring"
               >
                 Logout
               </button>
@@ -160,13 +186,13 @@ export default function Navbar() {
             <>
               <Link
                 href="/login"
-                className="px-4 py-2 text-sm font-semibold rounded-lg border border-white/15 bg-white/5 text-zinc-100 hover:bg-white/10 transition"
+                className="px-4 py-2 text-sm font-semibold rounded-lg border border-border bg-card hover:bg-accent transition focus:outline-none focus:ring-2 focus:ring-ring"
               >
                 Login
               </Link>
               <Link
                 href="/register"
-                className="px-4 py-2 text-sm font-semibold rounded-lg bg-amber-300 text-black hover:bg-amber-200 transition"
+                className="px-4 py-2 text-sm font-semibold rounded-lg bg-primary text-primary-foreground hover:opacity-90 transition focus:outline-none focus:ring-2 focus:ring-ring"
               >
                 Register
               </Link>
@@ -176,51 +202,54 @@ export default function Navbar() {
 
         {/* MOBILE TOGGLE */}
         <button
-          className="lg:hidden flex items-center justify-center w-10 h-10 border border-white/15 rounded-lg text-zinc-100 bg-white/5 hover:bg-white/10 transition"
+          className="lg:hidden inline-flex items-center justify-center w-10 h-10 rounded-lg border border-border bg-card hover:bg-accent transition focus:outline-none focus:ring-2 focus:ring-ring"
           onClick={() => setMobileOpen((o) => !o)}
           aria-label="Toggle menu"
           aria-expanded={mobileOpen}
           aria-controls="mobile-nav"
         >
-          {mobileOpen ? "✕" : "☰"}
+          <span className="text-lg leading-none">{mobileOpen ? "✕" : "☰"}</span>
         </button>
       </nav>
 
       {/* MOBILE MENU */}
       {mobileOpen && (
-        <div id="mobile-nav" className="lg:hidden border-t border-white/10 bg-[#07080a]/98">
-          <div className="max-w-6xl mx-auto px-4 py-4 space-y-4">
-            <div className="flex flex-col space-y-2">
-              {navLinks.map((link) => (
-                <Link
-                  key={link.href}
-                  href={link.href}
-                  className={`text-sm font-medium py-1 ${
-                    isActive(link.href)
-                      ? "text-amber-200"
-                      : "text-zinc-200 hover:text-amber-200"
-                  }`}
-                >
-                  {link.label}
-                </Link>
-              ))}
+        <div id="mobile-nav" className="lg:hidden border-t border-border bg-background">
+          <div className="mx-auto max-w-6xl px-4 py-4 space-y-4">
+            <div className="flex flex-col space-y-1">
+              {navLinks.map((link) => {
+                const active = isActive(link.href);
+                return (
+                  <Link
+                    key={link.href}
+                    href={link.href}
+                    aria-current={active ? "page" : undefined}
+                    className={[
+                      "rounded-lg px-3 py-2 text-sm font-medium transition",
+                      active ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-accent hover:text-foreground",
+                    ].join(" ")}
+                  >
+                    {link.label}
+                  </Link>
+                );
+              })}
             </div>
 
-            <div className="border-t border-white/10 pt-4 flex flex-col space-y-2">
+            <div className="border-t border-border pt-4 flex flex-col space-y-2">
               {loadingUser ? null : user ? (
                 <>
                   <Link
                     href={isAdmin ? "/admin" : "/dashboard"}
-                    className="w-full text-center px-4 py-2 text-sm font-semibold rounded-lg border border-white/15 bg-white/5 text-zinc-100 hover:bg-white/10 transition"
+                    className="w-full text-center px-4 py-2 text-sm font-semibold rounded-lg border border-border bg-card hover:bg-accent transition focus:outline-none focus:ring-2 focus:ring-ring"
                   >
-                    {isAdmin ? "Admin" : "My Dashboard"}
+                    {isAdmin ? "Admin" : "Dashboard"}
                   </Link>
                   <button
                     onClick={() => {
                       setMobileOpen(false);
                       void handleLogout();
                     }}
-                    className="w-full px-4 py-2 text-sm font-semibold rounded-lg bg-white/10 text-zinc-100 hover:bg-white/15 transition"
+                    className="w-full px-4 py-2 text-sm font-semibold rounded-lg bg-secondary text-secondary-foreground hover:bg-accent transition focus:outline-none focus:ring-2 focus:ring-ring"
                   >
                     Logout
                   </button>
@@ -229,13 +258,13 @@ export default function Navbar() {
                 <>
                   <Link
                     href="/login"
-                    className="w-full text-center px-4 py-2 text-sm font-semibold rounded-lg border border-white/15 bg-white/5 text-zinc-100 hover:bg-white/10 transition"
+                    className="w-full text-center px-4 py-2 text-sm font-semibold rounded-lg border border-border bg-card hover:bg-accent transition focus:outline-none focus:ring-2 focus:ring-ring"
                   >
                     Login
                   </Link>
                   <Link
                     href="/register"
-                    className="w-full text-center px-4 py-2 text-sm font-semibold rounded-lg bg-amber-300 text-black hover:bg-amber-200 transition"
+                    className="w-full text-center px-4 py-2 text-sm font-semibold rounded-lg bg-primary text-primary-foreground hover:opacity-90 transition focus:outline-none focus:ring-2 focus:ring-ring"
                   >
                     Register
                   </Link>
