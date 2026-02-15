@@ -147,14 +147,20 @@ export default function HomePage() {
             fill
             priority
             sizes="100vw"
-            className="object-cover saturate-110 contrast-110"
+            className="object-cover"
+            // 🔧 More visible image
             style={{ opacity: 0.42 }}
           />
-          {/* Lighter wash so the image actually shows */}
-          <div className="absolute inset-0 bg-gradient-to-b from-background/0 via-background/18 to-background/92" />
-          {/* Extra “copper” glow to match your palette */}
-          <div className="absolute -top-28 -left-28 h-80 w-80 rounded-full bg-primary/12 blur-3xl" />
-          <div className="absolute -top-36 right-[-10rem] h-[28rem] w-[28rem] rounded-full bg-primary/10 blur-3xl" />
+
+          {/* 🔧 Softer vertical fade (doesn’t wash out the whole photo) */}
+          <div className="absolute inset-0 bg-gradient-to-b from-background/0 via-background/30 to-background/90" />
+
+          {/* 🔧 Stronger wash behind left-side text, lighter on the right so image shows */}
+          <div className="absolute inset-0 bg-gradient-to-r from-background/85 via-background/35 to-transparent" />
+
+          {/* Accent glow (keep subtle) */}
+          <div className="absolute -top-28 -left-28 h-80 w-80 rounded-full bg-primary/10 blur-3xl" />
+          <div className="absolute -top-36 right-[-10rem] h-[28rem] w-[28rem] rounded-full bg-primary/8 blur-3xl" />
         </div>
 
         <div className="relative mx-auto max-w-6xl px-6 py-16 sm:py-18 lg:py-22">
@@ -366,11 +372,14 @@ export default function HomePage() {
             aria-hidden="true"
             fill
             sizes="100vw"
-            className="object-cover saturate-110 contrast-110"
-            style={{ opacity: 0.36 }}
+            className="object-cover"
+            // 🔧 More visible image
+            style={{ opacity: 0.30 }}
           />
-          {/* Reduce the wash so the antique cameras actually show */}
-          <div className="absolute inset-0 bg-background/32" />
+
+          {/* 🔧 Less aggressive wash so antique photo shows */}
+          <div className="absolute inset-0 bg-background/40" />
+          <div className="absolute inset-0 bg-gradient-to-r from-background/70 via-background/40 to-transparent" />
         </div>
 
         <div className="relative max-w-5xl mx-auto px-6 py-16">
