@@ -1,4 +1,3 @@
-// app/admin/page.tsx
 "use client";
 
 import { useEffect, useState } from "react";
@@ -17,15 +16,32 @@ const client = new Client()
 const account = new Account(client);
 const databases = new Databases(client);
 
-// Use known-good IDs with env fallbacks
-const DB_ID =
-  process.env.NEXT_PUBLIC_APPWRITE_PLATES_DATABASE_ID || "690fc34a0000ce1baa63";
+// ✅ Single source of truth for admin email
+const ADMIN_EMAIL = (process.env.NEXT_PUBLIC_ADMIN_EMAIL || "admin@auctionmycamera.co.uk")
+  .trim()
+  .toLowerCase();
 
-const PLATES_COLLECTION_ID =
-  process.env.NEXT_PUBLIC_APPWRITE_PLATES_COLLECTION_ID || "plates";
+// ✅ Listings live in their own DB/Table (supports legacy PLATES envs)
+const LISTINGS_DB_ID =
+  process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID ||
+  process.env.NEXT_PUBLIC_APPWRITE_PLATES_DATABASE_ID ||
+  "";
 
-// HARD-CODED: your Transactions table ID really is "transactions"
-const TRANSACTIONS_COLLECTION_ID = "transactions";
+const LISTINGS_COLLECTION_ID =
+  process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_COLLECTION_ID ||
+  process.env.NEXT_PUBLIC_APPWRITE_PLATES_COLLECTION_ID ||
+  "plates";
+
+// ✅ Transactions may be a separate DB/Table (your Appwrite shows a “transactions” database)
+const TRANSACTIONS_DB_ID =
+  process.env.NEXT_PUBLIC_APPWRITE_TRANSACTIONS_DATABASE_ID ||
+  process.env.NEXT_PUBLIC_APPWRITE_TRANSACTIONS_DB_ID ||
+  LISTINGS_DB_ID;
+
+const TRANSACTIONS_COLLECTION_ID =
+  process.env.NEXT_PUBLIC_APPWRITE_TRANSACTIONS_COLLECTION_ID ||
+  process.env.NEXT_PUBLIC_APPWRITE_TRANSACTIONS_TABLE_ID ||
+  "transactions";
 
 type AdminTab =
   | "pending"
@@ -40,6 +56,7 @@ const PUBLIC_LISTING_STATUSES = new Set(["queued", "live", "sold"]);
 
 // -----------------------------
 // DVLA fee model (NEW + legacy exceptions)
+// (Keep for now if you still use this transaction logic)
 // -----------------------------
 const DVLA_FEE_GBP = 80;
 
@@ -55,7 +72,8 @@ function isLegacyBuyerPaysDvlaTx(tx: any) {
 
 export default function AdminPage() {
   const router = useRouter();
-  const [authorized, setAuthorized] = useState(false);
+
+  const [authState, setAuthState] = useState<"checking" | "yes">("checking");
 
   const [activeTab, setActiveTab] = useState<AdminTab>("pending");
 
@@ -67,47 +85,68 @@ export default function AdminPage() {
   const [selectedPlate, setSelectedPlate] = useState<any>(null);
 
   // ------------------------------------------------------
-  // VERIFY ADMIN LOGIN
+  // VERIFY ADMIN LOGIN (no localStorage bounce)
   // ------------------------------------------------------
   useEffect(() => {
+    let alive = true;
+
     const verify = async () => {
       try {
-        const user = await account.get();
+        const user: any = await account.get();
+        const email = String(user?.email || "").toLowerCase();
 
-        if (
-          user.email === "admin@auctionmyplate.co.uk" &&
-          typeof window !== "undefined" &&
-          localStorage.getItem("adminLoggedIn") === "true"
-        ) {
-          setAuthorized(true);
+        if (email === ADMIN_EMAIL) {
+          if (alive) setAuthState("yes");
         } else {
-          router.push("/admin-login");
+          router.replace("/admin-login");
         }
       } catch {
-        router.push("/admin-login");
+        router.replace("/admin-login");
       }
     };
 
     verify();
+
+    return () => {
+      alive = false;
+    };
   }, [router]);
 
   // ------------------------------------------------------
   // LOAD LISTINGS / TRANSACTIONS
   // ------------------------------------------------------
   useEffect(() => {
-    if (!authorized) return;
+    if (authState !== "yes") return;
 
     const load = async () => {
       setLoading(true);
       setMessage("");
 
       try {
+        // Guard: DB not configured
+        if (!LISTINGS_DB_ID || !LISTINGS_COLLECTION_ID) {
+          setMessage(
+            "Missing Appwrite env for listings. Set NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID and NEXT_PUBLIC_APPWRITE_LISTINGS_COLLECTION_ID (or the legacy PLATES envs)."
+          );
+          setPlates([]);
+          setTransactions([]);
+          return;
+        }
+
         if (activeTab === "soldPending" || activeTab === "complete") {
           // Transactions view
           const txStatus = activeTab === "soldPending" ? "pending" : "complete";
 
+          if (!TRANSACTIONS_DB_ID || !TRANSACTIONS_COLLECTION_ID) {
+            setMessage(
+              "Missing Appwrite env for transactions. Set NEXT_PUBLIC_APPWRITE_TRANSACTIONS_DATABASE_ID and NEXT_PUBLIC_APPWRITE_TRANSACTIONS_COLLECTION_ID."
+            );
+            setTransactions([]);
+            return;
+          }
+
           const res = await databases.listDocuments(
-            DB_ID,
+            TRANSACTIONS_DB_ID,
             TRANSACTIONS_COLLECTION_ID,
             [Query.equal("transaction_status", txStatus)]
           );
@@ -116,7 +155,7 @@ export default function AdminPage() {
           setPlates([]);
         } else {
           // Listings view
-          const res = await databases.listDocuments(DB_ID, PLATES_COLLECTION_ID, [
+          const res = await databases.listDocuments(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, [
             Query.equal("status", activeTab),
           ]);
 
@@ -125,14 +164,14 @@ export default function AdminPage() {
         }
       } catch (err) {
         console.error("Failed to load admin data:", err);
-        setMessage("Failed to load data from Appwrite.");
+        setMessage("Failed to load data from Appwrite (check DB/Table IDs + schema).");
       } finally {
         setLoading(false);
       }
     };
 
     load();
-  }, [authorized, activeTab]);
+  }, [authState, activeTab]);
 
   // ------------------------------------------------------
   // APPROVE LISTING (server-only)
@@ -141,7 +180,6 @@ export default function AdminPage() {
     if (!selectedPlate) return;
 
     try {
-      // 1) Call the API to do all approval logic (status, prices, facts, auction window)
       const res = await fetch("/api/approve-listing", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -162,29 +200,21 @@ export default function AdminPage() {
       }
 
       if (!res.ok || data?.error) {
-        console.error("approve-listing error:", {
-          status: res.status,
-          statusText: res.statusText,
-          data,
-        });
-        throw new Error(data?.error || "Failed to approve plate.");
+        console.error("approve-listing error:", { status: res.status, statusText: res.statusText, data });
+        throw new Error(data?.error || "Failed to approve listing.");
       }
 
-      // 2) UI feedback
-      setMessage(`Plate ${selectedPlate.registration} approved & queued`);
+      setMessage(`Listing ${selectedPlate.registration} approved & queued`);
       setSelectedPlate(null);
-
-      // 3) Switch to queued so you can immediately see it moved
-      // (Your existing useEffect will reload the list for the new tab)
       setActiveTab("queued");
     } catch (err) {
       console.error(err);
-      alert("Failed to approve plate.");
+      alert("Failed to approve listing.");
     }
   };
 
   // ------------------------------------------------------
-  // REJECT LISTING (server API, defensive JSON handling)
+  // REJECT LISTING
   // ------------------------------------------------------
   const rejectPlate = async (plate: any) => {
     if (!plate) return;
@@ -216,26 +246,24 @@ export default function AdminPage() {
           statusText: res.statusText,
           body: text,
         });
-        throw new Error(
-          `Server returned an unexpected response while rejecting listing (HTTP ${res.status}).`
-        );
+        throw new Error(`Unexpected response while rejecting (HTTP ${res.status}).`);
       }
 
       if (!res.ok || data?.error) {
         console.error("Reject API error payload:", data);
-        throw new Error(data?.error || "Failed to reject plate.");
+        throw new Error(data?.error || "Failed to reject listing.");
       }
 
-      setMessage(`Plate ${plate.registration} rejected.`);
+      setMessage(`Listing ${plate.registration} rejected.`);
       setSelectedPlate(null);
 
-      const updated = await databases.listDocuments(DB_ID, PLATES_COLLECTION_ID, [
+      const updated = await databases.listDocuments(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, [
         Query.equal("status", activeTab),
       ]);
       setPlates(updated.documents);
     } catch (err: any) {
       console.error("rejectPlate error:", err);
-      alert(err.message || "Failed to reject plate.");
+      alert(err.message || "Failed to reject listing.");
     }
   };
 
@@ -246,9 +274,9 @@ export default function AdminPage() {
     if (!confirm("Delete this listing?")) return;
 
     try {
-      await databases.deleteDocument(DB_ID, PLATES_COLLECTION_ID, id);
+      await databases.deleteDocument(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, id);
 
-      const updated = await databases.listDocuments(DB_ID, PLATES_COLLECTION_ID, [
+      const updated = await databases.listDocuments(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, [
         Query.equal("status", activeTab),
       ]);
 
@@ -261,7 +289,7 @@ export default function AdminPage() {
   };
 
   // ------------------------------------------------------
-  // MARK LISTING SOLD -> creates Transaction row (calls API)
+  // MARK LISTING SOLD
   // ------------------------------------------------------
   const markListingSold = async (listing: any) => {
     const salePriceStr = window.prompt(
@@ -299,23 +327,14 @@ export default function AdminPage() {
       }
 
       if (!res.ok) {
-        console.error("mark-sold error:", {
-          status: res.status,
-          statusText: res.statusText,
-          data,
-        });
-        alert(
-          (data && data.error) ||
-            `Failed to mark as sold (HTTP ${res.status}). Check server logs.`
-        );
+        console.error("mark-sold error:", { status: res.status, statusText: res.statusText, data });
+        alert((data && data.error) || `Failed to mark as sold (HTTP ${res.status}).`);
         return;
       }
 
-      setMessage(
-        `Listing ${listing.registration} marked as sold and transaction created.`
-      );
+      setMessage(`Listing ${listing.registration} marked as sold and transaction created.`);
 
-      const updated = await databases.listDocuments(DB_ID, PLATES_COLLECTION_ID, [
+      const updated = await databases.listDocuments(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, [
         Query.equal("status", "live"),
       ]);
       setPlates(updated.documents);
@@ -331,11 +350,10 @@ export default function AdminPage() {
   // LOGOUT
   // ------------------------------------------------------
   const logout = async () => {
-    await account.deleteSession("current");
-    if (typeof window !== "undefined") {
-      localStorage.removeItem("adminLoggedIn");
-    }
-    router.push("/admin-login");
+    try {
+      await account.deleteSession("current");
+    } catch {}
+    router.replace("/admin-login");
   };
 
   // ------------------------------------------------------
@@ -359,30 +377,29 @@ export default function AdminPage() {
     return `£${value.toLocaleString("en-GB")}`;
   };
 
+  if (authState === "checking") {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-neutral-50">
+        <div className="rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm text-sm text-neutral-600">
+          Checking admin session…
+        </div>
+      </div>
+    );
+  }
+
   // ------------------------------------------------------
   // UI
   // ------------------------------------------------------
   return (
-    <div className="min-h-screen bg-yellow-50 py-10 px-6">
-      <div className="max-w-5xl mx-auto bg-white rounded-2xl p-8 shadow-lg">
+    <div className="min-h-screen bg-neutral-50 py-10 px-6">
+      <div className="max-w-5xl mx-auto bg-white rounded-2xl p-8 shadow-lg border border-neutral-200">
         {/* HEADER */}
         <div className="flex justify-between items-center mb-6">
-          {/* Left: title + DVLA guide link */}
           <div className="flex flex-col gap-1">
-            <h1 className="text-3xl font-bold text-yellow-700">Admin Dashboard</h1>
-
-            <Link
-              href="/admin/dvla-transfer-guide"
-              className="inline-flex items-center text-xs font-semibold text-indigo-700 hover:text-indigo-900 hover:underline"
-            >
-              DVLA Transfer Guide
-              <span aria-hidden="true" className="ml-1">
-                →
-              </span>
-            </Link>
+            <h1 className="text-3xl font-bold text-orange-700">Admin Dashboard</h1>
+            <p className="text-xs text-neutral-500">Signed in as {ADMIN_EMAIL}</p>
           </div>
 
-          {/* Right: logout */}
           <button className="text-red-600 font-semibold" onClick={logout}>
             Logout
           </button>
@@ -390,34 +407,32 @@ export default function AdminPage() {
 
         {/* TABS */}
         <div className="flex flex-wrap gap-6 border-b pb-3">
-          {["pending", "queued", "live", "rejected", "soldPending", "complete"].map(
-            (t) => (
-              <button
-                key={t}
-                className={`pb-2 font-semibold ${
-                  activeTab === t
-                    ? "border-b-4 border-yellow-500 text-yellow-700"
-                    : "text-gray-500"
-                }`}
-                onClick={() => setActiveTab(t as AdminTab)}
-              >
-                {t === "queued"
-                  ? "Approved / Queued"
-                  : t === "soldPending"
-                  ? "Sold / Pending"
-                  : t === "complete"
-                  ? "Complete"
-                  : t.charAt(0).toUpperCase() + t.slice(1)}
-              </button>
-            )
-          )}
+          {["pending", "queued", "live", "rejected", "soldPending", "complete"].map((t) => (
+            <button
+              key={t}
+              className={`pb-2 font-semibold ${
+                activeTab === t
+                  ? "border-b-4 border-orange-500 text-orange-700"
+                  : "text-neutral-500"
+              }`}
+              onClick={() => setActiveTab(t as AdminTab)}
+            >
+              {t === "queued"
+                ? "Approved / Queued"
+                : t === "soldPending"
+                ? "Sold / Pending"
+                : t === "complete"
+                ? "Complete"
+                : t.charAt(0).toUpperCase() + t.slice(1)}
+            </button>
+          ))}
 
-          <a
-            href="/admin/auction-manager"
-            className="ml-auto pb-2 font-semibold text-gray-600 hover:text-yellow-700"
+          <Link
+            href="/admin/auctions"
+            className="ml-auto pb-2 font-semibold text-neutral-600 hover:text-orange-700"
           >
-            Auction Manager
-          </a>
+            Auction Week Manager
+          </Link>
         </div>
 
         {message && (
@@ -426,22 +441,17 @@ export default function AdminPage() {
           </p>
         )}
 
-        {loading && (
-          <p className="text-center text-gray-600 mt-10 text-lg">Loading…</p>
-        )}
+        {loading && <p className="text-center text-neutral-600 mt-10 text-lg">Loading…</p>}
 
-        {/* LISTINGS VIEW (Pending / Queued / Live / Rejected) */}
+        {/* LISTINGS VIEW */}
         {!loading &&
           activeTab !== "soldPending" &&
           activeTab !== "complete" &&
           plates.map((p) => (
-            <div
-              key={p.$id}
-              className="border rounded-xl p-5 bg-gray-50 shadow-sm mt-5"
-            >
+            <div key={p.$id} className="border rounded-xl p-5 bg-neutral-50 shadow-sm mt-5">
               <div className="flex justify-between items-start gap-4">
-                <div className="space-y-1 text-sm text-gray-800">
-                  <h2 className="text-2xl font-bold text-yellow-700 mb-1">
+                <div className="space-y-1 text-sm text-neutral-800">
+                  <h2 className="text-2xl font-bold text-orange-700 mb-1">
                     {p.registration}
                   </h2>
 
@@ -451,23 +461,18 @@ export default function AdminPage() {
 
                   {p.expiry_date && (
                     <p>
-                      <strong>Retention Expiry:</strong>{" "}
-                      {formatDateTime(p.expiry_date)}
+                      <strong>Retention Expiry:</strong> {formatDateTime(p.expiry_date)}
                     </p>
                   )}
 
                   <p>
                     <strong>Reserve:</strong>{" "}
-                    {formatMoney(
-                      typeof p.reserve_price === "number" ? p.reserve_price : 0
-                    )}
+                    {formatMoney(typeof p.reserve_price === "number" ? p.reserve_price : 0)}
                   </p>
 
                   <p>
                     <strong>Starting Price:</strong>{" "}
-                    {formatMoney(
-                      typeof p.starting_price === "number" ? p.starting_price : 0
-                    )}
+                    {formatMoney(typeof p.starting_price === "number" ? p.starting_price : 0)}
                   </p>
 
                   <p>
@@ -476,8 +481,7 @@ export default function AdminPage() {
                   </p>
 
                   <p>
-                    <strong>Relist until sold:</strong>{" "}
-                    {p.relist_until_sold ? "Yes" : "No"}
+                    <strong>Relist until sold:</strong> {p.relist_until_sold ? "Yes" : "No"}
                   </p>
 
                   <p>
@@ -490,46 +494,32 @@ export default function AdminPage() {
                     </p>
                   )}
 
-                  <div className="mt-2 text-xs text-gray-700 space-y-1">
+                  <div className="mt-2 text-xs text-neutral-700 space-y-1">
                     <p>
                       <strong>Listing fee:</strong>{" "}
-                      {formatMoney(
-                        typeof p.listing_fee === "number" ? p.listing_fee : 0
-                      )}
+                      {formatMoney(typeof p.listing_fee === "number" ? p.listing_fee : 0)}
                     </p>
                     <p>
                       <strong>Commission rate:</strong>{" "}
-                      {typeof p.commission_rate === "number"
-                        ? `${p.commission_rate}%`
-                        : "—"}
+                      {typeof p.commission_rate === "number" ? `${p.commission_rate}%` : "—"}
                     </p>
                     <p>
                       <strong>Estimated seller return:</strong>{" "}
-                      {formatMoney(
-                        typeof p.expected_return === "number"
-                          ? p.expected_return
-                          : 0
-                      )}
+                      {formatMoney(typeof p.expected_return === "number" ? p.expected_return : 0)}
                     </p>
                   </div>
 
                   <p className="mt-2">
                     <strong>Status:</strong>{" "}
                     {p.status === "queued" ? (
-                      <span className="text-blue-700 font-bold">
-                        Approved / Queued
-                      </span>
+                      <span className="text-blue-700 font-bold">Approved / Queued</span>
                     ) : (
                       p.status
                     )}
                   </p>
 
                   <div className="mt-2">
-                    <AdminAuctionTimer
-                      start={p.auction_start}
-                      end={p.auction_end}
-                      status={p.status}
-                    />
+                    <AdminAuctionTimer start={p.auction_start} end={p.auction_end} status={p.status} />
                   </div>
                 </div>
 
@@ -541,7 +531,6 @@ export default function AdminPage() {
                     Delete
                   </button>
 
-                  {/* Only show public "View Full Listing" if status is public */}
                   {PUBLIC_LISTING_STATUSES.has(p.status) && (
                     <a
                       href={`/listing/${p.$id}`}
@@ -583,21 +572,19 @@ export default function AdminPage() {
             </div>
           ))}
 
-        {/* TRANSACTIONS VIEW (Sold / Pending + Complete) */}
+        {/* TRANSACTIONS VIEW */}
         {!loading && activeTab === "soldPending" && (
           <div className="mt-6">
-            <h2 className="text-xl font-bold mb-2 text-yellow-700">
+            <h2 className="text-xl font-bold mb-2 text-orange-700">
               Sold / Pending (Paperwork &amp; Payment)
             </h2>
 
             {transactions.length === 0 ? (
-              <p className="text-sm text-gray-600">
-                No sold plates waiting for paperwork or payment.
-              </p>
+              <p className="text-sm text-neutral-600">No sold items waiting for paperwork or payment.</p>
             ) : (
-              <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white shadow-sm">
+              <div className="overflow-x-auto rounded-xl border border-neutral-200 bg-white shadow-sm">
                 <table className="min-w-full text-left text-xs md:text-sm">
-                  <thead className="bg-gray-100 text-gray-700">
+                  <thead className="bg-neutral-100 text-neutral-700">
                     <tr>
                       <th className="py-2 px-2">Reg</th>
                       <th className="py-2 px-2">Listing ID</th>
@@ -611,172 +598,46 @@ export default function AdminPage() {
                       <th className="py-2 px-2">Transaction Status</th>
                       <th className="py-2 px-2">Created</th>
                       <th className="py-2 px-2">Updated</th>
-                      <th className="py-2 px-2 text-center">Docs</th>
                       <th className="py-2 px-2 text-center">Action</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-gray-200">
-                    {transactions.map((tx) => {
-                      const buyerDocsUploaded = tx.buyerDocsUploaded;
-                      const sellerDocsUploaded = tx.sellerDocsUploaded;
-
-                      const buyerDocCount = Array.isArray(tx.buyerDocFiles)
-                        ? tx.buyerDocFiles.length
-                        : 0;
-
-                      const sellerDocCount = Array.isArray(tx.sellerDocFiles)
-                        ? tx.sellerDocFiles.length
-                        : 0;
-
-                      return (
-                        <tr key={tx.$id} className="hover:bg-yellow-50">
-                          <td className="py-2 px-2 whitespace-nowrap">
-                            {tx.registration || "-"}
-                          </td>
-                          <td className="py-2 px-2 whitespace-nowrap">
-                            {tx.listing_id || "-"}
-                          </td>
-                          <td className="py-2 px-2 whitespace-nowrap">
-                            {tx.seller_email}
-                          </td>
-                          <td className="py-2 px-2 whitespace-nowrap">
-                            {tx.buyer_email || "-"}
-                          </td>
-                          <td className="py-2 px-2 whitespace-nowrap">
-                            £{(tx.sale_price ?? 0).toLocaleString("en-GB")}
-                          </td>
-                          <td className="py-2 px-2 whitespace-nowrap">
-                            £{(tx.commission_amount ?? 0).toLocaleString("en-GB")} (
-                            {tx.commission_rate ?? 0}
-                            %)
-                          </td>
-                          <td className="py-2 px-2 whitespace-nowrap font-semibold">
-                            £{(tx.seller_payout ?? 0).toLocaleString("en-GB")}
-                          </td>
-
-                          {/* DVLA fee + payer label */}
-                          <td className="py-2 px-2 whitespace-nowrap">
-                            £{((tx.dvla_fee ?? DVLA_FEE_GBP) as number).toLocaleString(
-                              "en-GB"
-                            )}{" "}
-                            <span className="text-[11px] text-gray-500">
-                              ({isLegacyBuyerPaysDvlaTx(tx)
-                                ? "paid by buyer (legacy)"
-                                : "paid by seller"})
-                            </span>
-                          </td>
-
-                          <td className="py-2 px-2 whitespace-nowrap">
-                            {tx.payment_status || "pending"}
-                          </td>
-                          <td className="py-2 px-2 whitespace-nowrap">
-                            {tx.transaction_status || "pending"}
-                          </td>
-                          <td className="py-2 px-2 whitespace-nowrap">
-                            {tx.created_at
-                              ? new Date(tx.created_at).toLocaleString("en-GB")
-                              : "-"}
-                          </td>
-                          <td className="py-2 px-2 whitespace-nowrap">
-                            {tx.updated_at
-                              ? new Date(tx.updated_at).toLocaleString("en-GB")
-                              : "-"}
-                          </td>
-
-                          <td className="py-2 px-2 text-center text-xs">
-                            {!buyerDocsUploaded && !sellerDocsUploaded && (
-                              <span className="text-[11px] text-gray-500">
-                                None
-                              </span>
-                            )}
-
-                            {buyerDocsUploaded && (
-                              <div className="text-[11px]">
-                                <span className="inline-block rounded bg-green-100 text-green-800 px-1 mr-1">
-                                  Buyer
-                                </span>
-                                {buyerDocCount} file
-                                {buyerDocCount === 1 ? "" : "s"}
-                              </div>
-                            )}
-
-                            {sellerDocsUploaded && (
-                              <div className="text-[11px]">
-                                <span className="inline-block rounded bg-blue-100 text-blue-800 px-1 mr-1">
-                                  Seller
-                                </span>
-                                {sellerDocCount} file
-                                {sellerDocCount === 1 ? "" : "s"}
-                              </div>
-                            )}
-                          </td>
-
-                          <td className="py-2 px-2 text-center space-x-2 whitespace-nowrap">
-                            <a
-                              href={`/admin/transaction/${tx.$id}`}
-                              className="text-xs text-blue-600 underline"
-                            >
-                              View
-                            </a>
-                            <button
-                              type="button"
-                              className="text-xs text-red-600 underline"
-                              onClick={async () => {
-                                const reasonInput = window.prompt(
-                                  "Reason for deleting / archiving this transaction? (This will be stored for record keeping.)",
-                                  ""
-                                );
-
-                                if (reasonInput === null) return;
-
-                                const reason = reasonInput.trim();
-                                if (!reason) {
-                                  alert(
-                                    "Please enter a reason, or press Cancel to abort."
-                                  );
-                                  return;
-                                }
-
-                                try {
-                                  const res = await fetch(
-                                    "/api/admin/delete-transaction",
-                                    {
-                                      method: "POST",
-                                      headers: { "Content-Type": "application/json" },
-                                      body: JSON.stringify({
-                                        txId: tx.$id,
-                                        reason,
-                                      }),
-                                    }
-                                  );
-
-                                  const data = await res.json().catch(() => ({}));
-                                  if (!res.ok || data.error) {
-                                    console.error("Delete transaction failed:", data);
-                                    alert(
-                                      data.error ||
-                                        "Failed to delete (archive) transaction."
-                                    );
-                                    return;
-                                  }
-
-                                  setTransactions((prev) =>
-                                    prev.filter((row) => row.$id !== tx.$id)
-                                  );
-
-                                  alert("Transaction archived as deleted.");
-                                } catch (err) {
-                                  console.error("Delete transaction failed:", err);
-                                  alert("Failed to delete transaction.");
-                                }
-                              }}
-                            >
-                              Delete
-                            </button>
-                          </td>
-                        </tr>
-                      );
-                    })}
+                  <tbody className="divide-y divide-neutral-200">
+                    {transactions.map((tx) => (
+                      <tr key={tx.$id} className="hover:bg-neutral-50">
+                        <td className="py-2 px-2 whitespace-nowrap">{tx.registration || "-"}</td>
+                        <td className="py-2 px-2 whitespace-nowrap">{tx.listing_id || "-"}</td>
+                        <td className="py-2 px-2 whitespace-nowrap">{tx.seller_email}</td>
+                        <td className="py-2 px-2 whitespace-nowrap">{tx.buyer_email || "-"}</td>
+                        <td className="py-2 px-2 whitespace-nowrap">
+                          £{(tx.sale_price ?? 0).toLocaleString("en-GB")}
+                        </td>
+                        <td className="py-2 px-2 whitespace-nowrap">
+                          £{(tx.commission_amount ?? 0).toLocaleString("en-GB")} ({tx.commission_rate ?? 0}%)
+                        </td>
+                        <td className="py-2 px-2 whitespace-nowrap font-semibold">
+                          £{(tx.seller_payout ?? 0).toLocaleString("en-GB")}
+                        </td>
+                        <td className="py-2 px-2 whitespace-nowrap">
+                          £{((tx.dvla_fee ?? DVLA_FEE_GBP) as number).toLocaleString("en-GB")}{" "}
+                          <span className="text-[11px] text-neutral-500">
+                            ({isLegacyBuyerPaysDvlaTx(tx) ? "paid by buyer (legacy)" : "paid by seller"})
+                          </span>
+                        </td>
+                        <td className="py-2 px-2 whitespace-nowrap">{tx.payment_status || "pending"}</td>
+                        <td className="py-2 px-2 whitespace-nowrap">{tx.transaction_status || "pending"}</td>
+                        <td className="py-2 px-2 whitespace-nowrap">
+                          {tx.created_at ? new Date(tx.created_at).toLocaleString("en-GB") : "-"}
+                        </td>
+                        <td className="py-2 px-2 whitespace-nowrap">
+                          {tx.updated_at ? new Date(tx.updated_at).toLocaleString("en-GB") : "-"}
+                        </td>
+                        <td className="py-2 px-2 text-center whitespace-nowrap">
+                          <a href={`/admin/transaction/${tx.$id}`} className="text-xs text-blue-600 underline">
+                            View
+                          </a>
+                        </td>
+                      </tr>
+                    ))}
                   </tbody>
                 </table>
               </div>
@@ -787,18 +648,16 @@ export default function AdminPage() {
         {/* COMPLETE TAB */}
         {!loading && activeTab === "complete" && (
           <div className="mt-6">
-            <h2 className="text-xl font-bold mb-2 text-yellow-700">
+            <h2 className="text-xl font-bold mb-2 text-orange-700">
               Completed Transactions
             </h2>
 
             {transactions.length === 0 ? (
-              <p className="text-sm text-gray-600">
-                No completed transactions yet.
-              </p>
+              <p className="text-sm text-neutral-600">No completed transactions yet.</p>
             ) : (
-              <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white shadow-sm">
+              <div className="overflow-x-auto rounded-xl border border-neutral-200 bg-white shadow-sm">
                 <table className="min-w-full text-left text-xs md:text-sm">
-                  <thead className="bg-gray-100 text-gray-700">
+                  <thead className="bg-neutral-100 text-neutral-700">
                     <tr>
                       <th className="py-2 px-2">Reg</th>
                       <th className="py-2 px-2">Listing ID</th>
@@ -815,65 +674,38 @@ export default function AdminPage() {
                       <th className="py-2 px-2 text-center">Action</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-gray-200">
+                  <tbody className="divide-y divide-neutral-200">
                     {transactions.map((tx) => (
-                      <tr key={tx.$id} className="hover:bg-yellow-50">
-                        <td className="py-2 px-2 whitespace-nowrap">
-                          {tx.registration || "-"}
-                        </td>
-                        <td className="py-2 px-2 whitespace-nowrap">
-                          {tx.listing_id || "-"}
-                        </td>
-                        <td className="py-2 px-2 whitespace-nowrap">
-                          {tx.seller_email}
-                        </td>
-                        <td className="py-2 px-2 whitespace-nowrap">
-                          {tx.buyer_email || "-"}
-                        </td>
+                      <tr key={tx.$id} className="hover:bg-neutral-50">
+                        <td className="py-2 px-2 whitespace-nowrap">{tx.registration || "-"}</td>
+                        <td className="py-2 px-2 whitespace-nowrap">{tx.listing_id || "-"}</td>
+                        <td className="py-2 px-2 whitespace-nowrap">{tx.seller_email}</td>
+                        <td className="py-2 px-2 whitespace-nowrap">{tx.buyer_email || "-"}</td>
                         <td className="py-2 px-2 whitespace-nowrap">
                           £{(tx.sale_price ?? 0).toLocaleString("en-GB")}
                         </td>
                         <td className="py-2 px-2 whitespace-nowrap">
-                          £{(tx.commission_amount ?? 0).toLocaleString("en-GB")} (
-                          {tx.commission_rate ?? 0}%)
+                          £{(tx.commission_amount ?? 0).toLocaleString("en-GB")} ({tx.commission_rate ?? 0}%)
                         </td>
                         <td className="py-2 px-2 whitespace-nowrap font-semibold">
                           £{(tx.seller_payout ?? 0).toLocaleString("en-GB")}
                         </td>
-
-                        {/* DVLA fee + payer label */}
                         <td className="py-2 px-2 whitespace-nowrap">
-                          £{((tx.dvla_fee ?? DVLA_FEE_GBP) as number).toLocaleString(
-                            "en-GB"
-                          )}{" "}
-                          <span className="text-[11px] text-gray-500">
-                            ({isLegacyBuyerPaysDvlaTx(tx)
-                              ? "paid by buyer (legacy)"
-                              : "paid by seller"})
+                          £{((tx.dvla_fee ?? DVLA_FEE_GBP) as number).toLocaleString("en-GB")}{" "}
+                          <span className="text-[11px] text-neutral-500">
+                            ({isLegacyBuyerPaysDvlaTx(tx) ? "paid by buyer (legacy)" : "paid by seller"})
                           </span>
                         </td>
-
+                        <td className="py-2 px-2 whitespace-nowrap">{tx.payment_status || "pending"}</td>
+                        <td className="py-2 px-2 whitespace-nowrap">{tx.transaction_status || "pending"}</td>
                         <td className="py-2 px-2 whitespace-nowrap">
-                          {tx.payment_status || "pending"}
+                          {tx.created_at ? new Date(tx.created_at).toLocaleString("en-GB") : "-"}
                         </td>
                         <td className="py-2 px-2 whitespace-nowrap">
-                          {tx.transaction_status || "pending"}
-                        </td>
-                        <td className="py-2 px-2 whitespace-nowrap">
-                          {tx.created_at
-                            ? new Date(tx.created_at).toLocaleString("en-GB")
-                            : "-"}
-                        </td>
-                        <td className="py-2 px-2 whitespace-nowrap">
-                          {tx.updated_at
-                            ? new Date(tx.updated_at).toLocaleString("en-GB")
-                            : "-"}
+                          {tx.updated_at ? new Date(tx.updated_at).toLocaleString("en-GB") : "-"}
                         </td>
                         <td className="py-2 px-2 text-center whitespace-nowrap">
-                          <a
-                            href={`/admin/transaction/${tx.$id}`}
-                            className="text-xs text-blue-600 underline"
-                          >
+                          <a href={`/admin/transaction/${tx.$id}`} className="text-xs text-blue-600 underline">
                             View
                           </a>
                         </td>
@@ -888,16 +720,16 @@ export default function AdminPage() {
 
         {/* REVIEW MODAL */}
         {selectedPlate && (
-          <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+          <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 px-4">
             <div className="bg-white p-6 rounded-2xl w-full max-w-lg relative">
               <button
                 onClick={() => setSelectedPlate(null)}
-                className="absolute right-3 top-3 text-gray-500 hover:text-black text-xl"
+                className="absolute right-3 top-3 text-neutral-500 hover:text-black text-xl"
               >
                 ✕
               </button>
 
-              <h2 className="text-2xl font-bold text-yellow-700 mb-3">
+              <h2 className="text-2xl font-bold text-orange-700 mb-3">
                 {selectedPlate.registration}
               </h2>
 
@@ -905,15 +737,13 @@ export default function AdminPage() {
                 <strong>Plate Type:</strong> {selectedPlate.plate_type}
               </p>
 
-              {/* USER DESCRIPTION (read-only – what seller entered) */}
               <label className="block mt-2 font-semibold text-sm">
                 Seller description (read-only)
               </label>
-              <div className="border rounded-md p-2 text-sm bg-gray-50 whitespace-pre-line max-h-32 overflow-y-auto">
+              <div className="border rounded-md p-2 text-sm bg-neutral-50 whitespace-pre-line max-h-32 overflow-y-auto">
                 {selectedPlate.description || "No description provided by seller."}
               </div>
 
-              {/* RESERVE */}
               <label className="block mt-3 font-semibold text-sm">
                 Reserve Price (£)
               </label>
@@ -922,14 +752,10 @@ export default function AdminPage() {
                 className="border w-full p-2 rounded-md text-sm"
                 value={selectedPlate.reserve_price}
                 onChange={(e) =>
-                  setSelectedPlate({
-                    ...selectedPlate,
-                    reserve_price: e.target.value,
-                  })
+                  setSelectedPlate({ ...selectedPlate, reserve_price: e.target.value })
                 }
               />
 
-              {/* STARTING PRICE */}
               <label className="block mt-3 font-semibold text-sm">
                 Starting Price (£)
               </label>
@@ -938,14 +764,10 @@ export default function AdminPage() {
                 className="border w-full p-2 rounded-md text-sm"
                 value={selectedPlate.starting_price || 0}
                 onChange={(e) =>
-                  setSelectedPlate({
-                    ...selectedPlate,
-                    starting_price: e.target.value,
-                  })
+                  setSelectedPlate({ ...selectedPlate, starting_price: e.target.value })
                 }
               />
 
-              {/* HISTORY / INTERESTING FACT – THIS IS WHAT SHOWS ON THE LISTING PAGE */}
               <label className="block mt-4 font-semibold text-sm">
                 Plate history &amp; interesting facts
               </label>
@@ -954,10 +776,7 @@ export default function AdminPage() {
                 rows={4}
                 value={selectedPlate.interesting_fact || ""}
                 onChange={(e) =>
-                  setSelectedPlate({
-                    ...selectedPlate,
-                    interesting_fact: e.target.value,
-                  })
+                  setSelectedPlate({ ...selectedPlate, interesting_fact: e.target.value })
                 }
               />
 

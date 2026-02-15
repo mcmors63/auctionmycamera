@@ -11,26 +11,29 @@ const client = new Client()
 
 const account = new Account(client);
 
+// ✅ Single source of truth for admin email
+const ADMIN_EMAIL = (process.env.NEXT_PUBLIC_ADMIN_EMAIL || "admin@auctionmycamera.co.uk")
+  .trim()
+  .toLowerCase();
+
 export default function AdminLoginPage() {
   const router = useRouter();
 
-  // Lock email to the real admin account
-  const [email] = useState("admin@auctionmyplate.co.uk");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string>("");
   const [loading, setLoading] = useState(false);
 
   // If already logged in as admin, go straight to /admin
   useEffect(() => {
+    let alive = true;
+
     const checkExisting = async () => {
       try {
-        const user = await account.get();
+        const user: any = await account.get();
+        const email = String(user?.email || "").toLowerCase();
 
-        if (
-          user.email === "admin@auctionmyplate.co.uk" &&
-          localStorage.getItem("adminLoggedIn") === "true"
-        ) {
-          router.push("/admin");
+        if (alive && email === ADMIN_EMAIL) {
+          router.replace("/admin");
         }
       } catch {
         // no active session, ignore
@@ -38,6 +41,10 @@ export default function AdminLoginPage() {
     };
 
     checkExisting();
+
+    return () => {
+      alive = false;
+    };
   }, [router]);
 
   const handleLogin = async (e: React.FormEvent) => {
@@ -54,21 +61,19 @@ export default function AdminLoginPage() {
       }
 
       // 2) Create fresh session with admin credentials
-      await account.createEmailPasswordSession(email, password);
+      await account.createEmailPasswordSession(ADMIN_EMAIL, password);
 
-      const user = await account.get();
+      const user: any = await account.get();
+      const email = String(user?.email || "").toLowerCase();
 
       // 3) Only allow the real admin through
-      if (user.email !== "admin@auctionmyplate.co.uk") {
+      if (email !== ADMIN_EMAIL) {
         await account.deleteSession("current");
         setError("This account is not authorised as admin.");
-        setLoading(false);
         return;
       }
 
-      // 4) Mark admin flag and go to /admin
-      localStorage.setItem("adminLoggedIn", "true");
-      router.push("/admin");
+      router.replace("/admin");
     } catch (err: any) {
       console.error("Admin login error:", err);
       setError("Invalid admin credentials or session error.");
@@ -78,27 +83,25 @@ export default function AdminLoginPage() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-yellow-50">
-      <div className="bg-white p-8 rounded-2xl shadow-lg w-full max-w-md">
-        <h1 className="text-2xl font-bold text-center text-yellow-600 mb-6">
+    <div className="min-h-screen flex items-center justify-center bg-neutral-50 px-4">
+      <div className="bg-white p-8 rounded-2xl shadow-lg w-full max-w-md border border-neutral-200">
+        <h1 className="text-2xl font-bold text-center text-orange-600 mb-6">
           Admin Login
         </h1>
 
         {error && (
-          <p className="text-red-600 text-sm mb-3 text-center">
-            {error}
-          </p>
+          <p className="text-red-600 text-sm mb-3 text-center">{error}</p>
         )}
 
         <form onSubmit={handleLogin} className="space-y-4">
           <div>
             <input
               type="email"
-              value={email}
+              value={ADMIN_EMAIL}
               readOnly
-              className="w-full border border-gray-300 rounded-md p-3 bg-gray-100 text-gray-700"
+              className="w-full border border-neutral-300 rounded-md p-3 bg-neutral-100 text-neutral-700"
             />
-            <p className="text-xs text-gray-500 mt-1 text-center">
+            <p className="text-xs text-neutral-500 mt-1 text-center">
               Admin access is restricted to this email address.
             </p>
           </div>
@@ -109,13 +112,13 @@ export default function AdminLoginPage() {
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             required
-            className="w-full border border-gray-300 rounded-md p-3 focus:ring-2 focus:ring-yellow-500 outline-none"
+            className="w-full border border-neutral-300 rounded-md p-3 focus:ring-2 focus:ring-orange-500 outline-none"
           />
 
           <button
             type="submit"
             disabled={loading}
-            className="w-full bg-yellow-600 hover:bg-yellow-700 text-white font-semibold py-3 rounded-md transition disabled:opacity-60"
+            className="w-full bg-orange-600 hover:bg-orange-700 text-white font-semibold py-3 rounded-md transition disabled:opacity-60"
           >
             {loading ? "Signing in..." : "Login as Admin"}
           </button>

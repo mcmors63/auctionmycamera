@@ -135,12 +135,11 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const now = new Date();
 
   // ✅ Only include routes that make sense for AuctionMyCamera
-  // (Do NOT include plate/DVLA-specific URLs)
+  // (Do NOT include login-only URLs like /sell)
   const staticRoutes: MetadataRoute.Sitemap = [
     { url: `${SITE_URL}/`, lastModified: now, changeFrequency: "daily", priority: 1 },
 
     { url: `${SITE_URL}/current-listings`, lastModified: now, changeFrequency: "hourly", priority: 0.9 },
-    { url: `${SITE_URL}/sell`, lastModified: now, changeFrequency: "weekly", priority: 0.8 },
 
     { url: `${SITE_URL}/how-it-works`, lastModified: now, changeFrequency: "monthly", priority: 0.7 },
     { url: `${SITE_URL}/fees`, lastModified: now, changeFrequency: "monthly", priority: 0.7 },

@@ -1,6 +1,6 @@
 // app/api/listings/route.ts
 import { NextRequest, NextResponse } from "next/server";
-import { Client, Databases, ID, Account } from "node-appwrite";
+import { Client, Databases, ID, Account, Permission, Role } from "node-appwrite";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -11,6 +11,10 @@ export const dynamic = "force-dynamic";
 const endpoint = process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT!;
 const projectId = process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID!;
 const apiKey = process.env.APPWRITE_API_KEY!;
+
+// Optional admin access helpers (ONLY used for document permissions if you enable Row Security)
+const ADMINS_TEAM_ID = (process.env.APPWRITE_ADMINS_TEAM_ID || "").trim(); // optional
+const ADMIN_USER_ID = (process.env.APPWRITE_ADMIN_USER_ID || "").trim(); // optional
 
 // Backwards-compatible env names (your clone still uses "PLATES")
 const LISTINGS_DB_ID =
@@ -61,16 +65,54 @@ async function getAuthedUser(req: NextRequest) {
   try {
     const me: any = await account.get(); // validates JWT
     if (!me?.$id || !me?.email) return null;
-    return { id: String(me.$id), email: String(me.email), name: String(me.name || "") };
+
+    // Appwrite exposes email verification as `emailVerification` on the Account object.
+    const emailVerified = !!me?.emailVerification;
+
+    return {
+      id: String(me.$id),
+      email: String(me.email),
+      name: String(me.name || ""),
+      emailVerified,
+    };
   } catch {
     return null;
   }
 }
 
+function buildCreatePermissions(userId: string) {
+  // IMPORTANT:
+  // - This only has effect if Row Security / Document Security is enabled on the collection.
+  // - If you don't enable Row Security, Appwrite collection permissions control access.
+  const perms: string[] = [
+    Permission.read(Role.user(userId)),
+    Permission.update(Role.user(userId)),
+    Permission.delete(Role.user(userId)),
+  ];
+
+  if (ADMINS_TEAM_ID) {
+    perms.push(
+      Permission.read(Role.team(ADMINS_TEAM_ID)),
+      Permission.update(Role.team(ADMINS_TEAM_ID)),
+      Permission.delete(Role.team(ADMINS_TEAM_ID))
+    );
+  }
+
+  if (ADMIN_USER_ID) {
+    perms.push(
+      Permission.read(Role.user(ADMIN_USER_ID)),
+      Permission.update(Role.user(ADMIN_USER_ID)),
+      Permission.delete(Role.user(ADMIN_USER_ID))
+    );
+  }
+
+  return perms;
+}
+
 // -----------------------------
 // POST /api/listings
 // Requires Authorization: Bearer <Appwrite JWT>
-// Creates a NEW listing document in Appwrite
+// Creates a NEW listing document in Appwrite as pending_approval
 // Then triggers emails via /api/admin/new-listing
 // -----------------------------
 export async function POST(req: NextRequest) {
@@ -83,8 +125,24 @@ export async function POST(req: NextRequest) {
     const me = await getAuthedUser(req);
     if (!me) {
       return NextResponse.json(
-        { error: "Not authenticated. Please log in or register before selling." },
+        {
+          error:
+            "Not authenticated. Please log in or register before selling.",
+          code: "NOT_AUTHENTICATED",
+        },
         { status: 401 }
+      );
+    }
+
+    // ✅ HARD GATE: must be email verified
+    if (!me.emailVerified) {
+      return NextResponse.json(
+        {
+          error:
+            "Email not verified. Please verify your email before submitting a listing.",
+          code: "EMAIL_NOT_VERIFIED",
+        },
+        { status: 403 }
       );
     }
 
@@ -146,14 +204,24 @@ export async function POST(req: NextRequest) {
     const sellerEmail = me.email;
     const ownerId = me.id;
 
+    // If you enabled Row Security, these permissions keep pending listings private
+    const permissions = buildCreatePermissions(ownerId);
+
     const data: Record<string, any> = {
-      // Legacy-safe base
+      // Base / compatibility
       registration: displayName,
+
+      // Write both “old” and “new” naming where possible (schema tolerant)
       seller_email: sellerEmail,
+      sellerEmail: sellerEmail,
       owner_id: ownerId,
+      ownerId: ownerId,
+
       starting_price: startingPrice,
       reserve_price: reservePrice,
       buy_now: buyNow,
+
+      // ✅ Always pending until admin approves
       status: "pending_approval",
 
       // Camera fields (will work once schema exists)
@@ -181,17 +249,20 @@ export async function POST(req: NextRequest) {
         LISTINGS_DB_ID,
         LISTINGS_COLLECTION_ID,
         ID.unique(),
-        data
+        data,
+        permissions // only meaningful if Row Security is ON
       );
     } catch (err: any) {
       // If schema rejects new fields, fall back to minimal write
       const msg = String(err?.message || err);
       console.error("❌ createDocument failed, attempting minimal fallback", msg);
 
-      const minimal = {
+      const minimal: Record<string, any> = {
         registration: displayName,
         seller_email: sellerEmail,
+        sellerEmail: sellerEmail,
         owner_id: ownerId,
+        ownerId: ownerId,
         starting_price: startingPrice,
         reserve_price: reservePrice,
         buy_now: buyNow,
@@ -204,13 +275,14 @@ export async function POST(req: NextRequest) {
         LISTINGS_DB_ID,
         LISTINGS_COLLECTION_ID,
         ID.unique(),
-        minimal
+        minimal,
+        permissions
       );
     }
 
     const listingId = created?.$id;
 
-    // Trigger admin + seller emails (non-fatal)
+    // Trigger admin notification (non-fatal)
     // NOTE: your /api/admin/new-listing currently expects plateId + registration (legacy naming)
     try {
       const url = new URL("/api/admin/new-listing", req.url);
@@ -225,7 +297,7 @@ export async function POST(req: NextRequest) {
           starting_price: startingPrice,
           buy_now: buyNow,
 
-          // extras (ignored by legacy handler, but useful later)
+          // extras (ignored by legacy handler, useful later)
           item_title: itemTitle || displayName,
           gear_type: gearType || undefined,
           era: era || undefined,

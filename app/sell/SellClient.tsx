@@ -22,6 +22,7 @@ type User = {
   $id: string;
   email: string;
   name?: string;
+  emailVerification?: boolean;
 };
 
 const client = new Client()
@@ -37,6 +38,9 @@ export default function SellClient() {
   const [user, setUser] = useState<User | null>(null);
   const [loadingUser, setLoadingUser] = useState(true);
 
+  const [verifySending, setVerifySending] = useState(false);
+  const [verifyMsg, setVerifyMsg] = useState<string>("");
+
   // ✅ Require login to sell
   useEffect(() => {
     let alive = true;
@@ -45,7 +49,13 @@ export default function SellClient() {
       try {
         const me = (await account.get()) as any;
         if (!alive) return;
-        setUser({ $id: me.$id, email: me.email, name: me.name } as User);
+
+        setUser({
+          $id: String(me.$id),
+          email: String(me.email),
+          name: me.name ? String(me.name) : undefined,
+          emailVerification: !!me.emailVerification,
+        });
       } catch {
         if (!alive) return;
         setUser(null);
@@ -63,6 +73,30 @@ export default function SellClient() {
       alive = false;
     };
   }, [router]);
+
+  async function resendVerificationEmail() {
+    setVerifyMsg("");
+    setVerifySending(true);
+    try {
+      // Safe redirect target (doesn't require a special page)
+      const redirectUrl = `${window.location.origin}/`;
+      await account.createVerification(redirectUrl);
+      setVerifyMsg("✅ Verification email sent. Check your inbox (and spam).");
+    } catch (err) {
+      console.error("Failed to send verification email:", err);
+      setVerifyMsg("❌ Could not send verification email. Try again in a moment.");
+    } finally {
+      setVerifySending(false);
+    }
+  }
+
+  async function getJwtOrThrow(): Promise<string> {
+    // Appwrite Web SDK: create a JWT for server-side auth
+    const jwtRes: any = await account.createJWT();
+    const jwt = String(jwtRes?.jwt || "").trim();
+    if (!jwt) throw new Error("Missing JWT");
+    return jwt;
+  }
 
   // ✅ Helper: upcoming auction window (Monday 01:00 → Sunday 23:00)
   function getNextAuctionWindow() {
@@ -107,9 +141,17 @@ export default function SellClient() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setVerifyMsg("");
+
     if (!user?.email) {
       alert("⚠️ Please log in before submitting a listing.");
       router.push(`/login-or-register?next=${encodeURIComponent("/sell")}`);
+      return;
+    }
+
+    // ✅ HARD GATE: must be email-verified to submit listings
+    if (!user.emailVerification) {
+      alert("⚠️ Please verify your email address before submitting a listing.");
       return;
     }
 
@@ -157,8 +199,9 @@ export default function SellClient() {
     // ✅ Backwards-compatible listing ref (keeps legacy pages happy while we migrate schema)
     const legacy_listing_ref = `AMC${String(Date.now()).slice(-6)}`;
 
-    // ✅ Payload: use logged-in seller’s email (NOT a text field)
+    // ✅ Payload: server must trust auth, but keep legacy-safe fields
     const payload: Record<string, unknown> = {
+      // (Server ignores these and uses the authed user anyway, but harmless)
       sellerEmail: user.email,
       owner_id: user.$id,
 
@@ -193,16 +236,35 @@ export default function SellClient() {
     };
 
     try {
+      const jwt = await getJwtOrThrow();
+
       const res = await fetch("/api/listings", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${jwt}`,
+        },
         body: JSON.stringify(payload),
       });
 
       const data = await res.json().catch(() => ({}));
 
       if (!res.ok) {
-        alert("❌ Error: " + (data?.error || "Request failed"));
+        // Make auth/verify failures obvious
+        const msg = String(data?.error || "Request failed");
+
+        if (res.status === 401) {
+          alert("⚠️ Your session has expired. Please log in again.");
+          router.push(`/login-or-register?next=${encodeURIComponent("/sell")}`);
+          return;
+        }
+
+        if (res.status === 403) {
+          alert(msg);
+          return;
+        }
+
+        alert("❌ Error: " + msg);
         return;
       }
 
@@ -293,6 +355,35 @@ export default function SellClient() {
         <p className="mt-3 text-xs text-muted-foreground">
           Logged in as <span className="font-semibold">{user.email}</span>
         </p>
+
+        {!user.emailVerification && (
+          <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 p-4">
+            <p className="text-sm font-semibold text-amber-900">Verify your email to list items</p>
+            <p className="mt-1 text-xs text-amber-800">
+              You’re logged in, but your email isn’t verified yet. Verify it first, then come back here to submit your listing.
+            </p>
+
+            <div className="mt-3 flex flex-wrap gap-3">
+              <button
+                type="button"
+                onClick={resendVerificationEmail}
+                disabled={verifySending}
+                className="rounded-xl bg-amber-600 text-white px-4 py-2 text-sm font-semibold disabled:opacity-60"
+              >
+                {verifySending ? "Sending…" : "Resend verification email"}
+              </button>
+
+              <Link
+                href="/"
+                className="rounded-xl border border-amber-300 bg-white px-4 py-2 text-sm font-semibold text-amber-900"
+              >
+                Back to home
+              </Link>
+            </div>
+
+            {verifyMsg && <p className="mt-2 text-xs text-amber-900">{verifyMsg}</p>}
+          </div>
+        )}
       </div>
 
       <form onSubmit={handleSubmit} className="space-y-5">
@@ -412,35 +503,21 @@ export default function SellClient() {
         <div className="grid sm:grid-cols-2 gap-4">
           <div>
             <label className={labelBase}>Starting price (£)</label>
-            <input
-              name="starting_price"
-              type="number"
-              placeholder="0"
-              className={inputBase}
-              required
-              min={0}
-              step="1"
-            />
+            <input name="starting_price" type="number" placeholder="0" className={inputBase} required min={0} step="1" />
           </div>
 
           <div>
             <label className={labelBase}>Reserve price (£)</label>
-            <input
-              name="reserve_price"
-              type="number"
-              placeholder="0"
-              className={inputBase}
-              required
-              min={0}
-              step="1"
-            />
+            <input name="reserve_price" type="number" placeholder="0" className={inputBase} required min={0} step="1" />
             <p className={hintBase}>Minimum you’re happy to accept.</p>
           </div>
         </div>
 
         <button
           type="submit"
-          className="w-full rounded-xl bg-primary text-primary-foreground px-4 py-3 font-semibold hover:opacity-90 transition focus:outline-none focus:ring-2 focus:ring-ring"
+          disabled={!user.emailVerification}
+          className="w-full rounded-xl bg-primary text-primary-foreground px-4 py-3 font-semibold hover:opacity-90 transition focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-60"
+          title={!user.emailVerification ? "Verify your email to submit listings" : undefined}
         >
           Submit listing
         </button>
