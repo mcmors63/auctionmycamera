@@ -19,9 +19,9 @@ const PROD_SITE_URL = "https://auctionmycamera.co.uk";
 /**
  * Brand/SEO strings
  */
-const BRAND_NAME = "Auction My Camera";
-const BRAND_TEMPLATE = "%s | Auction My Camera";
-const BRAND_DESCRIPTION = "Buy and sell cameras through weekly auctions";
+const BRAND_NAME = "AuctionMyCamera";
+const BRAND_TEMPLATE = "%s | AuctionMyCamera";
+const BRAND_DESCRIPTION = "Buy and sell cameras, lenses and photography gear through weekly auctions.";
 
 function isProdEnv() {
   // On Vercel Preview, NODE_ENV is still "production" — so ONLY trust VERCEL_ENV when present.
@@ -61,9 +61,8 @@ const IS_PROD = isProdEnv();
 
 const GOOGLE_VERIFICATION = (process.env.GOOGLE_SITE_VERIFICATION || "").trim();
 
-// Explicit canonical with trailing slash for homepage consistency.
-// (Prevents tiny variant signals: https://site vs https://site/)
-const CANONICAL_HOME = `${SITE_URL}/`;
+// For OpenGraph “website url” it’s fine to use the site root.
+const SITE_HOME = `${SITE_URL}/`;
 
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
@@ -74,8 +73,12 @@ export const metadata: Metadata = {
   },
   description: BRAND_DESCRIPTION,
 
-  // ✅ Absolute canonical URL with trailing slash for homepage consistency
-  alternates: { canonical: CANONICAL_HOME },
+  /**
+   * ✅ IMPORTANT SEO NOTE
+   * Do NOT set a global canonical here.
+   * If any page forgets to set its own canonical, it could inherit "/" and wreck SEO.
+   * Set canonical per page via metadata.alternates.canonical instead.
+   */
 
   robots: IS_PROD
     ? { index: true, follow: true }
@@ -83,7 +86,7 @@ export const metadata: Metadata = {
 
   openGraph: {
     type: "website",
-    url: CANONICAL_HOME,
+    url: SITE_HOME,
     siteName: BRAND_NAME,
     title: BRAND_NAME,
     description: BRAND_DESCRIPTION,

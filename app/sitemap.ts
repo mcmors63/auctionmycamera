@@ -4,10 +4,10 @@ import { Client, Databases, Query } from "node-appwrite";
 
 export const runtime = "nodejs";
 
-// ✅ Make new plates appear quickly in the sitemap (and therefore discoverable faster)
+// ✅ Make new listings appear quickly in the sitemap (and therefore discoverable faster)
 export const revalidate = 300; // 5 minutes
 
-const PROD_SITE_URL = "https://auctionmyplate.co.uk";
+const PROD_SITE_URL = "https://auctionmycamera.co.uk";
 
 function isProdEnv() {
   if (process.env.VERCEL_ENV) return process.env.VERCEL_ENV === "production";
@@ -47,11 +47,16 @@ const endpoint =
 const projectId = process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID!;
 const apiKey = process.env.APPWRITE_API_KEY!;
 
-// Plates DB/collection
-const PLATES_DB_ID =
+// ✅ Listings DB/collection (supports new names, falls back to legacy "PLATES" envs)
+const LISTINGS_DB_ID =
+  process.env.APPWRITE_LISTINGS_DATABASE_ID ||
+  process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID ||
   process.env.APPWRITE_PLATES_DATABASE_ID ||
   process.env.NEXT_PUBLIC_APPWRITE_PLATES_DATABASE_ID!;
-const PLATES_COLLECTION_ID =
+
+const LISTINGS_COLLECTION_ID =
+  process.env.APPWRITE_LISTINGS_COLLECTION_ID ||
+  process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_COLLECTION_ID ||
   process.env.APPWRITE_PLATES_COLLECTION_ID ||
   process.env.NEXT_PUBLIC_APPWRITE_PLATES_COLLECTION_ID!;
 
@@ -82,7 +87,7 @@ function buildListingUrl(id: string) {
   return `${SITE_URL}${cleanPath}`;
 }
 
-async function fetchPlateUrls(): Promise<MetadataRoute.Sitemap> {
+async function fetchListingUrls(): Promise<MetadataRoute.Sitemap> {
   const client = new Client()
     .setEndpoint(endpoint)
     .setProject(projectId)
@@ -105,7 +110,7 @@ async function fetchPlateUrls(): Promise<MetadataRoute.Sitemap> {
 
     if (cursor) queries.push(Query.cursorAfter(cursor));
 
-    const page = await db.listDocuments(PLATES_DB_ID, PLATES_COLLECTION_ID, queries);
+    const page = await db.listDocuments(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, queries);
 
     for (const doc of page.documents as any[]) {
       const id = doc.$id as string;
@@ -129,28 +134,29 @@ async function fetchPlateUrls(): Promise<MetadataRoute.Sitemap> {
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const now = new Date();
 
+  // ✅ Only include routes that make sense for AuctionMyCamera
+  // (Do NOT include plate/DVLA-specific URLs)
   const staticRoutes: MetadataRoute.Sitemap = [
     { url: `${SITE_URL}/`, lastModified: now, changeFrequency: "daily", priority: 1 },
 
     { url: `${SITE_URL}/current-listings`, lastModified: now, changeFrequency: "hourly", priority: 0.9 },
-    { url: `${SITE_URL}/sell-my-plate`, lastModified: now, changeFrequency: "weekly", priority: 0.8 },
+    { url: `${SITE_URL}/sell`, lastModified: now, changeFrequency: "weekly", priority: 0.8 },
+
     { url: `${SITE_URL}/how-it-works`, lastModified: now, changeFrequency: "monthly", priority: 0.7 },
     { url: `${SITE_URL}/fees`, lastModified: now, changeFrequency: "monthly", priority: 0.7 },
     { url: `${SITE_URL}/faq`, lastModified: now, changeFrequency: "monthly", priority: 0.6 },
-    { url: `${SITE_URL}/dvla`, lastModified: now, changeFrequency: "monthly", priority: 0.6 },
     { url: `${SITE_URL}/about`, lastModified: now, changeFrequency: "monthly", priority: 0.5 },
     { url: `${SITE_URL}/contact`, lastModified: now, changeFrequency: "yearly", priority: 0.4 },
-    { url: `${SITE_URL}/blog`, lastModified: now, changeFrequency: "daily", priority: 0.6 },
 
     { url: `${SITE_URL}/terms`, lastModified: now, changeFrequency: "yearly", priority: 0.2 },
     { url: `${SITE_URL}/privacy`, lastModified: now, changeFrequency: "yearly", priority: 0.2 },
   ];
 
   try {
-    const plateRoutes = await fetchPlateUrls();
-    return [...staticRoutes, ...plateRoutes];
+    const listingRoutes = await fetchListingUrls();
+    return [...staticRoutes, ...listingRoutes];
   } catch (e) {
-    console.error("[sitemap] Failed to fetch plates from Appwrite:", e);
+    console.error("[sitemap] Failed to fetch listings from Appwrite:", e);
     return staticRoutes;
   }
 }

@@ -147,11 +147,11 @@ export default function HomePage() {
             fill
             priority
             sizes="100vw"
-            className="object-cover"
-            style={{ opacity: 0.18 }}
+            className="object-cover saturate-110 contrast-110"
+            style={{ opacity: 0.42 }}
           />
-          {/* Readability overlay */}
-          <div className="absolute inset-0 bg-gradient-to-b from-background/10 via-background/45 to-background" />
+          {/* Lighter wash so the image actually shows */}
+          <div className="absolute inset-0 bg-gradient-to-b from-background/0 via-background/18 to-background/92" />
           {/* Extra “copper” glow to match your palette */}
           <div className="absolute -top-28 -left-28 h-80 w-80 rounded-full bg-primary/12 blur-3xl" />
           <div className="absolute -top-36 right-[-10rem] h-[28rem] w-[28rem] rounded-full bg-primary/10 blur-3xl" />
@@ -366,10 +366,11 @@ export default function HomePage() {
             aria-hidden="true"
             fill
             sizes="100vw"
-            className="object-cover"
-            style={{ opacity: 0.18 }}
+            className="object-cover saturate-110 contrast-110"
+            style={{ opacity: 0.36 }}
           />
-         <div className="absolute inset-0 bg-background/60" />
+          {/* Reduce the wash so the antique cameras actually show */}
+          <div className="absolute inset-0 bg-background/32" />
         </div>
 
         <div className="relative max-w-5xl mx-auto px-6 py-16">

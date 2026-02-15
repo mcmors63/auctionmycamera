@@ -20,22 +20,22 @@ export default function AboutContent() {
         className="text-lg leading-relaxed text-gray-300 space-y-6 mb-10"
       >
         <p>
-          AuctionMyPlate was created for people who care about registrations
-          as much as they care about cars. No clutter, no confusion — just a
+          AuctionMyCamera was created for people who care about photography gear
+          as much as they care about the craft. No clutter, no confusion — just a
           clean, premium platform built specifically for buying and selling
-          cherished UK number plates.
+          cameras, lenses and kit.
         </p>
 
         <p>
-          We combine weekly auctions, modern technology and clear processes
-          so sellers know exactly what they&apos;re getting and buyers can bid
-          with confidence. Verified users, secure bidding and legally
-          compliant transfers sit at the heart of everything we do.
+          We combine weekly auctions, modern technology and clear processes so
+          sellers know exactly what they&apos;re getting and buyers can bid with
+          confidence. Verified users, secure bidding and straightforward
+          post-sale steps sit at the heart of everything we do.
         </p>
 
         <p className="font-semibold text-gold">
-          This isn&apos;t a generic marketplace. It&apos;s a dedicated home
-          for plate enthusiasts, collectors and serious sellers.
+          This isn&apos;t a generic marketplace. It&apos;s a dedicated home for
+          photographers, collectors and serious sellers.
         </p>
       </motion.div>
 
@@ -66,18 +66,18 @@ export default function AboutContent() {
         {[
           {
             step: "1",
-            title: "List Your Plate",
+            title: "List Your Gear",
             desc: "Enter your details, set your reserve and submit. Approval is fast, simple and verified.",
           },
           {
             step: "2",
             title: "Auction Goes Live",
-            desc: "Your plate enters a timed auction, creating real competition between genuine bidders.",
+            desc: "Your item enters a timed weekly auction, creating real competition between genuine bidders.",
           },
           {
             step: "3",
             title: "Secure Handover",
-            desc: "Once sold, we guide both parties through a safe, legal DVLA-compliant transfer.",
+            desc: "Once sold, we guide both parties through secure payment and clear collection/delivery steps.",
           },
         ].map((item, i) => (
           <motion.div
@@ -108,7 +108,7 @@ export default function AboutContent() {
           {
             icon: <StarIcon className="w-12 h-12 text-gold mx-auto" />,
             title: "Premium Experience",
-            desc: "A modern, focused platform that treats cherished plates like the luxury assets they are.",
+            desc: "A modern, focused platform that treats photography gear like the valuable equipment it is.",
           },
           {
             icon: <ShieldCheckIcon className="w-12 h-12 text-gold mx-auto" />,
@@ -120,7 +120,7 @@ export default function AboutContent() {
               <ArrowTrendingUpIcon className="w-12 h-12 text-gold mx-auto" />
             ),
             title: "Real Value",
-            desc: "Sensibly structured bidding designed for fair prices, strong returns and long-term value.",
+            desc: "Sensibly structured bidding designed for fair prices, strong returns and confident buyers.",
           },
         ].map((item, i) => (
           <motion.div
@@ -147,16 +147,16 @@ export default function AboutContent() {
       <div className="space-y-8 mb-20">
         {[
           {
-            year: "2023",
-            text: "The idea: build a dedicated platform for UK plates that feels premium, fair and easy to use.",
-          },
-          {
-            year: "2024",
-            text: "Development: shaping weekly auctions, seller tools and a smooth DVLA transfer journey.",
-          },
-          {
             year: "2025",
-            text: "Launch: AuctionMyPlate opens to sellers and buyers across the UK.",
+            text: "The idea: build a dedicated platform for camera gear that feels premium, fair and easy to use.",
+          },
+          {
+            year: "2026",
+            text: "Development: shaping weekly auctions, seller tools and a smooth post-sale handover journey.",
+          },
+          {
+            year: "Today",
+            text: "Growth: bringing photographers, collectors and enthusiasts into one focused marketplace.",
           },
         ].map((item, i) => (
           <motion.div
@@ -182,12 +182,12 @@ export default function AboutContent() {
       <div className="grid md:grid-cols-2 gap-10 mb-20">
         {[
           {
-            text: "Listed my plate once, sold in the first auction. Straightforward, clear and fully managed.",
+            text: "Listed my lens once, sold in the first auction. Straightforward, clear and properly managed.",
             name: "James T – Private Seller",
           },
           {
-            text: "Exactly what the plate market needed — structured auctions instead of confusing classified ads.",
-            name: "Sarah L – Collector",
+            text: "Exactly what the gear market needed — structured auctions instead of endless messages and time-wasters.",
+            name: "Sarah L – Photographer",
           },
         ].map((t, i) => (
           <motion.div
@@ -209,28 +209,27 @@ export default function AboutContent() {
           A Message from the Founder
         </h2>
         <p className="text-gray-300 mb-4 leading-relaxed">
-          “The number plate world is full of potential, but for years it&apos;s
-          been dominated by clunky websites, hidden fees and unclear processes.
-          AuctionMyPlate was built to fix that — a focused, trustworthy space
-          where people can treat registrations like the premium assets they are,
+          “The camera gear world is full of potential, but for years it&apos;s
+          been dominated by clunky listings, time-wasters and unclear processes.
+          AuctionMyCamera was built to fix that — a focused, trustworthy space
+          where people can sell equipment properly, with structure and clarity,
           without the stress and guesswork.”
         </p>
-        <p className="font-semibold text-gold">— AuctionMyPlate Team</p>
+        <p className="font-semibold text-gold">— AuctionMyCamera Team</p>
       </div>
 
-      {/* DVLA DISCLAIMER (ABOUT PAGE VERSION) */}
+      {/* BRAND / TRADEMARK DISCLAIMER (ABOUT PAGE VERSION) */}
       <div className="bg-black/60 border border-gold/30 rounded-xl p-5 text-xs text-gray-400">
         <p className="mb-1">
-          <strong className="text-gold">Important:</strong> AuctionMyPlate.co.uk
-          is an independent marketplace and is not affiliated, associated,
-          authorised, endorsed by, or in any way officially connected with the
-          Driver and Vehicle Licensing Agency (DVLA) or any other UK government
-          organisation.
+          <strong className="text-gold">Important:</strong> AuctionMyCamera is an
+          independent marketplace and is not affiliated with, associated with,
+          authorised, endorsed by, or in any way officially connected with any
+          camera manufacturer or brand.
         </p>
         <p>
-          Any references to DVLA processes are provided for general guidance
-          only. Always refer to official government sources for the latest legal
-          requirements.
+          Any brand names are used only to describe items listed by sellers.
+          Buyers should check listing descriptions carefully and ask questions
+          before bidding.
         </p>
       </div>
     </section>
