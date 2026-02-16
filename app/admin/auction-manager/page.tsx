@@ -1,7 +1,10 @@
 // app/admin/auction-manager/page.tsx
 
-export const metadata = {
-  title: "Auction Manager | Admin | AuctionMyPlate",
+import type { Metadata } from "next";
+
+export const metadata: Metadata = {
+  title: "Auction Manager | Admin | AuctionMyCamera",
+  robots: { index: false, follow: false },
 };
 
 export default function AdminAuctionManagerPage() {
@@ -14,7 +17,7 @@ export default function AdminAuctionManagerPage() {
 
         <p className="text-gray-700">
           This section will be used to manage weekly auction windows and
-          system-level auction settings.
+          system-level auction settings for camera and photography gear listings.
         </p>
 
         <p className="mt-2 text-sm text-gray-500">
