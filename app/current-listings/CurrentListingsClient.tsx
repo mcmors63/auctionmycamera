@@ -5,9 +5,39 @@ import Link from "next/link";
 import { useMemo, useState } from "react";
 import ListingCard from "./ListingCard";
 
+type ListingLike = {
+  $id: string;
+  $createdAt?: string;
+
+  // camera fields
+  item_title?: string | null;
+  brand?: string | null;
+  model?: string | null;
+  gear_type?: string | null;
+  era?: string | null;
+  condition?: string | null;
+  lens_mount?: string | null;
+  focal_length?: string | null;
+  max_aperture?: string | null;
+  description?: string | null;
+
+  // legacy fallback
+  registration?: string | null;
+  reg_number?: string | null;
+
+  // auction/pricing
+  auction_start?: string | null;
+  auction_end?: string | null;
+  start_time?: string | null;
+  end_time?: string | null;
+
+  current_bid?: number | null;
+  starting_price?: number | null;
+};
+
 type Props = {
-  initialLive: any[];
-  initialSoon: any[];
+  initialLive: ListingLike[];
+  initialSoon: ListingLike[];
 };
 
 type Tab = "live" | "soon";
@@ -15,8 +45,64 @@ type Tab = "live" | "soon";
 const ACCENT = "#d6b45f";
 const BG = "#0b0c10";
 
-function normalizeReg(input: string) {
-  return (input || "").toLowerCase().replace(/\s+/g, "");
+function normalizeText(input: string) {
+  return (input || "").toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+function getListingTitle(l: ListingLike) {
+  const itemTitle = String(l?.item_title || "").trim();
+  if (itemTitle) return itemTitle;
+
+  const brand = String(l?.brand || "").trim();
+  const model = String(l?.model || "").trim();
+  const bm = [brand, model].filter(Boolean).join(" ");
+  if (bm) return bm;
+
+  const legacy = String(l?.registration || l?.reg_number || "").trim();
+  if (legacy) return legacy;
+
+  const gearType = String(l?.gear_type || "").trim();
+  if (gearType) return gearType;
+
+  return "Camera gear listing";
+}
+
+function getSearchHaystack(l: ListingLike) {
+  const parts = [
+    getListingTitle(l),
+    String(l?.brand || ""),
+    String(l?.model || ""),
+    String(l?.gear_type || ""),
+    String(l?.era || ""),
+    String(l?.condition || ""),
+    String(l?.lens_mount || ""),
+    String(l?.focal_length || ""),
+    String(l?.max_aperture || ""),
+    String(l?.description || ""),
+    String(l?.registration || l?.reg_number || ""),
+  ];
+  return normalizeText(parts.filter(Boolean).join(" "));
+}
+
+function priceForSort(l: ListingLike) {
+  const bid = typeof l.current_bid === "number" ? l.current_bid : null;
+  const start = typeof l.starting_price === "number" ? l.starting_price : null;
+
+  if (bid != null && Number.isFinite(bid) && bid > 0) return bid;
+  if (start != null && Number.isFinite(start) && start > 0) return start;
+  return 0;
+}
+
+function timeForEndingSort(l: ListingLike, tab: Tab) {
+  // Live: sort by auction end
+  if (tab === "live") {
+    return Date.parse(
+      l.auction_end ?? l.end_time ?? l.auction_start ?? l.start_time ?? l.$createdAt ?? ""
+    );
+  }
+
+  // Coming next: sort by auction start (more sensible)
+  return Date.parse(l.auction_start ?? l.start_time ?? l.auction_end ?? l.end_time ?? l.$createdAt ?? "");
 }
 
 export default function CurrentListingsClient({ initialLive, initialSoon }: Props) {
@@ -34,19 +120,15 @@ export default function CurrentListingsClient({ initialLive, initialSoon }: Prop
   const filtered = useMemo(() => {
     let results = [...(source || [])].filter((l) => l && typeof l === "object" && l.$id);
 
-    const q = normalizeReg(search.trim());
+    const q = normalizeText(search);
     if (q) {
-      results = results.filter((l) => normalizeReg(l.registration || "").includes(q));
+      results = results.filter((l) => getSearchHaystack(l).includes(q));
     }
 
     if (sort === "ending") {
       results.sort((a, b) => {
-        const aTime = Date.parse(
-          a.auction_end ?? a.end_time ?? a.auction_start ?? a.start_time ?? a.$createdAt
-        );
-        const bTime = Date.parse(
-          b.auction_end ?? b.end_time ?? b.auction_start ?? b.start_time ?? b.$createdAt
-        );
+        const aTime = timeForEndingSort(a, tab);
+        const bTime = timeForEndingSort(b, tab);
         return (Number.isFinite(aTime) ? aTime : 0) - (Number.isFinite(bTime) ? bTime : 0);
       });
     }
@@ -56,19 +138,19 @@ export default function CurrentListingsClient({ initialLive, initialSoon }: Prop
     }
 
     if (sort === "az") {
-      results.sort((a, b) => (a.registration || "").localeCompare(b.registration || ""));
+      results.sort((a, b) => getListingTitle(a).localeCompare(getListingTitle(b)));
     }
 
     if (sort === "priceLow") {
-      results.sort((a, b) => (a.current_bid || 0) - (b.current_bid || 0));
+      results.sort((a, b) => priceForSort(a) - priceForSort(b));
     }
 
     if (sort === "priceHigh") {
-      results.sort((a, b) => (b.current_bid || 0) - (a.current_bid || 0));
+      results.sort((a, b) => priceForSort(b) - priceForSort(a));
     }
 
     return results;
-  }, [source, search, sort]);
+  }, [source, search, sort, tab]);
 
   const counts = {
     live: (initialLive || []).filter((l) => l && l.$id).length,
@@ -80,16 +162,16 @@ export default function CurrentListingsClient({ initialLive, initialSoon }: Prop
   const emptyTitle =
     baseCount === 0
       ? tab === "live"
-        ? "No live auctions right now."
-        : "No plates queued for the next auction yet."
+        ? "No live camera gear auctions right now."
+        : "No camera gear queued for the next auction yet."
       : "No listings match your filters.";
 
   const emptyBody =
     baseCount === 0
       ? tab === "live"
-        ? "Check back soon — new plates are added regularly. You can also browse what’s coming next."
+        ? "Check back soon — new cameras, lenses and accessories are added regularly. You can also browse what’s coming next."
         : "Try the Live tab, or come back later once new listings are approved and queued."
-      : "Try a different registration search, reset filters, or switch tabs.";
+      : "Try a different search, clear filters, or switch tabs.";
 
   return (
     <main className="min-h-screen" style={{ backgroundColor: BG, color: "#e8e8e8" }}>
@@ -101,11 +183,10 @@ export default function CurrentListingsClient({ initialLive, initialSoon }: Prop
           </h1>
 
           <p className="mt-2 text-sm sm:text-base text-white/70 max-w-2xl">
-            Browse live auctions and upcoming queued plates. Unsold plates can optionally be auto-relisted
-            for free until sold.
+            Browse live camera, lens and photography gear auctions — plus what’s coming next.
           </p>
 
-          {/* Helpful internal links (good for users + crawl paths) */}
+          {/* Helpful internal links */}
           <div className="mt-3 flex flex-wrap gap-x-4 gap-y-2 text-sm text-white/70">
             <span className="text-white/50">New here?</span>
             <Link href="/how-it-works" className="text-amber-200 hover:text-amber-100 underline">
@@ -114,8 +195,8 @@ export default function CurrentListingsClient({ initialLive, initialSoon }: Prop
             <Link href="/fees" className="text-amber-200 hover:text-amber-100 underline">
               Fees
             </Link>
-            <Link href="/sell-my-plate" className="text-amber-200 hover:text-amber-100 underline">
-              Sell your plate
+            <Link href="/sell" className="text-amber-200 hover:text-amber-100 underline">
+              Sell your gear
             </Link>
           </div>
 
@@ -140,11 +221,11 @@ export default function CurrentListingsClient({ initialLive, initialSoon }: Prop
             <div className="grid md:grid-cols-3 gap-4">
               <div className="md:col-span-2">
                 <label className="block text-[11px] font-semibold tracking-wide text-white/60 uppercase mb-2">
-                  Search by registration
+                  Search by title / brand / model
                 </label>
                 <input
                   type="text"
-                  placeholder="e.g. AB12 CDE"
+                  placeholder='e.g. "Canon 5D", "Leica M6", "EF 24-70", "tripod"'
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                   className="w-full px-4 py-2.5 rounded-xl bg-black/40 border text-sm text-white placeholder-white/40 focus:outline-none"
@@ -162,9 +243,9 @@ export default function CurrentListingsClient({ initialLive, initialSoon }: Prop
                   className="w-full px-4 py-2.5 rounded-xl bg-black/40 border text-sm text-white focus:outline-none"
                   style={{ borderColor: "rgba(255,255,255,0.14)" }}
                 >
-                  <option value="ending">Ending soon</option>
+                  <option value="ending">{tab === "live" ? "Ending soon" : "Starting soon"}</option>
                   <option value="newest">Newest</option>
-                  <option value="az">Registration A → Z</option>
+                  <option value="az">Title A → Z</option>
                   <option value="priceLow">Price (Low → High)</option>
                   <option value="priceHigh">Price (High → Low)</option>
                 </select>
@@ -195,7 +276,7 @@ export default function CurrentListingsClient({ initialLive, initialSoon }: Prop
               ) : null}
             </div>
 
-            {/* Policy notice */}
+            {/* Notice */}
             <div
               className="mt-4 rounded-2xl border px-4 py-3"
               style={{
@@ -204,13 +285,10 @@ export default function CurrentListingsClient({ initialLive, initialSoon }: Prop
               }}
             >
               <p className="text-[12px] text-white/70 leading-relaxed">
-                DVLA transfer handling:{" "}
-                <span style={{ color: ACCENT, fontWeight: 700 }}>most listings have no extra buyer DVLA fee</span>{" "}
-                — the £80 paperwork cost is covered seller-side.{" "}
-                <span style={{ color: ACCENT, fontWeight: 700 }}>Only two legacy listings</span> still add an extra £80
-                to the winning bid at checkout (these are clearly labelled).{" "}
-                <Link href="/fees" className="text-amber-200 hover:text-amber-100 underline">
-                  See fees
+                Condition matters: sellers should describe cosmetic wear, faults, fungus/haze, shutter count (if known), and
+                what’s included. Buyers should review the description carefully before bidding.{" "}
+                <Link href="/faq" className="text-amber-200 hover:text-amber-100 underline">
+                  Read FAQ
                 </Link>
                 .
               </p>
@@ -245,11 +323,11 @@ export default function CurrentListingsClient({ initialLive, initialSoon }: Prop
                 Refresh listings
               </Link>
               <Link
-                href="/sell-my-plate"
+                href="/sell"
                 className="px-5 py-2.5 rounded-xl text-sm font-semibold transition"
                 style={{ backgroundColor: ACCENT, color: "#0b0c10" }}
               >
-                Sell a plate
+                Sell camera gear
               </Link>
               <Link
                 href="/how-it-works"
@@ -267,7 +345,7 @@ export default function CurrentListingsClient({ initialLive, initialSoon }: Prop
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
             {filtered.map((listing) => (
-              <ListingCard key={listing.$id} listing={listing} />
+              <ListingCard key={listing.$id} listing={listing as any} />
             ))}
           </div>
         )}

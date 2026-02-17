@@ -5,7 +5,7 @@ import RegisterClient from "./RegisterClient";
 export const metadata: Metadata = {
   title: "Create account | AuctionMyCamera",
   description: "Create an account to bid and sell camera gear in weekly auctions.",
-  robots: { index: false, follow: true },
+  robots: { index: false, follow: false },
 };
 
 export default function RegisterPage() {

@@ -3,18 +3,36 @@
 
 import Link from "next/link";
 import AuctionTimer from "./AuctionTimer";
-import NumberPlate from "@/components/ui/NumberPlate";
 
 type Listing = {
   $id: string;
   $createdAt?: string;
-  listing_id?: string;
-  registration?: string;
+
   status?: string;
+
+  item_title?: string | null;
+  brand?: string | null;
+  model?: string | null;
+  gear_type?: string | null; // camera | lens | accessory | film | ...
+  era?: string | null; // modern | vintage | antique
+  condition?: string | null; // new | like_new | excellent | good | fair | parts
+  description?: string | null;
+
+  image_url?: string | null;
+
+  shutter_count?: number | null;
+  lens_mount?: string | null;
+  focal_length?: string | null;
+  max_aperture?: string | null;
+
   current_bid?: number | null;
+  starting_price?: number | null; // ✅ add this so we can show “Starting price” when no bids
   bids?: number | null;
   reserve_price?: number | null;
+  reserve_met?: boolean | null;
+
   buy_now?: number | null;
+  buy_now_price?: number | null;
 
   auction_start?: string | null;
   auction_end?: string | null;
@@ -23,12 +41,13 @@ type Listing = {
 
   sold_price?: number | null;
   sale_status?: string | null;
+  sold_via?: "auction" | "buy_now" | null;
 
-  // Optional / future-proof fee flags (schema tolerant)
-  // Any of these (if present) will override the default.
-  transferFeeMode?: "buyer" | "seller" | string | null;
-  buyerPaysTransferFee?: boolean | null;
-  dvlaFeePaidBy?: "buyer" | "seller" | string | null;
+  listing_id?: string | null;
+
+  // legacy fallbacks if any old docs still exist
+  registration?: string | null;
+  reg_number?: string | null;
 };
 
 type Props = {
@@ -37,69 +56,88 @@ type Props = {
 
 const ACCENT = "#d6b45f";
 
-/**
- * IMPORTANT:
- * These are the TWO legacy listings that must remain "buyer pays £80".
- * These are Appwrite document IDs (the listing $id values).
- */
-const LEGACY_BUYER_PAYS_IDS = new Set<string>([
-  "696ea3d0001a45280a16",
-  "697bccfd001325add473",
-]);
+function cap(s: string) {
+  if (!s) return s;
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
 
-function normalizeParty(v: unknown): "buyer" | "seller" | null {
-  if (typeof v === "string") {
-    const s = v.trim().toLowerCase();
-    if (s === "buyer") return "buyer";
-    if (s === "seller") return "seller";
-  }
+function niceEnum(s?: string | null) {
+  const v = String(s || "").trim();
+  if (!v) return "";
+  return cap(v.replace(/_/g, " "));
+}
+
+function getTitle(l: Listing) {
+  const itemTitle = String(l.item_title || "").trim();
+  if (itemTitle) return itemTitle;
+
+  const brand = String(l.brand || "").trim();
+  const model = String(l.model || "").trim();
+  const bm = [brand, model].filter(Boolean).join(" ");
+  if (bm) return bm;
+
+  const legacy = String(l.registration || l.reg_number || "").trim();
+  if (legacy) return legacy;
+
+  const gear = String(l.gear_type || "").trim();
+  if (gear) return `${niceEnum(gear)} listing`;
+
+  return "Camera gear listing";
+}
+
+function getMetaLine(l: Listing) {
+  const bits = [
+    l.gear_type ? niceEnum(l.gear_type) : "",
+    l.condition ? niceEnum(l.condition) : "",
+    l.era ? niceEnum(l.era) : "",
+  ].filter(Boolean);
+  return bits.join(" • ");
+}
+
+function pickBuyNow(l: Listing): number | null {
+  // ✅ only accept sensible BIN values (>0)
+  if (typeof l.buy_now_price === "number" && l.buy_now_price > 0) return l.buy_now_price;
+  if (typeof l.buy_now === "number" && l.buy_now > 0) return l.buy_now;
   return null;
 }
 
-function computeBuyerPaysTransferFee(listing: Listing): boolean {
-  // 1) Hard grandfather: the two legacy IDs
-  if (LEGACY_BUYER_PAYS_IDS.has(listing.$id)) return true;
+function pickFallbackImage(l: Listing) {
+  const gear = String(l.gear_type || "").toLowerCase();
+  const era = String(l.era || "").toLowerCase();
 
-  // 2) If you already store a mode/flag on the listing, respect it (schema tolerant)
-  if (typeof listing.buyerPaysTransferFee === "boolean")
-    return listing.buyerPaysTransferFee;
-
-  const m1 = normalizeParty(listing.transferFeeMode);
-  if (m1) return m1 === "buyer";
-
-  const m2 = normalizeParty(listing.dvlaFeePaidBy);
-  if (m2) return m2 === "buyer";
-
-  // 3) Default going forward: buyer does NOT pay extra (fee baked into seller calc)
-  return false;
+  // You said these exist in /public/hero
+  if (era === "antique" || era === "vintage") return "/hero/antique-cameras.jpg";
+  if (gear === "lens") return "/hero/modern-lens.jpg";
+  return "/hero/modern-lens.jpg";
 }
 
 export default function ListingCard({ listing }: Props) {
   const {
     $id,
     $createdAt,
-    listing_id,
-    registration,
     status,
     current_bid,
+    starting_price,
     bids,
     reserve_price,
-    buy_now,
+    reserve_met,
     auction_start,
     auction_end,
     start_time,
     end_time,
     sold_price,
     sale_status,
+    listing_id,
+    shutter_count,
+    lens_mount,
+    focal_length,
+    max_aperture,
   } = listing;
 
   const listingUrl = `/listing/${$id}`;
 
-  // -----------------------------
-  // Status flags
-  // -----------------------------
-  const lowerStatus = (status || "").toLowerCase();
-  const saleStatusLower = (sale_status || "").toLowerCase();
+  const lowerStatus = String(status || "").toLowerCase();
+  const saleStatusLower = String(sale_status || "").toLowerCase();
 
   const isLiveStatus = lowerStatus === "live";
   const isQueuedStatus = lowerStatus === "queued";
@@ -109,17 +147,15 @@ export default function ListingCard({ listing }: Props) {
     saleStatusLower === "sold" ||
     (typeof sold_price === "number" && sold_price > 0);
 
-  // Work out if auction end time is in the past
   const rawEnd = auction_end ?? end_time ?? null;
+  const rawStart = auction_start ?? start_time ?? null;
+
   let auctionEnded = false;
   if (rawEnd) {
     const endMs = Date.parse(rawEnd);
-    if (Number.isFinite(endMs)) {
-      auctionEnded = endMs <= Date.now();
-    }
+    if (Number.isFinite(endMs)) auctionEnded = endMs <= Date.now();
   }
 
-  // Treat something as "live" on the card ONLY if status is live AND it hasn't ended
   const isLive = isLiveStatus && !auctionEnded && !isSold;
   const isQueued = isQueuedStatus && !auctionEnded && !isSold;
 
@@ -131,47 +167,56 @@ export default function ListingCard({ listing }: Props) {
     ? "AUCTION ENDS IN"
     : "AUCTION STARTS IN";
 
-  // -----------------------------
-  // "NEW" badge logic (no interval)
-  // -----------------------------
+  // NEW badge (24h)
   const createdMs = $createdAt ? Date.parse($createdAt) : NaN;
-  const isNew =
-    Number.isFinite(createdMs) && Date.now() - createdMs < 24 * 60 * 60 * 1000;
+  const isNew = Number.isFinite(createdMs) && Date.now() - createdMs < 24 * 60 * 60 * 1000;
   const showNewBadge = isNew && !isSold && !auctionEnded;
 
-  // -----------------------------
-  // Reserve status
-  // -----------------------------
-  const numericCurrentBid = current_bid ?? 0;
-  const hasReserve = typeof reserve_price === "number" && reserve_price > 0;
-  const reserveMet = hasReserve && numericCurrentBid >= (reserve_price as number);
+  const numericCurrentBid = typeof current_bid === "number" ? current_bid : 0;
+  const hasBid = typeof current_bid === "number";
 
-  // -----------------------------
-  // Buy Now visibility
-  // -----------------------------
+  const startPrice = typeof starting_price === "number" && starting_price > 0 ? starting_price : null;
+
+  // ✅ If no bids yet, show starting price (if present)
+  const priceToShow = !isSold && !hasBid && startPrice ? startPrice : numericCurrentBid;
+  const priceSubLabel = !isSold && !hasBid && startPrice ? "Starting price" : null;
+
+  const hasReserve = typeof reserve_price === "number" && reserve_price > 0;
+  const reserveMet =
+    typeof reserve_met === "boolean"
+      ? reserve_met
+      : hasReserve
+      ? numericCurrentBid >= (reserve_price as number)
+      : false;
+
+  const buyNow = pickBuyNow(listing);
   const hasBuyNow =
     !isSold &&
     !auctionEnded &&
     isLive &&
-    typeof buy_now === "number" &&
-    buy_now > 0 &&
-    numericCurrentBid < buy_now;
+    typeof buyNow === "number" &&
+    buyNow > 0 &&
+    numericCurrentBid < buyNow;
 
-  // Can user still bid from this card?
   const canBid = isLive && !isSold && !auctionEnded;
 
-  const displayId = listing_id || `AMP-${$id.slice(-6).toUpperCase()}`;
+  const title = getTitle(listing);
+  const metaLine = getMetaLine(listing);
 
-  // -----------------------------
-  // DVLA fee messaging (legacy vs new default)
-  // -----------------------------
-  const buyerPaysTransferFee = computeBuyerPaysTransferFee(listing);
+  const displayId = listing_id || `AMC-${$id.slice(-6).toUpperCase()}`;
 
-  const dvlaNote = isSold
-    ? null
-    : buyerPaysTransferFee
-    ? "Winner pays an additional £80 DVLA paperwork fee for transfer handling (legacy listing)."
-    : "£80 DVLA paperwork fee is built into the seller-side calculation (no extra buyer charge).";
+  const imageSrc = String(listing.image_url || "").trim() || pickFallbackImage(listing);
+
+  // Optional extra line (camera/lens specifics)
+  const gear = String(listing.gear_type || "").toLowerCase();
+  const extraLine =
+    gear === "camera" && typeof shutter_count === "number" && shutter_count >= 0
+      ? `Shutter count: ${shutter_count.toLocaleString("en-GB")}`
+      : gear === "lens"
+      ? [lens_mount ? `Mount: ${lens_mount}` : "", focal_length || "", max_aperture || ""]
+          .filter(Boolean)
+          .join(" • ")
+      : "";
 
   return (
     <div
@@ -185,27 +230,20 @@ export default function ListingCard({ listing }: Props) {
       {/* Header */}
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-[10px] uppercase tracking-[0.22em] text-white/45">
-            Listing
-          </p>
-          <p className="mt-1 font-semibold text-sm text-white truncate">
-            {displayId}
-          </p>
+          <p className="text-[10px] uppercase tracking-[0.22em] text-white/45">Listing</p>
+          <p className="mt-1 font-semibold text-sm text-white truncate">{displayId}</p>
         </div>
 
-        <div className="text-right">
-          <p className="text-[10px] uppercase tracking-[0.22em] text-white/45">
-            Registration
-          </p>
-
-          {/* ✅ Make the reg a clean internal link to the listing page */}
+        <div className="text-right min-w-0">
+          <p className="text-[10px] uppercase tracking-[0.22em] text-white/45">Item</p>
           <Link
             href={listingUrl}
-            className="mt-1 inline-block font-extrabold text-lg tracking-wide text-white hover:underline"
-            aria-label={`View listing for ${registration || "registration"}`}
+            className="mt-1 inline-block font-extrabold text-sm sm:text-base text-white hover:underline truncate max-w-[220px]"
+            title={title}
           >
-            {registration || "—"}
+            {title}
           </Link>
+          {metaLine ? <p className="mt-1 text-[11px] text-white/55">{metaLine}</p> : null}
         </div>
       </div>
 
@@ -218,36 +256,31 @@ export default function ListingCard({ listing }: Props) {
         {showNewBadge && <Badge text="NEW" tone="success" />}
       </div>
 
-      {/* Plates */}
+      {/* Image */}
       <div
-        className="mt-4 rounded-2xl border p-4"
+        className="mt-4 rounded-2xl border overflow-hidden"
         style={{
           borderColor: "rgba(255,255,255,0.10)",
           backgroundColor: "rgba(0,0,0,0.25)",
         }}
       >
-        <div className="grid grid-cols-1 gap-3">
-          <div className="flex flex-col items-center gap-1">
-            <p className="text-[10px] text-white/55 uppercase tracking-wide">
-              Front
-            </p>
-            <NumberPlate reg={registration || ""} variant="front" size="card" showBlueBand />
-          </div>
-          <div className="flex flex-col items-center gap-1">
-            <p className="text-[10px] text-white/55 uppercase tracking-wide">
-              Rear
-            </p>
-            <NumberPlate reg={registration || ""} variant="rear" size="card" showBlueBand />
-          </div>
-        </div>
+        {/* Use <img> so remote image_url never needs next/image config */}
+        <img
+          src={imageSrc}
+          alt={title}
+          className="w-full h-[180px] object-cover block"
+          loading="lazy"
+          decoding="async"
+        />
       </div>
+
+      {extraLine ? <p className="mt-2 text-[11px] text-white/55">{extraLine}</p> : null}
 
       {/* Timer + price */}
       <div className="mt-4 flex flex-col gap-3">
         <div>
-          <p className="text-[10px] uppercase tracking-[0.22em] text-white/45 mb-2">
-            {timerLabel}
-          </p>
+          <p className="text-[10px] uppercase tracking-[0.22em] text-white/45 mb-2">{timerLabel}</p>
+
           <div
             className="inline-block rounded-xl border px-3 py-2"
             style={{
@@ -263,45 +296,42 @@ export default function ListingCard({ listing }: Props) {
               <span className="text-xs font-semibold" style={{ color: "rgba(255,255,255,0.75)" }}>
                 Auction ended
               </span>
-            ) : isLive || isQueued ? (
-              <AuctionTimer
-                mode={isLive ? "live" : "coming"}
-                endTime={isLive ? rawEnd ?? undefined : auction_start ?? start_time ?? undefined}
-              />
+            ) : isLive ? (
+              <AuctionTimer mode="live" endTime={rawEnd ?? undefined} />
             ) : (
-              <span className="text-xs" style={{ color: "rgba(255,255,255,0.70)" }}>
-                No active auction
-              </span>
+              <AuctionTimer mode="coming" endTime={rawStart ?? undefined} />
             )}
           </div>
         </div>
 
         <div className="flex items-end justify-between gap-3">
           <div>
-            <p className="text-[10px] uppercase tracking-[0.22em] text-white/45">
-              Current bid
-            </p>
+            <p className="text-[10px] uppercase tracking-[0.22em] text-white/45">Current bid</p>
+
             {isSold ? (
               <p className="mt-1 text-sm font-semibold text-white/70">Sold</p>
             ) : (
-              <p className="mt-1 text-lg font-extrabold" style={{ color: ACCENT }}>
-                £{numericCurrentBid.toLocaleString("en-GB")}
-              </p>
+              <>
+                <p className="mt-1 text-lg font-extrabold" style={{ color: ACCENT }}>
+                  £{priceToShow.toLocaleString("en-GB")}
+                </p>
+                {priceSubLabel ? <p className="mt-1 text-[11px] text-white/55">{priceSubLabel}</p> : null}
+              </>
             )}
 
-            {reserveMet && !isSold && (
-              <p className="mt-1 text-[11px] font-semibold text-emerald-300">
-                Reserve met
-              </p>
-            )}
+            {hasReserve && !isSold ? (
+              reserveMet ? (
+                <p className="mt-1 text-[11px] font-semibold text-emerald-300">Reserve met</p>
+              ) : (
+                <p className="mt-1 text-[11px] font-semibold text-white/55">Reserve not met</p>
+              )
+            ) : null}
 
             {hasBuyNow && (
               <p className="mt-1 text-[11px] font-semibold text-emerald-300">
-                Buy now: £{buy_now!.toLocaleString("en-GB")}
+                Buy now: £{buyNow!.toLocaleString("en-GB")}
               </p>
             )}
-
-            {dvlaNote && <p className="mt-2 text-[11px] text-white/55">{dvlaNote}</p>}
           </div>
 
           <div className="text-right">
@@ -315,12 +345,10 @@ export default function ListingCard({ listing }: Props) {
       <div className="mt-4 flex justify-between items-center">
         {canBid ? (
           <>
-            {/* ✅ View goes to the real listing page */}
             <Link href={listingUrl} className="text-sm underline text-white/75">
               View listing
             </Link>
 
-            {/* ✅ Bid still goes to place bid */}
             <Link
               href={`/place_bid?id=${$id}`}
               className="px-4 py-2 rounded-xl font-bold text-sm shadow-lg transition"

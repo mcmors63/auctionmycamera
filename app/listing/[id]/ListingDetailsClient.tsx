@@ -2,10 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import Image from "next/image";
 import { Client, Databases } from "appwrite";
 import AuctionTimer from "../../current-listings/AuctionTimer";
-import NumberPlate from "@/components/ui/NumberPlate";
 
 // -----------------------------
 // Appwrite client (browser)
@@ -16,85 +14,147 @@ const client = new Client()
 
 const databases = new Databases(client);
 
-const DATABASE_ID = process.env.NEXT_PUBLIC_APPWRITE_PLATES_DATABASE_ID!;
-const LISTINGS_COLLECTION_ID = process.env.NEXT_PUBLIC_APPWRITE_PLATES_COLLECTION_ID!;
+// Client-side envs must be NEXT_PUBLIC_*
+const DATABASE_ID =
+  process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID ||
+  process.env.NEXT_PUBLIC_APPWRITE_PLATES_DATABASE_ID!;
+
+const LISTINGS_COLLECTION_ID =
+  process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_COLLECTION_ID ||
+  process.env.NEXT_PUBLIC_APPWRITE_PLATES_COLLECTION_ID!;
 
 // -----------------------------
 // Types
 // -----------------------------
 export type Listing = {
   $id: string;
-  registration?: string;
-  listing_id?: string;
-  description?: string;
-  image_url?: string;
-  status?: string;
-  auction_start?: string | null;
-  auction_end?: string | null;
+  $createdAt?: string;
 
-  // NOTE: your admin UI uses buy_now, this page uses buy_now_price.
-  // We support both to avoid "missing" BIN in UI/SEO.
-  buy_now_price?: number | null;
-  buy_now?: number | null;
+  status?: string;
+
+  item_title?: string | null;
+  brand?: string | null;
+  model?: string | null;
+  gear_type?: string | null;
+  era?: string | null;
+  condition?: string | null;
+  description?: string | null;
+
+  image_url?: string | null;
+
+  shutter_count?: number | null;
+  lens_mount?: string | null;
+  focal_length?: string | null;
+  max_aperture?: string | null;
 
   current_bid?: number | null;
   starting_price?: number | null;
   reserve_price?: number | null;
-  reserve_met?: boolean;
-  plate_type?: string;
-  certificate?: boolean;
-  expiry_date?: string | null;
+  reserve_met?: boolean | null;
   bids?: number | string | null;
+
+  buy_now_price?: number | null;
+  buy_now?: number | null;
+
+  auction_start?: string | null;
+  auction_end?: string | null;
+  start_time?: string | null;
+  end_time?: string | null;
+
   sold_via?: "auction" | "buy_now" | null;
-  interesting_fact?: string | null;
+  sold_price?: number | null;
+
+  listing_id?: string | null;
+
+  // legacy fallback fields (if any docs still have them)
+  registration?: string | null;
+  reg_number?: string | null;
+
   [key: string]: any;
 };
 
 // -----------------------------
 // Helpers
 // -----------------------------
-function formatDate(dateStr?: string | null): string | null {
-  if (!dateStr) return null;
-  const d = new Date(dateStr);
-  if (isNaN(d.getTime())) return null;
-
-  return d.toLocaleString("en-GB", {
-    weekday: "long",
-    day: "numeric",
-    month: "long",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+function cap(s: string) {
+  if (!s) return s;
+  return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
-function formatRegDisplay(reg?: string) {
-  return String(reg || "").trim().toUpperCase();
+function niceEnum(s?: string | null) {
+  const v = String(s || "").trim();
+  if (!v) return "";
+  return cap(v.replace(/_/g, " "));
+}
+
+function money(n?: number | null) {
+  if (typeof n !== "number" || Number.isNaN(n)) return null;
+  return `£${n.toLocaleString("en-GB")}`;
+}
+
+function pickBuyNow(l: Listing): number | null {
+  const anyL = l as any;
+  if (typeof anyL.buy_now_price === "number") return anyL.buy_now_price;
+  if (typeof anyL.buy_now === "number") return anyL.buy_now;
+  return null;
+}
+
+function getListingName(l: Listing) {
+  const anyL = l as any;
+
+  const itemTitle = String(anyL.item_title || anyL.title || "").trim();
+  if (itemTitle) return itemTitle;
+
+  const brand = String(anyL.brand || "").trim();
+  const model = String(anyL.model || "").trim();
+  const bm = [brand, model].filter(Boolean).join(" ");
+  if (bm) return bm;
+
+  const legacy = String(anyL.registration || anyL.reg_number || "").trim();
+  if (legacy) return legacy;
+
+  const gearType = String(anyL.gear_type || anyL.type || "").trim();
+  if (gearType) return `${niceEnum(gearType)} listing`;
+
+  return "Camera gear listing";
+}
+
+function pickFallbackImage(l: Listing) {
+  const gear = String(l.gear_type || "").toLowerCase();
+  const era = String(l.era || "").toLowerCase();
+
+  // These exist in /public/hero (you showed them earlier)
+  if (era === "antique" || era === "vintage") return "/hero/antique-cameras.jpg";
+  if (gear === "lens") return "/hero/modern-lens.jpg";
+  return "/hero/modern-lens.jpg";
+}
+
+function parseBids(bids: Listing["bids"]) {
+  if (typeof bids === "number") return bids;
+  if (typeof bids === "string") {
+    const n = parseInt(bids, 10);
+    return Number.isFinite(n) ? n : 0;
+  }
+  return 0;
 }
 
 export default function ListingDetailsClient({ initial }: { initial: Listing }) {
   const [listing, setListing] = useState<Listing | null>(initial ?? null);
 
-  // 🔥 IMPORTANT: never let a failed client refresh replace valid server HTML
+  // Never let a failed client refresh wipe valid SSR HTML
   const [refreshNote, setRefreshNote] = useState<string | null>(null);
 
-  const [outbidPopup, setOutbidPopup] = useState<null | {
-    oldBid: number;
-    newBid: number;
-  }>(null);
+  const [outbidPopup, setOutbidPopup] = useState<null | { oldBid: number; newBid: number }>(null);
+  const [softClosePopup, setSoftClosePopup] = useState<null | { oldEnd: string; newEnd: string }>(
+    null
+  );
 
-  const [softClosePopup, setSoftClosePopup] = useState<null | {
-    oldEnd: string;
-    newEnd: string;
-  }>(null);
-
-  // Keep a ref to the latest listing so realtime callbacks compare correctly
   const listingRef = useRef<Listing | null>(initial ?? null);
   useEffect(() => {
     listingRef.current = listing;
   }, [listing]);
 
-  // Optional: client re-fetch (best-effort only)
+  // Best-effort client refresh
   useEffect(() => {
     if (!initial?.$id) return;
 
@@ -104,34 +164,24 @@ export default function ListingDetailsClient({ initial }: { initial: Listing }) 
       try {
         setRefreshNote(null);
 
-        const doc = await databases.getDocument(
-          DATABASE_ID,
-          LISTINGS_COLLECTION_ID,
-          initial.$id
-        );
-
-        if (!cancelled) setListing(doc as Listing);
+        const doc = await databases.getDocument(DATABASE_ID, LISTINGS_COLLECTION_ID, initial.$id);
+        if (!cancelled) setListing(doc as unknown as Listing);
       } catch (err) {
-        // ✅ Keep existing content; do NOT show "Listing not found" just because public read is blocked
         console.warn("[listing] Client refresh failed (keeping SSR content):", err);
         if (!cancelled) {
-          setRefreshNote(
-            "Live updates may be limited on this page (displayed details are still valid)."
-          );
+          setRefreshNote("Live updates may be limited on this page (displayed details are still valid).");
         }
       }
     }
 
-    // Refresh once shortly after hydration (helps if SSR was cached briefly)
     const t = setTimeout(refreshOnce, 600);
-
     return () => {
       cancelled = true;
       clearTimeout(t);
     };
   }, [initial?.$id]);
 
-  // REALTIME updates (best-effort) — subscribe once per listing id (no re-subscribe on every bid)
+  // Realtime updates (best-effort)
   useEffect(() => {
     if (!listing?.$id) return;
 
@@ -140,25 +190,17 @@ export default function ListingDetailsClient({ initial }: { initial: Listing }) 
     const unsub = client.subscribe(
       `databases.${DATABASE_ID}.collections.${LISTINGS_COLLECTION_ID}.documents.${currentId}`,
       (event) => {
-        if (
-          !event.events.includes("databases.*.collections.*.documents.*.update")
-        ) {
-          return;
-        }
+        if (!event.events.includes("databases.*.collections.*.documents.*.update")) return;
 
         const payload = event.payload as Listing;
         const prev = listingRef.current;
 
-        // Outbid popup
         const prevBid = prev?.current_bid ?? 0;
         const nextBid = payload.current_bid ?? 0;
-        if (nextBid > prevBid) {
-          setOutbidPopup({ oldBid: prevBid, newBid: nextBid });
-        }
+        if (nextBid > prevBid) setOutbidPopup({ oldBid: prevBid, newBid: nextBid });
 
-        // Soft close popup
-        const oldEnd = prev?.auction_end ?? "";
-        const newEnd = payload.auction_end ?? "";
+        const oldEnd = String(prev?.auction_end ?? prev?.end_time ?? "");
+        const newEnd = String(payload.auction_end ?? payload.end_time ?? "");
         const oldT = Date.parse(oldEnd);
         const newT = Date.parse(newEnd);
         if ((Number.isFinite(newT) ? newT : 0) > (Number.isFinite(oldT) ? oldT : 0)) {
@@ -171,10 +213,8 @@ export default function ListingDetailsClient({ initial }: { initial: Listing }) 
     );
 
     return () => unsub();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [listing?.$id]);
 
-  // If we truly have no listing, show not found UI
   if (!listing) {
     return (
       <main className="min-h-screen bg-black text-gray-100 flex items-center justify-center px-4">
@@ -191,55 +231,43 @@ export default function ListingDetailsClient({ initial }: { initial: Listing }) 
     );
   }
 
-  // VALUES
-  const {
-    registration,
-    listing_id,
-    description,
-    status,
-    current_bid,
-    starting_price,
-    plate_type,
-    certificate,
-    expiry_date,
-    bids,
-    sold_via,
-    interesting_fact,
-    reserve_met,
-  } = listing;
+  const anyL = listing as any;
 
+  const status = String(anyL.status || "");
   const isLive = status === "live";
   const isComing = status === "queued";
   const isSold = status === "sold";
 
-  const regDisplay = formatRegDisplay(registration);
+  const name = getListingName(listing);
+  const buyNow = pickBuyNow(listing);
 
-  // Support both field names
-  const buyNowPrice =
-    (listing.buy_now_price ?? null) ??
-    (typeof listing.buy_now === "number" ? listing.buy_now : null);
+  const currentBid = typeof anyL.current_bid === "number" ? anyL.current_bid : 0;
+  const startingPrice =
+    typeof anyL.starting_price === "number" && anyL.starting_price > 0 ? anyL.starting_price : null;
 
-  const expiryText = certificate && expiry_date ? formatDate(expiry_date) : null;
+  const bidsCount = parseBids(anyL.bids);
+  const reserveMet = typeof anyL.reserve_met === "boolean" ? anyL.reserve_met : null;
 
-  const displayRef = listing_id || `AMP-${listing.$id.slice(-6).toUpperCase()}`;
+  const displayRef = String(anyL.listing_id || `AMC-${listing.$id.slice(-6).toUpperCase()}`);
 
-  const numberOfBids =
-    typeof bids === "number"
-      ? bids
-      : typeof bids === "string"
-        ? parseInt(bids, 10)
-        : 0;
+  const metaBits = [niceEnum(anyL.gear_type), niceEnum(anyL.condition), niceEnum(anyL.era)].filter(Boolean);
+  const metaLine = metaBits.join(" • ");
 
-  const hasStartingPrice = starting_price != null && starting_price > 0;
+  const imgSrc = String(anyL.image_url || "").trim() || pickFallbackImage(listing);
 
-  const currentBidDisplay =
-    current_bid != null
-      ? `£${current_bid.toLocaleString()}`
-      : hasStartingPrice
-        ? "No bids yet"
-        : "£0";
+  const rawEnd = String(anyL.auction_end ?? anyL.end_time ?? "");
+  const rawStart = String(anyL.auction_start ?? anyL.start_time ?? "");
 
-  const soldPrice = current_bid ?? buyNowPrice ?? 0;
+  const extraLine =
+    String(anyL.gear_type || "").toLowerCase() === "camera" && typeof anyL.shutter_count === "number"
+      ? `Shutter count: ${anyL.shutter_count.toLocaleString("en-GB")}`
+      : String(anyL.gear_type || "").toLowerCase() === "lens"
+      ? [anyL.lens_mount ? `Mount: ${anyL.lens_mount}` : "", anyL.focal_length || "", anyL.max_aperture || ""]
+          .filter(Boolean)
+          .join(" • ")
+      : "";
+
+  const canBid = isLive && !isSold;
 
   return (
     <main className="min-h-screen bg-black text-gray-100 py-10 px-4">
@@ -269,147 +297,107 @@ export default function ListingDetailsClient({ initial }: { initial: Listing }) 
           </div>
         </div>
 
-        {/* ✅ H1 for SEO + clarity */}
+        {/* Title */}
         <div className="px-6 pt-5">
-          <h1 className="text-xl md:text-2xl font-extrabold text-gray-900">
-            {regDisplay ? `Private number plate ${regDisplay}` : "Private number plate listing"}
-          </h1>
+          <h1 className="text-xl md:text-2xl font-extrabold text-gray-900">{name}</h1>
 
           <p className="mt-2 text-xs text-gray-600">
-            Browse auctions, bid securely, and complete the DVLA assignment process after sale.{" "}
+            {metaLine ? <span className="font-semibold">{metaLine}</span> : null}
+            {metaLine ? " • " : null}
+            Listing ID: {displayRef}{" "}
+            <span className="text-gray-400">•</span>{" "}
             <Link href="/how-it-works" className="text-blue-700 underline">
               How it works
             </Link>{" "}
-            •{" "}
+            <span className="text-gray-400">•</span>{" "}
             <Link href="/fees" className="text-blue-700 underline">
               Fees
+            </Link>{" "}
+            <span className="text-gray-400">•</span>{" "}
+            <Link href="/faq" className="text-blue-700 underline">
+              FAQ
             </Link>
           </p>
 
-          {refreshNote && (
-            <p className="mt-2 text-xs text-gray-600">{refreshNote}</p>
-          )}
+          {extraLine ? <p className="mt-2 text-xs text-gray-600">{extraLine}</p> : null}
+          {refreshNote ? <p className="mt-2 text-xs text-gray-600">{refreshNote}</p> : null}
         </div>
 
-        {/* IMAGE + OVERLAYED PLATE */}
+        {/* Image */}
         <div className="px-6 pb-6 pt-4">
-          <div className="relative w-full max-w-3xl mx-auto rounded-xl overflow-hidden shadow-lg bg-black">
-            <Image
-              src="/car-rear.jpg"
-              alt={`Rear of car with registration ${regDisplay || ""}`}
-              width={1600}
-              height={1067}
-              className="w-full h-auto block"
-              priority
+          <div className="relative w-full max-w-4xl mx-auto rounded-xl overflow-hidden shadow-lg bg-black">
+            <img
+              src={imgSrc}
+              alt={name}
+              className="w-full h-[320px] md:h-[420px] object-cover block"
+              loading="lazy"
             />
-
-            <div className="absolute left-1/2 -translate-x-1/2" style={{ bottom: "29%" }}>
-              <div
-                style={{
-                  transform: "scale(0.42)",
-                  transformOrigin: "center bottom",
-                }}
-              >
-                <NumberPlate
-                  reg={regDisplay || ""}
-                  size="large"
-                  variant="rear"
-                  showBlueBand={true}
-                />
-              </div>
-            </div>
-          </div>
-
-          <div className="mt-3 flex justify-between text-sm text-gray-600">
-            <span>Listing ID: {displayRef}</span>
-            {plate_type && <span>Type: {plate_type}</span>}
           </div>
         </div>
 
-        {/* SOLD BANNER */}
+        {/* SOLD Banner */}
         {isSold && (
           <div className="mx-6 my-6 p-5 bg-green-600 text-white rounded-xl shadow text-center">
             <p className="text-2xl font-extrabold">SOLD</p>
-            <p className="text-lg mt-2">
-              Final Price: <span className="font-bold">£{soldPrice.toLocaleString()}</span>
-            </p>
             <p className="text-sm opacity-90 mt-1">
-              {sold_via === "buy_now" ? "Bought via Buy Now" : "Sold at Auction"}
+              {anyL.sold_via === "buy_now" ? "Bought via Buy Now" : "Sold at Auction"}
             </p>
           </div>
         )}
 
-        {/* Auction Details */}
+        {/* Auction details */}
         <div className="mt-2 mx-6 mb-6 bg-gray-50 rounded-xl border border-gray-200 shadow-sm p-6">
-          <h2 className="text-lg md:text-xl font-bold mb-4 text-yellow-500">
-            Auction details
-          </h2>
+          <h2 className="text-lg md:text-xl font-bold mb-4 text-yellow-600">Auction details</h2>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 text-sm">
             <div className="space-y-2">
               {!isSold ? (
                 <>
                   <p>
-                    <span className="font-semibold">Current bid:</span> {currentBidDisplay}
+                    <span className="font-semibold">Current bid:</span> {money(currentBid) || "£0"}
                   </p>
 
                   <p>
-                    <span className="font-semibold">Number of bids:</span> {numberOfBids}
+                    <span className="font-semibold">Number of bids:</span> {bidsCount}
                   </p>
 
-                  {hasStartingPrice && (
+                  {startingPrice != null && (
                     <p>
-                      <span className="font-semibold">Starting price:</span> £
-                      {starting_price!.toLocaleString()}
-                      {current_bid == null && " (first bid starts here)"}
+                      <span className="font-semibold">Starting price:</span> {money(startingPrice)}
+                      {currentBid === 0 ? " (first bid starts here)" : ""}
                     </p>
                   )}
 
-                  {buyNowPrice && (
+                  {typeof buyNow === "number" && buyNow > 0 ? (
                     <p>
-                      <span className="font-semibold">Buy Now:</span> £
-                      {buyNowPrice.toLocaleString()}
+                      <span className="font-semibold">Buy Now:</span> {money(buyNow)}
                     </p>
-                  )}
+                  ) : null}
 
                   <p className="text-xs text-gray-600">
                     Reserve:{" "}
                     <span className="font-semibold">
-                      {reserve_met ? "met" : "not shown (hidden)"}
-                    </span>{" "}
-                    — plates only sell if the reserve is met.
+                      {reserveMet === true ? "met" : reserveMet === false ? "not met" : "hidden"}
+                    </span>
                   </p>
                 </>
               ) : (
-                <>
-                  <p>
-                    <span className="font-semibold">Final price:</span> £
-                    {soldPrice.toLocaleString()}
-                  </p>
-                  <p>
-                    <span className="font-semibold">Method:</span>{" "}
-                    {sold_via === "buy_now" ? "Buy Now" : "Auction"}
-                  </p>
-                </>
+                <p className="font-semibold text-gray-700">This auction has ended.</p>
               )}
             </div>
 
             <div className="space-y-2 md:text-right">
-              {expiryText && (
-                <p>
-                  <span className="font-semibold">Expiry date:</span> {expiryText}
-                </p>
-              )}
-
               {!isSold ? (
                 <>
                   <p>
-                    <span className="font-semibold">
-                      {isLive ? "Auction ends in:" : "Auction starts in:"}
-                    </span>
+                    <span className="font-semibold">{isLive ? "Auction ends in:" : "Auction starts in:"}</span>
                   </p>
                   <div className="mt-1 inline-block">
-                    {isLive ? <AuctionTimer mode="live" /> : <AuctionTimer mode="coming" />}
+                    {isLive ? (
+                      <AuctionTimer mode="live" endTime={rawEnd || undefined} />
+                    ) : (
+                      <AuctionTimer mode="coming" endTime={rawStart || undefined} />
+                    )}
                   </div>
                 </>
               ) : (
@@ -419,51 +407,22 @@ export default function ListingDetailsClient({ initial }: { initial: Listing }) 
           </div>
         </div>
 
-        {/* TRUST / PROCESS (SEO + confidence) */}
-        <div className="mx-6 mb-8">
-          <div className="rounded-xl border border-gray-200 bg-white p-5 text-gray-800">
-            <h2 className="text-base md:text-lg font-bold text-gray-900">
-              What happens after you win?
-            </h2>
-            <ul className="mt-3 list-disc list-inside space-y-1 text-sm">
-              <li>Winning bidder pays securely online.</li>
-              <li>Buyer/seller upload the required DVLA documents via their dashboards.</li>
-              <li>We manage the assignment process and confirm completion before payout.</li>
-            </ul>
-
-            <p className="mt-3 text-xs text-gray-600">
-              DVLA fee: by default the seller covers the £80 assignment fee (deducted from seller payout).
-              A small number of legacy listings charge it to the buyer and are clearly labelled.{" "}
-              <Link href="/fees" className="text-blue-700 underline">
-                See fees
-              </Link>
-              .
-            </p>
-
-            <p className="mt-2 text-[11px] text-gray-500">
-              AuctionMyPlate.co.uk is an independent marketplace and is not affiliated with the DVLA.
-            </p>
-          </div>
-        </div>
-
-        {/* DESCRIPTION + HISTORY */}
+        {/* Description */}
         <div className="mx-6 mb-8 space-y-6">
           <div>
-            <h3 className="text-lg md:text-xl font-bold mb-2 text-yellow-500">
-              Description
-            </h3>
+            <h3 className="text-lg md:text-xl font-bold mb-2 text-yellow-600">Description</h3>
             <div className="border rounded-lg p-4 bg-gray-50 text-sm text-gray-800 whitespace-pre-line">
-              {description || "No description has been added yet."}
+              {String(anyL.description || "").trim() || "No description has been added yet."}
             </div>
           </div>
 
-          <div>
-            <h3 className="text-base md:text-lg font-bold mb-2 text-yellow-500">
-              Plate history &amp; interesting facts
-            </h3>
-            <div className="border rounded-lg p-3 bg-white text-sm text-gray-800 whitespace-pre-line">
-              {interesting_fact || "No extra history or interesting facts have been added yet."}
-            </div>
+          <div className="rounded-xl border border-gray-200 bg-white p-5 text-gray-800">
+            <h2 className="text-base md:text-lg font-bold text-gray-900">Buying tips</h2>
+            <ul className="mt-3 list-disc list-inside space-y-1 text-sm">
+              <li>Check condition notes carefully (marks, fungus/haze, faults, battery health, etc.).</li>
+              <li>Confirm what’s included (caps, straps, chargers, boxes, filters, tripod plates).</li>
+              <li>If it’s a camera, shutter count (if provided) is a useful indicator — not the whole story.</li>
+            </ul>
           </div>
         </div>
 
@@ -479,23 +438,17 @@ export default function ListingDetailsClient({ initial }: { initial: Listing }) 
                   Place a bid
                 </Link>
 
-                {buyNowPrice && (
+                {typeof buyNow === "number" && buyNow > 0 ? (
                   <Link
                     href={`/buy_now?id=${listing.$id}`}
                     className="inline-flex items-center justify-center rounded-md bg-green-600 px-5 py-3 font-semibold text-white hover:bg-green-700"
                   >
-                    Buy Now £{buyNowPrice.toLocaleString()}
+                    Buy Now {money(buyNow)}
                   </Link>
-                )}
-
-                {hasStartingPrice && current_bid == null && (
-                  <p className="text-xs text-gray-600">
-                    First bid must be at least £{starting_price!.toLocaleString()}.
-                  </p>
-                )}
+                ) : null}
 
                 <p className="text-xs text-gray-600">
-                  New to auctions?{" "}
+                  New here?{" "}
                   <Link href="/how-it-works" className="text-blue-700 underline">
                     Read how it works
                   </Link>
@@ -504,7 +457,7 @@ export default function ListingDetailsClient({ initial }: { initial: Listing }) 
               </div>
             ) : (
               <p className="text-sm text-gray-700">
-                Bidding opens when this plate goes live.{" "}
+                Bidding opens when this item goes live.{" "}
                 <Link href="/current-listings" className="text-blue-700 underline">
                   Browse current listings
                 </Link>
@@ -515,16 +468,16 @@ export default function ListingDetailsClient({ initial }: { initial: Listing }) 
             <div className="flex flex-col gap-2">
               <p className="text-sm font-semibold text-red-600">This auction has ended.</p>
               <Link
-                href="/sell-my-plate"
+                href="/sell"
                 className="inline-flex items-center justify-center rounded-md bg-yellow-500 px-5 py-3 font-semibold text-black hover:bg-yellow-600 w-fit"
               >
-                Sell your plate
+                Sell camera gear
               </Link>
             </div>
           )}
 
           <p className="text-xs text-gray-500 sm:text-right">
-            Plates will only be sold if the reserve has been met.
+            Listings are only sold if the reserve is met.
           </p>
         </div>
       </div>
@@ -534,8 +487,7 @@ export default function ListingDetailsClient({ initial }: { initial: Listing }) 
         <div className="fixed bottom-6 right-6 bg-red-600 text-white p-4 rounded-xl shadow-xl z-50 w-80 animate-bounce">
           <h3 className="text-xl font-bold mb-1">You've been outbid!</h3>
           <p className="text-lg">
-            New highest bid:{" "}
-            <strong>£{outbidPopup.newBid.toLocaleString()}</strong>
+            New highest bid: <strong>£{outbidPopup.newBid.toLocaleString("en-GB")}</strong>
           </p>
           <button
             className="mt-3 w-full bg-white text-red-600 font-semibold rounded-lg py-2 hover:bg-gray-200"

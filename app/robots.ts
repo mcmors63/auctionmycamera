@@ -19,7 +19,16 @@ export default function robots(): MetadataRoute.Robots {
   }
 
   return {
-    rules: [{ userAgent: "*", allow: "/" }],
+    rules: [
+      {
+        userAgent: "*",
+        // ✅ Allow the site generally
+        allow: ["/", "/admin-login", "/reset-password"],
+        // ✅ Block admin area + API endpoints
+        // NOTE: Disallow "/admin" would also match "/admin-login", so we explicitly allow "/admin-login" above.
+        disallow: ["/admin", "/api/"],
+      },
+    ],
     sitemap: `${PROD_SITE_URL}/sitemap.xml`,
   };
 }

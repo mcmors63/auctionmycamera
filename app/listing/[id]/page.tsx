@@ -9,7 +9,7 @@ export const runtime = "nodejs";
 // ✅ ISR: stable HTML for crawlers, still updates often enough for auctions
 export const revalidate = 300; // 5 minutes
 
-const PROD_SITE_URL = "https://auctionmyplate.co.uk";
+const PROD_SITE_URL = "https://auctionmycamera.co.uk";
 
 function isProdEnv() {
   if (process.env.VERCEL_ENV) return process.env.VERCEL_ENV === "production";
@@ -48,8 +48,18 @@ const endpoint = endpointRaw.replace(/\/+$/, "");
 const projectId = process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID!;
 const apiKey = process.env.APPWRITE_API_KEY!;
 
-const DATABASE_ID = process.env.NEXT_PUBLIC_APPWRITE_PLATES_DATABASE_ID!;
-const LISTINGS_COLLECTION_ID = process.env.NEXT_PUBLIC_APPWRITE_PLATES_COLLECTION_ID!;
+// ✅ Listings DB/collection (supports new names, falls back to legacy "PLATES" envs)
+const DATABASE_ID =
+  process.env.APPWRITE_LISTINGS_DATABASE_ID ||
+  process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID ||
+  process.env.APPWRITE_PLATES_DATABASE_ID ||
+  process.env.NEXT_PUBLIC_APPWRITE_PLATES_DATABASE_ID!;
+
+const LISTINGS_COLLECTION_ID =
+  process.env.APPWRITE_LISTINGS_COLLECTION_ID ||
+  process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_COLLECTION_ID ||
+  process.env.APPWRITE_PLATES_COLLECTION_ID ||
+  process.env.NEXT_PUBLIC_APPWRITE_PLATES_COLLECTION_ID!;
 
 function serverDatabases() {
   const client = new Client().setEndpoint(endpoint).setProject(projectId).setKey(apiKey);
@@ -72,13 +82,34 @@ function money(n?: number | null) {
 }
 
 function pickBuyNow(l: Listing): number | null {
-  if (typeof l.buy_now_price === "number") return l.buy_now_price;
-  if (typeof (l as any).buy_now === "number") return (l as any).buy_now;
+  const anyL = l as any;
+  if (typeof anyL.buy_now_price === "number") return anyL.buy_now_price;
+  if (typeof anyL.buy_now === "number") return anyL.buy_now;
   return null;
 }
 
+function getListingName(l: Listing) {
+  const anyL = l as any;
+
+  const itemTitle = String(anyL.item_title || anyL.title || "").trim();
+  if (itemTitle) return itemTitle;
+
+  const brand = String(anyL.brand || "").trim();
+  const model = String(anyL.model || "").trim();
+  const bm = [brand, model].filter(Boolean).join(" ");
+  if (bm) return bm;
+
+  const legacy = String(anyL.registration || anyL.reg_number || "").trim();
+  if (legacy) return legacy;
+
+  const gearType = String(anyL.gear_type || anyL.type || "").trim();
+  if (gearType) return `${gearType} listing`;
+
+  return "Camera gear listing";
+}
+
 function isIndexableStatus(status?: string) {
-  // ✅ Keep queued indexable for exact-reg searches; sold is optional but you currently treat it as public
+  // ✅ Public statuses only
   return status === "live" || status === "queued" || status === "sold";
 }
 
@@ -92,37 +123,40 @@ export async function generateMetadata({
 
   if (!listing) {
     return {
-      title: "Listing not found | AuctionMyPlate",
+      title: "Listing not found | AuctionMyCamera",
       robots: { index: false, follow: false },
     };
   }
 
-  const reg = (listing.registration || "Private number plate").trim();
-  const status = listing.status || "";
+  const anyL = listing as any;
+  const status = String(anyL.status || "");
+  const name = getListingName(listing);
   const buyNow = pickBuyNow(listing);
 
   const titleBase =
     status === "queued"
-      ? `${reg} – Coming Soon | AuctionMyPlate`
+      ? `${name} – Coming Soon | AuctionMyCamera`
       : status === "sold"
-      ? `${reg} – Sold | AuctionMyPlate`
-      : `${reg} – Private Number Plate Auction | AuctionMyPlate`;
+      ? `${name} – Sold | AuctionMyCamera`
+      : `${name} – Camera Gear Auction | AuctionMyCamera`;
 
   const descBits = [
-    `Bid on ${reg} on AuctionMyPlate.`,
-    listing.plate_type ? `Type: ${listing.plate_type}.` : null,
-    typeof listing.starting_price === "number" && listing.starting_price > 0
-      ? `Starting price ${money(listing.starting_price)}.`
+    `Bid on ${name} on AuctionMyCamera.`,
+    anyL.gear_type ? `Type: ${String(anyL.gear_type).replace(/_/g, " ")}.` : null,
+    anyL.condition ? `Condition: ${String(anyL.condition).replace(/_/g, " ")}.` : null,
+    anyL.era ? `Era: ${String(anyL.era).replace(/_/g, " ")}.` : null,
+    typeof anyL.starting_price === "number" && anyL.starting_price > 0
+      ? `Starting price ${money(anyL.starting_price)}.`
       : null,
     buyNow ? `Buy Now available at ${money(buyNow)}.` : null,
-    status === "queued" ? "This plate is queued for the next weekly auction." : null,
-    status === "sold" ? "This plate has sold on AuctionMyPlate." : null,
+    status === "queued" ? "This item is queued for the next weekly auction." : null,
+    status === "sold" ? "This item has sold on AuctionMyCamera." : null,
   ].filter(Boolean);
 
   const description = descBits.join(" ");
 
   // ✅ Canonical always anchored to SITE_URL logic (prod = real domain)
-  const canonical = `${SITE_URL}/listing/${listing.$id}`;
+  const canonical = `${SITE_URL}/listing/${anyL.$id}`;
 
   // Robots: don’t index non-public statuses
   const indexable = isIndexableStatus(status);
@@ -136,8 +170,13 @@ export async function generateMetadata({
       title: titleBase,
       description,
       url: canonical,
-      siteName: "AuctionMyPlate",
+      siteName: "AuctionMyCamera",
       type: "website",
+    },
+    twitter: {
+      card: "summary_large_image",
+      title: titleBase,
+      description,
     },
   };
 }
@@ -152,33 +191,38 @@ export default async function ListingDetailsPage({
 
   if (!listing) return notFound();
 
+  const anyL = listing as any;
+
   // If it’s in a non-public state (pending/rejected/etc), don’t expose it
-  const status = listing.status || "";
-  if (!isIndexableStatus(status)) {
-    return notFound();
-  }
+  const status = String(anyL.status || "");
+  if (!isIndexableStatus(status)) return notFound();
 
-  // Lightweight JSON-LD (helps Google understand what this page is)
-  const reg = (listing.registration || "Private number plate").trim();
+  const name = getListingName(listing);
   const buyNow = pickBuyNow(listing);
-  const canonical = `${SITE_URL}/listing/${listing.$id}`;
+  const canonical = `${SITE_URL}/listing/${anyL.$id}`;
 
-  // Choose a sensible price for schema (avoid undefined when possible)
+  // Choose a sensible price for schema
   const schemaPrice =
     typeof buyNow === "number"
       ? buyNow
-      : typeof listing.starting_price === "number"
-      ? listing.starting_price
+      : typeof anyL.current_bid === "number"
+      ? anyL.current_bid
+      : typeof anyL.starting_price === "number"
+      ? anyL.starting_price
       : undefined;
+
+  const schemaDesc =
+    String(anyL.description || "").trim() ||
+    `Camera gear listing: ${name}.`;
 
   const jsonLd = {
     "@context": "https://schema.org",
     "@type": "Product",
-    name: reg,
-    description: listing.description || listing.interesting_fact || `Private number plate ${reg}.`,
-    sku: (listing as any).listing_id || listing.$id,
+    name,
+    description: schemaDesc,
+    sku: String(anyL.listing_id || anyL.$id),
     url: canonical,
-    brand: { "@type": "Brand", name: "AuctionMyPlate" },
+    brand: { "@type": "Brand", name: "AuctionMyCamera" },
     offers: {
       "@type": "Offer",
       priceCurrency: "GBP",
@@ -189,6 +233,7 @@ export default async function ListingDetailsPage({
           : status === "queued"
           ? "https://schema.org/PreOrder"
           : "https://schema.org/InStock",
+      url: canonical,
     },
   };
 

@@ -5,7 +5,7 @@ import SellClient from "./SellClient";
 export const metadata: Metadata = {
   title: "Sell | AuctionMyCamera",
   description: "Create a camera gear auction listing. Login required.",
-  robots: { index: false, follow: true },
+  robots: { index: false, follow: false },
 };
 
 export default function SellPage() {
