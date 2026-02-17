@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Client, Account } from "appwrite";
+import { getAuctionWindow } from "@/lib/getAuctionWindow";
 
 type GearType =
   | "camera"
@@ -30,6 +31,18 @@ const client = new Client()
   .setProject(process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID!);
 
 const account = new Account(client);
+
+function formatLondon(dt: Date) {
+  // Always show UK time regardless of the visitor’s locale/timezone.
+  return dt.toLocaleString("en-GB", {
+    timeZone: "Europe/London",
+    year: "numeric",
+    month: "short",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
 
 export default function SellClient() {
   const router = useRouter();
@@ -98,46 +111,18 @@ export default function SellClient() {
     return jwt;
   }
 
-  // ✅ Helper: upcoming auction window (Monday 01:00 → Sunday 23:00)
-  function getNextAuctionWindow() {
-    const now = new Date();
-    const day = now.getDay(); // 0=Sun..6=Sat
-
-    // Next Monday
-    const daysUntilMonday = (1 - day + 7) % 7;
-    const start = new Date(now);
-    start.setDate(now.getDate() + daysUntilMonday);
-
-    // If it's Monday already, only use "today" if we haven't reached 01:00 yet; otherwise next week
-    const isMonday = day === 1;
-    if (isMonday) {
-      const candidate = new Date(now);
-      candidate.setHours(1, 0, 0, 0);
-      if (candidate.getTime() >= now.getTime()) {
-        start.setTime(candidate.getTime());
-      } else {
-        start.setDate(now.getDate() + 7);
-        start.setHours(1, 0, 0, 0);
-      }
-    } else {
-      start.setHours(1, 0, 0, 0);
-      if (start.getTime() < now.getTime()) {
-        start.setDate(start.getDate() + 7);
-        start.setHours(1, 0, 0, 0);
-      }
-    }
-
-    const end = new Date(start);
-    end.setDate(start.getDate() + 6); // Sunday
-    end.setHours(23, 0, 0, 0); // Sunday 23:00
+  // ✅ Auction window preview (UK-safe): use shared helper
+  const previewWindow = useMemo(() => {
+    const w = getAuctionWindow();
+    const start = w.isLive ? w.currentStart : w.nextStart;
+    const end = w.isLive ? w.currentEnd : w.nextEnd;
 
     return {
-      auction_start: start.toISOString(),
-      auction_end: end.toISOString(),
+      start,
+      end,
+      isLive: w.isLive,
     };
-  }
-
-  const previewWindow = useMemo(() => getNextAuctionWindow(), []);
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -193,8 +178,13 @@ export default function SellClient() {
       return;
     }
 
-    // ✅ Get upcoming auction window
-    const { auction_start, auction_end } = getNextAuctionWindow();
+    // ✅ Use shared auction window helper for payload too (UTC-safe)
+    const w = getAuctionWindow();
+    const start = w.isLive ? w.currentStart : w.nextStart;
+    const end = w.isLive ? w.currentEnd : w.nextEnd;
+
+    const auction_start = start.toISOString();
+    const auction_end = end.toISOString();
 
     // ✅ Backwards-compatible listing ref (keeps legacy pages happy while we migrate schema)
     const legacy_listing_ref = `AMC${String(Date.now()).slice(-6)}`;
@@ -250,7 +240,6 @@ export default function SellClient() {
       const data = await res.json().catch(() => ({}));
 
       if (!res.ok) {
-        // Make auth/verify failures obvious
         const msg = String(data?.error || "Request failed");
 
         if (res.status === 401) {
@@ -269,9 +258,9 @@ export default function SellClient() {
       }
 
       alert(
-        `✅ Listing submitted!\nWe’ll review it and email you once it’s approved.\n\nAuction window preview:\nStarts: ${new Date(
-          auction_start
-        ).toLocaleString()}\nEnds: ${new Date(auction_end).toLocaleString()}`
+        `✅ Listing submitted!\nWe’ll review it and email you once it’s approved.\n\nAuction window preview (UK time):\nStarts: ${formatLondon(
+          start
+        )}\nEnds: ${formatLondon(end)}`
       );
 
       (e.target as HTMLFormElement).reset();
@@ -337,18 +326,14 @@ export default function SellClient() {
 
         <div className="mt-3 rounded-2xl border border-border bg-card p-4">
           <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-            Upcoming auction window (preview)
+            {previewWindow.isLive ? "Current auction window (UK time)" : "Upcoming auction window (UK time)"}
           </p>
           <p className="mt-1 text-sm">
             <span className="font-semibold">Starts:</span>{" "}
-            <span className="text-muted-foreground">
-              {new Date(previewWindow.auction_start).toLocaleString()}
-            </span>
+            <span className="text-muted-foreground">{formatLondon(previewWindow.start)}</span>
             <br />
             <span className="font-semibold">Ends:</span>{" "}
-            <span className="text-muted-foreground">
-              {new Date(previewWindow.auction_end).toLocaleString()}
-            </span>
+            <span className="text-muted-foreground">{formatLondon(previewWindow.end)}</span>
           </p>
         </div>
 
