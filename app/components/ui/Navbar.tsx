@@ -110,7 +110,7 @@ export default function Navbar() {
     { href: "/how-it-works", label: "How it works" },
     { href: "/fees", label: "Fees" },
     { href: "/faq", label: "FAQ" },
-    { href: "/blog", label: "Blog" },
+    // ✅ Blog removed for now
     { href: "/about", label: "About" },
   ];
 
@@ -123,7 +123,11 @@ export default function Navbar() {
     <header className="sticky top-0 z-40 border-b border-border bg-background/80 backdrop-blur supports-[backdrop-filter]:bg-background/70">
       <nav className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3 md:py-4">
         {/* LOGO */}
-        <Link href="/" className="flex items-center gap-3" aria-label="AuctionMyCamera home">
+        <Link
+          href="/"
+          className="flex items-center gap-3"
+          aria-label="AuctionMyCamera home"
+        >
           {/* Simple “lens” mark */}
           <span className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-border bg-card shadow-sm">
             <span className="relative h-4 w-4 rounded-full bg-primary/30">
@@ -226,7 +230,9 @@ export default function Navbar() {
                     aria-current={active ? "page" : undefined}
                     className={[
                       "rounded-lg px-3 py-2 text-sm font-medium transition",
-                      active ? "bg-accent text-foreground" : "text-muted-foreground hover:bg-accent hover:text-foreground",
+                      active
+                        ? "bg-accent text-foreground"
+                        : "text-muted-foreground hover:bg-accent hover:text-foreground",
                     ].join(" ")}
                   >
                     {link.label}

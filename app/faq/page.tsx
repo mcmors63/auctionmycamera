@@ -1,369 +1,347 @@
 // app/faq/page.tsx
+import type { Metadata } from "next";
+import Link from "next/link";
 
-export const metadata = {
-  title: "FAQ | AuctionMyPlate",
+const SITE_URL = (process.env.NEXT_PUBLIC_SITE_URL || "https://auctionmycamera.co.uk").replace(
+  /\/+$/,
+  ""
+);
+
+export const metadata: Metadata = {
+  title: "FAQ | AuctionMyCamera",
   description:
-    "Common questions about buying and selling cherished plates with AuctionMyPlate.",
+    "Common questions about buying and selling cameras, lenses and photography gear with AuctionMyCamera — auctions, bidding, payments, delivery, disputes, safety and account rules.",
+  alternates: { canonical: `${SITE_URL}/faq` },
+  openGraph: {
+    type: "website",
+    url: `${SITE_URL}/faq`,
+    title: "FAQ | AuctionMyCamera",
+    description:
+      "FAQs covering weekly auctions, bidding rules, payments, delivery/collection, disputes, safety and account rules on AuctionMyCamera.",
+    siteName: "AuctionMyCamera",
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "FAQ | AuctionMyCamera",
+    description:
+      "FAQs covering auctions, bidding rules, payments, delivery/collection, disputes, safety and account rules on AuctionMyCamera.",
+  },
 };
 
+type FaqItem = {
+  id: string;
+  category: string;
+  q: string;
+  a: string;
+};
+
+const FAQS: FaqItem[] = [
+  // AUCTIONS & BIDDING
+  {
+    id: "what-is",
+    category: "Auctions & bidding",
+    q: "What is AuctionMyCamera?",
+    a: "AuctionMyCamera is a UK marketplace built specifically for cameras, lenses and photography gear. Sellers list items into timed auctions, buyers bid, and the platform provides the transaction flow, payment handling, and post-sale steps.",
+  },
+  {
+    id: "auction-format",
+    category: "Auctions & bidding",
+    q: "How do auctions work?",
+    a: "Listings run in timed auctions. While an auction is live, you can place bids. In some cases, soft-close may apply (bids near the end can extend the auction slightly) to reduce last-second sniping. Scheduling and mechanics can evolve over time, but the listing page shows the current live timing rules.",
+  },
+  {
+    id: "are-bids-binding",
+    category: "Auctions & bidding",
+    q: "Are bids binding?",
+    a: "Yes. If you place a bid and win, you’re committing to buy at the winning price plus any clearly shown charges (for example delivery charges if the listing includes them). Don’t bid unless you’re ready to complete the purchase.",
+  },
+  {
+    id: "reserves",
+    category: "Auctions & bidding",
+    q: "Do listings have reserve prices?",
+    a: "Some auctions may use a seller reserve (a minimum acceptable price). If a reserve applies, it may not be shown publicly. If the reserve is not met, the seller may not be required to complete the sale. The listing flow and/or seller dashboard determines how reserves are used on the platform at that time.",
+  },
+  {
+    id: "outbid",
+    category: "Auctions & bidding",
+    q: "What happens if I get outbid?",
+    a: "If someone outbids you, you can bid again while the auction is live. Auctions are competitive by design — bid only what you’re comfortable paying.",
+  },
+  {
+    id: "sniping",
+    category: "Auctions & bidding",
+    q: "Do you prevent last-second sniping?",
+    a: "Where enabled, soft-close means bids placed near the end can extend the end time slightly. This gives genuine bidders a fair chance to respond instead of losing to last-second clicks.",
+  },
+  {
+    id: "buy-now",
+    category: "Auctions & bidding",
+    q: "Is there a Buy Now option?",
+    a: "Some marketplaces include Buy Now on certain listings. If Buy Now exists on a listing, it will be shown clearly. If it’s not shown, assume it’s a standard timed auction.",
+  },
+
+  // PAYMENTS
+  {
+    id: "payments",
+    category: "Payments",
+    q: "How do payments work? Do you store card details?",
+    a: "Card payments are processed securely by a payment provider (for example Stripe). AuctionMyCamera does not store full card numbers or CVV on our servers. Depending on the flow, you may pay via checkout and/or via an authorised saved payment method (where enabled).",
+  },
+  {
+    id: "payment-fails",
+    category: "Payments",
+    q: "What if my payment fails or is declined?",
+    a: "If payment fails, the platform may cancel the win, require you to retry payment, and/or restrict your account if it happens repeatedly. Don’t bid unless you’re confident you can pay promptly.",
+  },
+  {
+    id: "chargebacks",
+    category: "Payments",
+    q: "What about chargebacks and payment disputes?",
+    a: "Unjustified chargebacks harm sellers and the marketplace. If a payment is reversed or charged back, we may restrict the account and may cancel the transaction. If there’s a genuine issue (non-delivery, material misdescription), use the platform dispute route rather than a bank dispute first.",
+  },
+
+  // SELLER PAYOUT / HELD FUNDS
+  {
+    id: "when-seller-paid",
+    category: "Delivery, receipt & payout",
+    q: "When does the seller get paid?",
+    a: "Not instantly. The platform flow is designed to protect both sides. Seller payout is normally released after the buyer confirms receipt in the platform, or after the relevant timeouts/evidence rules described in the full Terms.",
+  },
+  {
+    id: "buyer-confirmation",
+    category: "Delivery, receipt & payout",
+    q: "Why do buyers confirm receipt?",
+    a: "Because it prevents the classic marketplace nightmare: buyer pays, seller ships, and then everyone argues. Receipt confirmation (plus tracking/timeouts) creates a clear, fair point where the deal is considered complete and funds can be released.",
+  },
+
+  // DELIVERY / COLLECTION
+  {
+    id: "dispatch-window",
+    category: "Delivery, receipt & payout",
+    q: "How fast does the seller have to dispatch?",
+    a: "Unless the listing states otherwise, sellers should dispatch within 3 working days after successful payment. Sellers should package items properly, use a delivery method suitable for value, and provide tracking/proof where available.",
+  },
+  {
+    id: "delivery-costs",
+    category: "Delivery, receipt & payout",
+    q: "Who pays delivery/postage?",
+    a: "It depends on the listing. Delivery charges (if any) should be shown clearly on the listing. If collection is offered, the listing should explain how collection works. Always check the listing terms before bidding.",
+  },
+  {
+    id: "collection-safety",
+    category: "Delivery, receipt & payout",
+    q: "Is collection allowed and is it safe?",
+    a: "Some listings may allow collection. If you collect, use common sense: meet in a safe place, keep communication within the platform where possible, and don’t hand over cash outside the platform if the listing requires platform payment. If anything feels off, walk away and report it.",
+  },
+
+  // CONDITION / AUTHENTICITY
+  {
+    id: "condition-accuracy",
+    category: "Condition & authenticity",
+    q: "Do you verify condition, shutter count, or authenticity?",
+    a: "Sellers must describe items accurately (condition, faults, included accessories, compatibility, and where relevant shutter count). We may request additional info if a listing looks suspicious. However, buyers should still read listings carefully and ask questions before bidding — especially for high-value items.",
+  },
+  {
+    id: "photos",
+    category: "Condition & authenticity",
+    q: "Do sellers have to use real photos?",
+    a: "Yes. Photos should be of the actual item being sold, not stock images. Clear photos reduce disputes and build trust.",
+  },
+  {
+    id: "serial-numbers",
+    category: "Condition & authenticity",
+    q: "Should serial numbers be included?",
+    a: "Where relevant, sellers should be prepared to provide serial numbers (or provide them on request) and must not unlawfully remove or alter them. Buyers should be cautious of listings where key identifiers are missing without explanation.",
+  },
+
+  // DISPUTES
+  {
+    id: "disputes",
+    category: "Disputes & problems",
+    q: "What if the item doesn’t arrive, arrives damaged, or isn’t as described?",
+    a: "Raise an issue promptly through the platform. We may request evidence from both parties (tracking, photos, messages). Funds may be held while it’s reviewed. Outcomes can include refund, partial refund, or release of funds depending on evidence and what the Terms allow.",
+  },
+  {
+    id: "damage-in-transit",
+    category: "Disputes & problems",
+    q: "What about courier damage in transit?",
+    a: "Sellers should package items properly and use an appropriate delivery service. If something arrives damaged, document it immediately with photos/video and raise it through the platform. We may ask for packaging photos and delivery evidence to assess what happened.",
+  },
+  {
+    id: "misdescription",
+    category: "Disputes & problems",
+    q: "What counts as ‘materially not as described’?",
+    a: "Think: major faults not disclosed, wrong model, missing key components that change the value/functionality, or condition stated as ‘mint’ when it’s clearly not. Minor cosmetic wear that was visible in photos is different. If you’re unsure, ask before you bid.",
+  },
+  {
+    id: "returns",
+    category: "Disputes & problems",
+    q: "Do I have a right to return an item?",
+    a: "This depends on the listing and seller type (private vs business) and applicable consumer law. The platform dispute process exists to handle genuine non-delivery and material misdescription issues. See the full Terms for how the platform handles disputes and outcomes.",
+  },
+
+  // FEES / RULES / ACCOUNTS
+  {
+    id: "fees",
+    category: "Accounts, fees & rules",
+    q: "What fees apply?",
+    a: "Listing fees may apply (or may be free during promotional periods). A commission may be deducted from the seller’s proceeds on successful sales. Any applicable charges should be shown clearly in the seller flow and/or on the listing. For specifics, see the Fees page.",
+  },
+  {
+    id: "tax",
+    category: "Accounts, fees & rules",
+    q: "Do I have to pay tax on what I sell?",
+    a: "Users are responsible for their own tax obligations. If you’re selling regularly, treat it seriously and get proper advice. Platform fees may be subject to VAT where applicable and shown where required.",
+  },
+  {
+    id: "account-restrictions",
+    category: "Accounts, fees & rules",
+    q: "Can my account be restricted?",
+    a: "Yes. Accounts may be restricted for fraud/suspicion, repeated non-payment, repeated failure to dispatch, harassment/abuse, prohibited items, manipulation (shill bidding/collusion), or unjustified payment disputes.",
+  },
+  {
+    id: "prohibited-items",
+    category: "Accounts, fees & rules",
+    q: "What items are not allowed?",
+    a: "Counterfeit/replica items, stolen goods, illegal items, recalled/unsafe goods, and anything unlawful or prohibited. If we suspect prohibited goods, we may remove the listing and restrict the account.",
+  },
+  {
+    id: "safety-tip",
+    category: "Accounts, fees & rules",
+    q: "What’s the #1 way to avoid problems as a buyer?",
+    a: "Don’t guess. Read the description, scrutinise the photos, and ask questions before bidding. If the seller dodges basic questions or the listing looks too good to be true, move on.",
+  },
+
+  // WHERE TO READ FULL RULES
+  {
+    id: "full-rules",
+    category: "More help",
+    q: "Where can I read the full rules in one place?",
+    a: "Start with Terms & Conditions (the full legal version). Then read How it Works and Fees for plain-English guidance. If anything in a summary conflicts with the full Terms, the full Terms take priority.",
+  },
+  {
+    id: "contact",
+    category: "More help",
+    q: "How do I contact you?",
+    a: "Use the Contact page for support questions. If your question is about a specific listing, include the listing ID and what you need clarified so we can help faster.",
+  },
+];
+
+const CATEGORY_ORDER = [
+  "Auctions & bidding",
+  "Payments",
+  "Delivery, receipt & payout",
+  "Condition & authenticity",
+  "Disputes & problems",
+  "Accounts, fees & rules",
+  "More help",
+];
+
 export default function FaqPage() {
+  // SEO: FAQ schema (good for search features when eligible)
+  const jsonLd = {
+    "@context": "https://schema.org",
+    "@type": "FAQPage",
+    mainEntity: FAQS.map((f) => ({
+      "@type": "Question",
+      name: f.q,
+      acceptedAnswer: { "@type": "Answer", text: f.a },
+    })),
+  };
+
+  const categories = CATEGORY_ORDER.filter((c) => FAQS.some((f) => f.category === c));
+
   return (
-    <main className="min-h-screen bg-black py-12 px-4 text-gray-100">
-      <div className="max-w-5xl mx-auto bg-[#111111] shadow-md rounded-2xl p-8 md:p-12 border border-yellow-700 space-y-10">
-        <header className="space-y-3">
-          <h1 className="text-3xl md:text-4xl font-bold text-[#FFD500]">
+    <main className="min-h-screen bg-slate-950 py-10 px-4 text-slate-100">
+      <div className="max-w-4xl mx-auto bg-slate-900/40 rounded-2xl shadow-lg border border-white/10 p-6 md:p-8 space-y-8">
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
+        />
+
+        <header className="space-y-2">
+          <h1 className="text-3xl md:text-4xl font-extrabold text-sky-300">
             Frequently Asked Questions
           </h1>
-          <p className="text-gray-200 text-sm md:text-base">
-            How the DVLA transfer works, what a nominee is, and how long buyers
-            and sellers should expect the process to take.
+          <p className="text-slate-300 text-sm md:text-base">
+            Longer, clearer answers — because “trust me bro” isn’t a policy.
           </p>
         </header>
 
-        {/* SECTION: Overview */}
-        <section id="overview" className="space-y-4">
-          <h2 className="text-2xl font-semibold text-[#FFD500]">
-            Who actually handles the DVLA transfer?
-          </h2>
-          <p className="text-gray-200 text-sm md:text-base">
-            DVLA is the government body that legally moves the registration
-            number from one keeper or certificate to another. AuctionMyPlate
-            acts as the paperwork middle-man: we collect the buyer&apos;s and
-            seller&apos;s documents, prepare the DVLA application, submit it,
-            and confirm to both parties when the transfer is complete.
+        {/* Jump links */}
+        <nav className="rounded-xl border border-white/10 bg-black/30 p-4">
+          <p className="text-xs font-semibold tracking-wide text-slate-300 mb-2">
+            Jump to:
           </p>
-          <p className="text-gray-200 text-sm md:text-base">
-            You should think of it like this:{" "}
-            <span className="font-semibold">
-              DVLA make the legal change; AuctionMyPlate manages the process and
-              keeps everyone updated.
-            </span>
-          </p>
-        </section>
-
-        {/* SECTION: DVLA fee */}
-        <section id="dvla-fee" className="space-y-4">
-          <h2 className="text-2xl font-semibold text-[#FFD500]">
-            Who pays the DVLA transfer fee (£80)?
-          </h2>
-          <div className="border rounded-xl p-4 bg-[#181818] border-gray-700 space-y-3">
-            <p className="text-gray-200 text-sm md:text-base">
-              DVLA charge a fixed <span className="font-semibold">£80</span> fee
-              to assign or transfer a registration.
-            </p>
-            <ul className="list-disc pl-6 text-gray-200 space-y-1 text-sm md:text-base">
-              <li>
-                <span className="font-semibold">Default:</span> the{" "}
-                <span className="font-semibold">seller</span> covers this cost
-                and it is deducted from the seller&apos;s proceeds when a sale
-                completes.
-              </li>
-              <li>
-                <span className="font-semibold">Legacy exception:</span> a small
-                number of older listings may charge this to the{" "}
-                <span className="font-semibold">buyer</span>. If it applies, it
-                will be clearly shown on the listing and at checkout.
-              </li>
-            </ul>
-            <p className="text-xs text-gray-400">
-              AuctionMyPlate is an independent marketplace and is not affiliated
-              with DVLA.
-            </p>
+          <div className="flex flex-wrap gap-x-4 gap-y-2 text-sm">
+            {categories.map((c) => (
+              <a key={c} href={`#${slugify(c)}`} className="underline text-sky-300 hover:text-sky-200">
+                {c}
+              </a>
+            ))}
           </div>
-        </section>
+        </nav>
 
-        {/* SECTION: Grantee / Nominee */}
-        <section id="grantee-nominee" className="space-y-4">
-          <h2 className="text-2xl font-semibold text-[#FFD500]">
-            Plates on a DVLA certificate – grantee and nominee explained
-          </h2>
-          <p className="text-gray-200 text-sm md:text-base">
-            Many cherished registrations are held on a DVLA certificate:
-          </p>
-          <ul className="list-disc pl-6 text-gray-200 space-y-1 text-sm md:text-base">
-            <li>
-              <span className="font-semibold">
-                V750 Certificate of Entitlement
-              </span>{" "}
-              – a plate that&apos;s never been on a vehicle; or
-            </li>
-            <li>
-              <span className="font-semibold">V778 Retention Document</span> – a
-              plate that has been removed from a vehicle and is being kept
-              &quot;on retention&quot;.
-            </li>
-          </ul>
-          <p className="text-gray-200 text-sm md:text-base">
-            On these certificates you will usually see two names:
-          </p>
-          <ul className="list-disc pl-6 text-gray-200 space-y-1 text-sm md:text-base">
-            <li>
-              <span className="font-semibold">Grantee / Purchaser</span> – the
-              person who currently owns the right to the registration.
-            </li>
-            <li>
-              <span className="font-semibold">Nominee</span> – the person whose
-              vehicle the number can be assigned to if it is not going onto the
-              grantee&apos;s own car.
-            </li>
-          </ul>
-          <p className="text-gray-200 text-sm md:text-base">
-            Only the <span className="font-semibold">grantee</span> can instruct
-            DVLA to assign the number to a vehicle. The nominee does{" "}
-            <span className="font-semibold">not</span> own the registration and
-            has no rights over it until DVLA has actually assigned the number to
-            a vehicle registered in their name. Once DVLA completes the
-            assignment, the rights to that registration pass to the{" "}
-            <span className="font-semibold">
-              registered keeper of the vehicle
-            </span>
-            .
-          </p>
-        </section>
+        {/* FAQ groups */}
+        {categories.map((cat) => (
+          <section key={cat} id={slugify(cat)} className="space-y-3">
+            <h2 className="text-xl md:text-2xl font-bold text-sky-300">
+              {cat}
+            </h2>
 
-        {/* SECTION: Do I need to be nominee? */}
-        <section id="need-nominee" className="space-y-4">
-          <h2 className="text-2xl font-semibold text-[#FFD500]">
-            Do I have to be named as the nominee before I buy a plate?
-          </h2>
-          <p className="text-gray-200 text-sm md:text-base">
-            No. You do <span className="font-semibold">not</span> need to be
-            named as the nominee on the certificate before you buy a plate
-            through AuctionMyPlate.
-          </p>
-          <p className="text-gray-200 text-sm md:text-base">
-            DVLA allow the grantee to{" "}
-            <span className="font-semibold">
-              add or change a nominee up until, or at the same time as, the
-              registration is assigned
-            </span>{" "}
-            to a vehicle. In plain English: we can update the details when we
-            know who you are and which car the plate is going onto.
-          </p>
-          <p className="text-gray-200 text-sm md:text-base">
-            When you buy a plate that is held on a certificate:
-          </p>
-          <ol className="list-decimal pl-6 text-gray-200 space-y-1 text-sm md:text-base">
-            <li>
-              The seller (or AuctionMyPlate, if we hold the certificate) acts
-              as the <span className="font-semibold">grantee</span>.
-            </li>
-            <li>
-              We collect your full legal name and the details of the vehicle you
-              want the plate on (from your V5C log book).
-            </li>
-            <li>
-              As part of the DVLA process we either{" "}
-              <span className="font-semibold">
-                update the nominee details into your name
-              </span>{" "}
-              and/or{" "}
-              <span className="font-semibold">
-                assign the registration straight to your vehicle
-              </span>{" "}
-              using DVLA&apos;s official online service.
-            </li>
-          </ol>
-          <p className="text-gray-200 text-sm md:text-base">
-            You usually never need to deal with DVLA directly to change a
-            nominee – we handle it as part of completing the transfer.
-          </p>
-        </section>
-
-        {/* SECTION: Buyer timeline */}
-        <section id="buyer-timeline" className="space-y-4">
-          <h2 className="text-2xl font-semibold text-[#FFD500]">
-            Buyer timeline – how long does the transfer take?
-          </h2>
-          <p className="text-gray-200 text-sm md:text-base">
-            Timescales depend on how DVLA process the application. AuctionMyPlate
-            submits your transfer promptly once payment has cleared and you have
-            provided the documents we ask for. DVLA&apos;s own processing times
-            are outside our control, so the timings below are a{" "}
-            <span className="font-semibold">realistic guide</span>.
-          </p>
-
-          <div className="grid md:grid-cols-2 gap-6">
-            <div className="border rounded-xl p-4 bg-[#181818] border-gray-700">
-              <h3 className="font-semibold text-[#FFD500] mb-2">
-                Standard / online cases
-              </h3>
-              <ul className="list-disc pl-5 text-gray-200 space-y-1 text-sm">
-                <li>
-                  Once we have everything we need, we normally submit the DVLA
-                  transfer within{" "}
-                  <span className="font-semibold">1–2 working days</span>.
-                </li>
-                <li>
-                  Where DVLA can process the assignment online and no inspection
-                  is needed, the plate is usually assigned on their system{" "}
-                  <span className="font-semibold">the same day</span>.
-                </li>
-                <li>
-                  In practice, most buyers can be fully assigned and ready to
-                  fit plates within about{" "}
-                  <span className="font-semibold">1–14 days</span> from payment,
-                  as long as documents are supplied quickly.
-                </li>
-              </ul>
+            <div className="space-y-3">
+              {FAQS.filter((f) => f.category === cat).map((f) => (
+                <details
+                  key={f.id}
+                  id={f.id}
+                  className="rounded-xl border border-white/10 bg-black/30 p-4"
+                >
+                  <summary className="cursor-pointer select-none font-semibold text-slate-100">
+                    {f.q}
+                  </summary>
+                  <p className="mt-3 text-sm leading-relaxed text-slate-300">
+                    {f.a}
+                  </p>
+                </details>
+              ))}
             </div>
+          </section>
+        ))}
 
-            <div className="border rounded-xl p-4 bg-[#181818] border-gray-700">
-              <h3 className="font-semibold text-[#FFD500] mb-2">
-                Postal / complex cases
-              </h3>
-              <ul className="list-disc pl-5 text-gray-200 space-y-1 text-sm">
-                <li>
-                  If DVLA require a postal application or extra checks (for
-                  example vehicle-to-vehicle transfer or missing paperwork),
-                  they typically take around{" "}
-                  <span className="font-semibold">2–4 weeks</span> to complete
-                  the transfer once they receive everything.
-                </li>
-                <li>
-                  DVLA then post out updated documents such as your new V5C log
-                  book. They advise allowing up to{" "}
-                  <span className="font-semibold">4 weeks</span> for documents
-                  to arrive.
-                </li>
-                <li>
-                  As a sensible worst-case, buyers should assume the entire
-                  process from payment to final paperwork can take up to{" "}
-                  <span className="font-semibold">6 weeks</span>, although in
-                  many cases it is much quicker.
-                </li>
-              </ul>
-            </div>
-          </div>
-        </section>
-
-        {/* SECTION: When should buyers order / fit plates? */}
-        <section id="order-fit-plates" className="space-y-4">
-          <h2 className="text-2xl font-semibold text-[#FFD500]">
-            When should I order and fit my physical plates?
-          </h2>
-          <p className="text-gray-200 text-sm md:text-base">
-            You must{" "}
-            <span className="font-semibold">
-              never display a registration on a vehicle until DVLA has assigned
-              it to that vehicle
-            </span>
-            . Doing so can result in fines and the registration being withdrawn.
+        <div className="rounded-xl border border-white/10 bg-black/30 p-4 text-xs text-slate-400">
+          <p>
+            <strong className="text-sky-300">Brand note:</strong> AuctionMyCamera is an independent marketplace and is not
+            affiliated with or endorsed by any camera manufacturer. Brand names are used only to describe items listed
+            by sellers.
           </p>
-          <p className="text-gray-200 text-sm md:text-base">Our guidance is:</p>
-          <ul className="list-disc pl-6 text-gray-200 space-y-1 text-sm md:text-base">
-            <li>
-              <span className="font-semibold">
-                Wait until AuctionMyPlate confirms the DVLA assignment is
-                complete.
-              </span>{" "}
-              We will email you clearly when the plate is now on your vehicle.
-            </li>
-            <li>
-              As soon as we send that confirmation, you can{" "}
-              <span className="font-semibold">
-                obtain physical plates immediately
-              </span>{" "}
-              from a DVLA-registered supplier, using either your updated V5C or
-              the confirmation we provide.
-            </li>
-            <li>
-              Fit the plates and update your insurance and any toll / charging
-              accounts without delay so all records match the new registration.
-            </li>
-          </ul>
-        </section>
+        </div>
 
-        {/* SECTION: Seller timeline */}
-        <section id="seller-timeline" className="space-y-4">
-          <h2 className="text-2xl font-semibold text-[#FFD500]">
-            Seller timeline – when do I get paid?
-          </h2>
-          <p className="text-gray-200 text-sm md:text-base">
-            For security and to protect buyers and sellers, AuctionMyPlate{" "}
-            <span className="font-semibold">
-              only releases sale proceeds once the DVLA transfer is complete
-            </span>{" "}
-            and the registration has safely left your control.
-          </p>
-
-          <div className="border rounded-xl p-4 bg-[#181818] border-gray-700">
-            <h3 className="font-semibold text-[#FFD500] mb-2">
-              Typical seller journey
-            </h3>
-            <ol className="list-decimal pl-6 text-gray-200 space-y-1 text-sm">
-              <li>
-                Your plate sells and the buyer&apos;s payment clears via Stripe.
-              </li>
-              <li>
-                We request the documents we need from you (for example V750,
-                V778 or your V5C) and from the buyer.
-              </li>
-              <li>
-                Once we have everything, we submit the DVLA transfer, usually
-                within <span className="font-semibold">1–2 working days</span>.
-              </li>
-              <li>
-                DVLA complete the transfer. Online cases can be same-day;
-                postal / complex cases typically take{" "}
-                <span className="font-semibold">2–4 weeks</span>.
-              </li>
-              <li>
-                After DVLA confirm the transfer, we run final fraud / compliance
-                checks and then release your proceeds to your nominated bank
-                account.
-              </li>
-              <li className="pt-1">
-                Your final payout is your sale price minus any applicable fees
-                (for example, commission and the DVLA fee where the seller covers it).
-              </li>
-            </ol>
-          </div>
-
-          <div className="border rounded-xl p-4 bg-[#181818] border-gray-700">
-            <h3 className="font-semibold text-[#FFD500] mb-2">
-              Maximum payout timing
-            </h3>
-            <p className="text-gray-200 text-sm mb-2">
-              Our aim is to pay sellers as quickly as possible while keeping the
-              process secure:
-            </p>
-            <ul className="list-disc pl-6 text-gray-200 space-y-1 text-sm">
-              <li>
-                In most straightforward cases, you should receive your funds{" "}
-                <span className="font-semibold">within 2–5 working days</span>{" "}
-                of DVLA confirming the transfer.
-              </li>
-              <li>
-                As a clear upper limit, we advise that{" "}
-                <span className="font-semibold">
-                  the entire process from buyer&apos;s payment to seller payout
-                  can take up to 6 weeks
-                </span>
-                , depending on DVLA processing times and how quickly documents
-                are provided.
-              </li>
-              <li>
-                If DVLA or our fraud checks flag anything unusual, we will
-                contact you and keep you updated rather than leaving you in the
-                dark.
-              </li>
-            </ul>
-          </div>
-        </section>
-
-        {/* SECTION: Summary */}
-        <section id="summary" className="space-y-3 border-t border-gray-700 pt-6">
-          <h2 className="text-2xl font-semibold text-[#FFD500]">In summary</h2>
-          <p className="text-gray-200 text-sm md:text-base">
-            AuctionMyPlate manages the DVLA process end-to-end: certificates,
-            grantee / nominee details, and assignment to the buyer&apos;s
-            vehicle. Buyers should wait for our confirmation before fitting
-            plates, and sellers are paid once the transfer is complete, with
-            realistic maximum timescales explained up-front.
-          </p>
-        </section>
+        <div className="border-t border-white/10 pt-6 flex flex-wrap gap-x-4 gap-y-2 text-sm text-slate-300">
+          <Link href="/how-it-works" className="underline text-sky-300">
+            How it works
+          </Link>
+          <span className="text-white/20">·</span>
+          <Link href="/fees" className="underline text-sky-300">
+            Fees
+          </Link>
+          <span className="text-white/20">·</span>
+          <Link href="/terms" className="underline text-sky-300">
+            Terms
+          </Link>
+          <span className="text-white/20">·</span>
+          <Link href="/contact" className="underline text-sky-300">
+            Contact
+          </Link>
+        </div>
       </div>
     </main>
   );
+}
+
+function slugify(input: string) {
+  return input
+    .toLowerCase()
+    .replace(/&/g, "and")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/(^-|-$)/g, "");
 }

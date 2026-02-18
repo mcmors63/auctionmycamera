@@ -35,22 +35,34 @@ export default function Footer() {
               </div>
               <ul className="mt-3 space-y-2 text-sm">
                 <li>
-                  <Link href="/current-listings" className="underline hover:text-white transition">
+                  <Link
+                    href="/current-listings"
+                    className="underline hover:text-white transition"
+                  >
                     Browse auctions
                   </Link>
                 </li>
                 <li>
-                  <Link href="/sell" className="underline hover:text-white transition">
+                  <Link
+                    href="/sell"
+                    className="underline hover:text-white transition"
+                  >
                     Sell your gear
                   </Link>
                 </li>
                 <li>
-                  <Link href="/how-it-works" className="underline hover:text-white transition">
+                  <Link
+                    href="/how-it-works"
+                    className="underline hover:text-white transition"
+                  >
                     How it works
                   </Link>
                 </li>
                 <li>
-                  <Link href="/about" className="underline hover:text-white transition">
+                  <Link
+                    href="/about"
+                    className="underline hover:text-white transition"
+                  >
                     About
                   </Link>
                 </li>
@@ -63,15 +75,14 @@ export default function Footer() {
               </div>
               <ul className="mt-3 space-y-2 text-sm">
                 <li>
-                  <Link href="/contact" className="underline hover:text-white transition">
+                  <Link
+                    href="/contact"
+                    className="underline hover:text-white transition"
+                  >
                     Contact
                   </Link>
                 </li>
-                <li>
-                  <Link href="/blog" className="underline hover:text-white transition">
-                    Blog
-                  </Link>
-                </li>
+                {/* ✅ Blog removed */}
               </ul>
             </div>
 
@@ -81,17 +92,26 @@ export default function Footer() {
               </div>
               <ul className="mt-3 space-y-2 text-sm">
                 <li>
-                  <Link href="/terms" className="underline hover:text-white transition">
+                  <Link
+                    href="/terms"
+                    className="underline hover:text-white transition"
+                  >
                     Terms &amp; Conditions
                   </Link>
                 </li>
                 <li>
-                  <Link href="/privacy" className="underline hover:text-white transition">
+                  <Link
+                    href="/privacy"
+                    className="underline hover:text-white transition"
+                  >
                     Privacy Policy
                   </Link>
                 </li>
                 <li>
-                  <Link href="/cookies" className="underline hover:text-white transition">
+                  <Link
+                    href="/cookies"
+                    className="underline hover:text-white transition"
+                  >
                     Cookie Policy
                   </Link>
                 </li>

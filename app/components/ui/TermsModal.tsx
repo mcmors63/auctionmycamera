@@ -1,25 +1,69 @@
 // app/components/ui/TermsModal.tsx
 "use client";
 
+import { useEffect, useRef } from "react";
 import Link from "next/link";
 
 export default function TermsModal({ onClose }: { onClose: () => void }) {
+  const year = new Date().getFullYear();
+  const panelRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    // Lock background scroll
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+
+    // Close on Escape
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKeyDown);
+
+    // Focus the modal panel for accessibility
+    panelRef.current?.focus();
+
+    return () => {
+      document.body.style.overflow = prevOverflow;
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [onClose]);
+
   return (
-    <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 px-4">
-      <div className="bg-white rounded-2xl shadow-2xl max-w-3xl w-full max-h-[90vh] overflow-hidden relative">
+    <div
+      className="fixed inset-0 z-50 px-4 bg-black/70 backdrop-blur-sm flex items-center justify-center"
+      onMouseDown={(e) => {
+        // Click outside the panel closes the modal
+        if (e.target === e.currentTarget) onClose();
+      }}
+      role="presentation"
+    >
+      <div
+        ref={panelRef}
+        tabIndex={-1}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="terms-modal-title"
+        className="bg-white rounded-2xl shadow-2xl max-w-3xl w-full max-h-[90vh] overflow-hidden relative outline-none"
+      >
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b">
           <div>
-            <h2 className="text-2xl font-bold text-gray-900">
+            <h2
+              id="terms-modal-title"
+              className="text-2xl font-bold text-gray-900"
+            >
               Terms &amp; Conditions (Summary)
             </h2>
-            <p className="text-xs text-gray-500">Effective Date: February 2026</p>
+            <p className="text-xs text-gray-500">
+              Effective Date: February 2026
+            </p>
           </div>
 
           <button
             className="text-gray-500 hover:text-gray-800 text-xl"
             onClick={onClose}
             aria-label="Close terms"
+            type="button"
           >
             ✕
           </button>
@@ -35,9 +79,7 @@ export default function TermsModal({ onClose }: { onClose: () => void }) {
           </p>
 
           <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
-            <p className="font-semibold text-gray-900 mb-1">
-              This is a summary.
-            </p>
+            <p className="font-semibold text-gray-900 mb-1">This is a summary.</p>
             <p className="text-gray-700">
               The full legal Terms live on the{" "}
               <Link href="/terms" className="underline font-semibold">
@@ -65,16 +107,16 @@ export default function TermsModal({ onClose }: { onClose: () => void }) {
               You are responsible for keeping your login details secure and for
               all activity on your account.
             </li>
-            <li>
-              Notify us immediately if you suspect unauthorised access.
-            </li>
+            <li>Notify us immediately if you suspect unauthorised access.</li>
             <li>
               We may suspend or restrict accounts for abuse, fraud, suspicious
               activity, chargeback misuse, or breaches of these Terms.
             </li>
           </ul>
 
-          <h3 className="font-semibold text-lg mt-4">3. Listings, Condition &amp; Accuracy</h3>
+          <h3 className="font-semibold text-lg mt-4">
+            3. Listings, Condition &amp; Accuracy
+          </h3>
           <ul className="list-disc ml-5 space-y-1">
             <li>
               Sellers must describe items honestly (condition, faults, shutter
@@ -97,9 +139,7 @@ export default function TermsModal({ onClose }: { onClose: () => void }) {
 
           <h3 className="font-semibold text-lg mt-4">4. Auction Rules</h3>
           <ul className="list-disc ml-5 space-y-1">
-            <li>
-              Auctions run on timed windows. Timing and scheduling may change.
-            </li>
+            <li>Auctions run on timed windows. Timing and scheduling may change.</li>
             <li>
               <strong>Bids are binding.</strong> If you bid and win, you commit to
               purchase (subject to payment verification and platform checks).
@@ -114,15 +154,15 @@ export default function TermsModal({ onClose }: { onClose: () => void }) {
             </li>
           </ul>
 
-          <h3 className="font-semibold text-lg mt-4">5. Winning, Payment &amp; Authorisation</h3>
+          <h3 className="font-semibold text-lg mt-4">
+            5. Winning, Payment &amp; Authorisation
+          </h3>
           <ul className="list-disc ml-5 space-y-1">
             <li>
               When you win, payment is collected via our payment provider (e.g. Stripe),
               using the checkout flow and/or an authorised saved payment method (where enabled).
             </li>
-            <li>
-              We do not store full card details on our servers.
-            </li>
+            <li>We do not store full card details on our servers.</li>
             <li>
               If payment fails, is reversed, or a charge is disputed, we may cancel
               the sale, restrict the account, and/or take steps to protect the marketplace.
@@ -134,15 +174,16 @@ export default function TermsModal({ onClose }: { onClose: () => void }) {
           </h3>
           <ul className="list-disc ml-5 space-y-1">
             <li>
-              Sellers must dispatch or make the item available within the{" "}
-              <strong>delivery/dispatch window</strong> stated on the listing and/or in the seller dashboard.
+              Sellers must dispatch (or make the item available for collection) within the
+              delivery/dispatch window shown on the listing and in the seller dashboard. If no special
+              terms are shown, dispatch is usually expected within <strong>3 working days</strong>.
             </li>
             <li>
               Where shipping is used, sellers should provide tracking/proof of dispatch where available
               and package items safely.
             </li>
             <li>
-              Where collection is offered, both parties must follow any agreed collection instructions
+              Where collection is offered, both parties must follow any agreed instructions
               and behave respectfully and safely.
             </li>
           </ul>
@@ -155,9 +196,7 @@ export default function TermsModal({ onClose }: { onClose: () => void }) {
             protect both sides.
           </p>
           <ul className="list-disc ml-5 space-y-1">
-            <li>
-              The seller does <strong>not</strong> receive funds immediately on a win.
-            </li>
+            <li>The seller does <strong>not</strong> receive funds immediately on a win.</li>
             <li>
               Funds are released after the buyer confirms receipt through the platform{" "}
               <strong>or</strong> the platform flow completes based on evidence available (for example,
@@ -244,19 +283,23 @@ export default function TermsModal({ onClose }: { onClose: () => void }) {
           </div>
 
           <p className="mt-4 text-xs text-gray-500">
-            © {new Date().getFullYear()} AuctionMyCamera.co.uk. All rights reserved.
+            © {year} AuctionMyCamera.co.uk. All rights reserved.
           </p>
         </div>
 
         {/* Footer */}
         <div className="px-6 py-3 bg-gray-50 border-t flex items-center justify-between gap-3">
-          <Link href="/terms" className="text-sm underline font-semibold text-gray-800">
+          <Link
+            href="/terms"
+            className="text-sm underline font-semibold text-gray-800"
+          >
             View full Terms
           </Link>
 
           <button
             onClick={onClose}
             className="px-4 py-2 bg-gray-900 text-white rounded-md text-sm hover:bg-black transition"
+            type="button"
           >
             Close
           </button>
