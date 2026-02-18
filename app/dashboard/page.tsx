@@ -252,21 +252,42 @@ export default function DashboardPage() {
       // 2) DATA LOAD
       try {
         // PROFILE
-        const profRes = await databases.listDocuments(
-          process.env.NEXT_PUBLIC_APPWRITE_PROFILES_DATABASE_ID!,
-          process.env.NEXT_PUBLIC_APPWRITE_PROFILES_COLLECTION_ID!,
-          [Query.equal("email", current.email)]
-        );
-        if (profRes.documents.length > 0) {
-          setProfile(profRes.documents[0] as Profile);
-        }
+       let prof: any = null;
+        
+       try {
+       // ✅ Best practice: profile doc id == Appwrite user id
+// In this project we use env-based IDs (and keep it schema-tolerant)
+const PROFILES_DB_ID =
+  process.env.NEXT_PUBLIC_APPWRITE_PROFILES_DATABASE_ID ||
+  process.env.NEXT_PUBLIC_APPWRITE_PLATES_DATABASE_ID!;
 
-        // PLATES
-        const platesRes = await databases.listDocuments(
-          PLATES_DB_ID,
-          PLATES_COLLECTION_ID,
-          [Query.equal("seller_email", current.email)]
-        );
+const PROFILES_COLLECTION_ID =
+  process.env.NEXT_PUBLIC_APPWRITE_PROFILES_COLLECTION_ID || "profiles";
+
+try {
+  prof = await databases.getDocument(
+    PROFILES_DB_ID,
+    PROFILES_COLLECTION_ID,
+    current.$id
+  );
+} catch {
+  prof = null;
+}
+
+} catch (e) {
+  // If there is genuinely no profile doc yet, keep it null.
+  prof = null;
+}
+
+setProfile(prof);
+
+
+     // PLATES
+const platesRes = await databases.listDocuments(
+  PLATES_DB_ID,
+  PLATES_COLLECTION_ID,
+  [Query.equal("seller_email", current.email)]
+);
 
         const docs = (platesRes.documents ?? []) as unknown as Plate[];
 

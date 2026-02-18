@@ -4,7 +4,7 @@ import type React from "react";
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Client, Account } from "appwrite";
+import { Client, Account, Storage, ID } from "appwrite";
 import { getAuctionWindow } from "@/lib/getAuctionWindow";
 
 type GearType =
@@ -31,6 +31,20 @@ const client = new Client()
   .setProject(process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID!);
 
 const account = new Account(client);
+const storage = new Storage(client);
+
+// ✅ Storage bucket for camera photos
+const CAMERA_IMAGES_BUCKET_ID =
+  process.env.NEXT_PUBLIC_APPWRITE_CAMERA_IMAGES_BUCKET_ID || "";
+
+// Small helper: keep only safe-ish filenames
+function safeFilename(name: string) {
+  const clean = String(name || "photo")
+    .replace(/[^a-zA-Z0-9._-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+  return clean || "photo";
+}
 
 function formatLondon(dt: Date) {
   // Always show UK time regardless of the visitor’s locale/timezone.
@@ -53,6 +67,8 @@ export default function SellClient() {
 
   const [verifySending, setVerifySending] = useState(false);
   const [verifyMsg, setVerifyMsg] = useState<string>("");
+
+  const [submitting, setSubmitting] = useState(false);
 
   // ✅ Require login to sell
   useEffect(() => {
@@ -124,9 +140,38 @@ export default function SellClient() {
     };
   }, []);
 
+  async function uploadPhotoIfProvided(file: File | null): Promise<string | null> {
+    if (!file) return null;
+
+    if (!CAMERA_IMAGES_BUCKET_ID) {
+      throw new Error(
+        "Missing env NEXT_PUBLIC_APPWRITE_CAMERA_IMAGES_BUCKET_ID (needed for photo uploads)."
+      );
+    }
+
+    // Basic size guard (optional). 10MB is a sensible default.
+    const maxBytes = 10 * 1024 * 1024;
+    if (file.size > maxBytes) {
+      throw new Error("Photo is too large. Please upload an image under 10MB.");
+    }
+
+    // Best effort: ensure filename isn't weird
+    const named = new File([file], safeFilename(file.name), { type: file.type });
+
+    const created = await storage.createFile(
+      CAMERA_IMAGES_BUCKET_ID,
+      ID.unique(),
+      named
+    );
+
+    return String((created as any)?.$id || "");
+  }
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setVerifyMsg("");
+
+    if (submitting) return;
 
     if (!user?.email) {
       alert("⚠️ Please log in before submitting a listing.");
@@ -140,7 +185,8 @@ export default function SellClient() {
       return;
     }
 
-    const formData = new FormData(e.target as HTMLFormElement);
+    const form = e.target as HTMLFormElement;
+    const formData = new FormData(form);
 
     const item_title = String(formData.get("item_title") || "").trim();
     const gear_type = String(formData.get("gear_type") || "camera") as GearType;
@@ -189,43 +235,61 @@ export default function SellClient() {
     // ✅ Backwards-compatible listing ref (keeps legacy pages happy while we migrate schema)
     const legacy_listing_ref = `AMC${String(Date.now()).slice(-6)}`;
 
-    // ✅ Payload: server must trust auth, but keep legacy-safe fields
-    const payload: Record<string, unknown> = {
-      // (Server ignores these and uses the authed user anyway, but harmless)
-      sellerEmail: user.email,
-      owner_id: user.$id,
-
-      // Camera fields
-      item_title,
-      gear_type,
-      era,
-      brand: brand || null,
-      model: model || null,
-      condition,
-      description: description || null,
-      shutter_count:
-        shutter_count_raw && String(shutter_count_raw).trim() !== ""
-          ? Number(shutter_count_raw)
-          : null,
-      lens_mount: lens_mount || null,
-      focal_length: focal_length || null,
-      max_aperture: max_aperture || null,
-
-      // Pricing
-      starting_price,
-      reserve_price,
-
-      // Auction timing (approval will overwrite later anyway)
-      auction_start,
-      auction_end,
-
-      // Legacy fields (until every page is migrated)
-      reg_number: legacy_listing_ref,
-      plate_status: "available",
-      expiry_date: null,
-    };
+    // Photo file (optional)
+    const photoFile = (formData.get("photo") as File | null) || null;
 
     try {
+      setSubmitting(true);
+
+      // 1) upload photo first (if provided)
+      let image_id: string | null = null;
+      if (photoFile && photoFile.size > 0) {
+        image_id = await uploadPhotoIfProvided(photoFile);
+        if (!image_id) {
+          throw new Error("Photo upload failed (no file id returned).");
+        }
+      }
+
+      // ✅ Payload: server must trust auth, but keep legacy-safe fields
+      const payload: Record<string, unknown> = {
+        // (Server ignores these and uses the authed user anyway, but harmless)
+        sellerEmail: user.email,
+        owner_id: user.$id,
+
+        // Camera fields
+        item_title,
+        gear_type,
+        era,
+        brand: brand || null,
+        model: model || null,
+        condition,
+        description: description || null,
+        shutter_count:
+          shutter_count_raw && String(shutter_count_raw).trim() !== ""
+            ? Number(shutter_count_raw)
+            : null,
+        lens_mount: lens_mount || null,
+        focal_length: focal_length || null,
+        max_aperture: max_aperture || null,
+
+        // ✅ Photo reference (new)
+        image_id: image_id || null,
+
+        // Pricing
+        starting_price,
+        reserve_price,
+
+        // Auction timing (approval will overwrite later anyway)
+        auction_start,
+        auction_end,
+
+        // Legacy fields (until every page is migrated)
+        reg_number: legacy_listing_ref,
+        plate_status: "available",
+        expiry_date: null,
+      };
+
+      // 2) create listing
       const jwt = await getJwtOrThrow();
 
       const res = await fetch("/api/listings", {
@@ -263,11 +327,13 @@ export default function SellClient() {
         )}\nEnds: ${formatLondon(end)}`
       );
 
-      (e.target as HTMLFormElement).reset();
+      form.reset();
       setGearType("camera");
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error submitting listing:", error);
-      alert("❌ Failed to submit listing, please try again.");
+      alert(`❌ Failed to submit listing.\n\n${String(error?.message || "Please try again.")}`);
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -381,6 +447,20 @@ export default function SellClient() {
             required
           />
           <p className={hintBase}>Keep it clear and specific — brand + model is ideal.</p>
+        </div>
+
+        {/* ✅ Photo upload */}
+        <div>
+          <label className={labelBase}>Photo (optional)</label>
+          <input
+            name="photo"
+            type="file"
+            accept="image/*"
+            className={inputBase}
+          />
+          <p className={hintBase}>
+            Add one clear photo (front/angle). You can add more later.
+          </p>
         </div>
 
         <div className="grid sm:grid-cols-2 gap-4">
@@ -500,11 +580,11 @@ export default function SellClient() {
 
         <button
           type="submit"
-          disabled={!user.emailVerification}
+          disabled={!user.emailVerification || submitting}
           className="w-full rounded-xl bg-primary text-primary-foreground px-4 py-3 font-semibold hover:opacity-90 transition focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-60"
           title={!user.emailVerification ? "Verify your email to submit listings" : undefined}
         >
-          Submit listing
+          {submitting ? "Submitting…" : "Submit listing"}
         </button>
 
         <p className="text-xs text-muted-foreground text-center">

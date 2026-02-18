@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { Client, Databases } from "appwrite";
 import AuctionTimer from "../../current-listings/AuctionTimer";
@@ -23,6 +23,10 @@ const LISTINGS_COLLECTION_ID =
   process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_COLLECTION_ID ||
   process.env.NEXT_PUBLIC_APPWRITE_PLATES_COLLECTION_ID!;
 
+// ✅ Storage bucket for camera images
+const CAMERA_IMAGES_BUCKET_ID =
+  process.env.NEXT_PUBLIC_APPWRITE_CAMERA_IMAGES_BUCKET_ID || "";
+
 // -----------------------------
 // Types
 // -----------------------------
@@ -40,7 +44,11 @@ export type Listing = {
   condition?: string | null;
   description?: string | null;
 
+  // Old approach
   image_url?: string | null;
+
+  // New approach (Appwrite Storage)
+  image_id?: string | null;
 
   shutter_count?: number | null;
   lens_mount?: string | null;
@@ -151,6 +159,35 @@ function isUpdateEvent(events: string[] | undefined) {
   return events.some((e) => typeof e === "string" && e.endsWith(".update"));
 }
 
+// ✅ Build Appwrite Storage view URL for images (works with existing session cookies)
+function buildStorageViewUrl(fileId: string) {
+  const endpoint = String(process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT || "").replace(/\/+$/, "");
+  const project = String(process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID || "").trim();
+
+  if (!endpoint || !project || !CAMERA_IMAGES_BUCKET_ID || !fileId) return null;
+
+  // Using the REST endpoint directly keeps this simple and fast.
+  return `${endpoint}/storage/buckets/${CAMERA_IMAGES_BUCKET_ID}/files/${encodeURIComponent(
+    fileId
+  )}/view?project=${encodeURIComponent(project)}`;
+}
+
+// ✅ Prefer: image_url (public) -> image_id (storage) -> fallback
+function pickImageSrc(l: Listing) {
+  const anyL = l as any;
+
+  const explicit = String(anyL.image_url || "").trim();
+  if (explicit) return explicit;
+
+  const id = String(anyL.image_id || "").trim();
+  if (id) {
+    const url = buildStorageViewUrl(id);
+    if (url) return url;
+  }
+
+  return pickFallbackImage(l);
+}
+
 export default function ListingDetailsClient({ initial }: { initial: Listing }) {
   const [listing, setListing] = useState<Listing | null>(initial ?? null);
 
@@ -258,7 +295,6 @@ export default function ListingDetailsClient({ initial }: { initial: Listing }) 
   const buyNow = pickBuyNow(listing);
 
   const currentBidRaw = typeof anyL.current_bid === "number" ? anyL.current_bid : null;
-  const currentBidForMath = typeof currentBidRaw === "number" ? currentBidRaw : 0;
 
   const startingPrice =
     typeof anyL.starting_price === "number" && anyL.starting_price > 0 ? anyL.starting_price : null;
@@ -271,7 +307,8 @@ export default function ListingDetailsClient({ initial }: { initial: Listing }) 
   const metaBits = [niceEnum(anyL.gear_type), niceEnum(anyL.condition), niceEnum(anyL.era)].filter(Boolean);
   const metaLine = metaBits.join(" • ");
 
-  const imgSrc = String(anyL.image_url || "").trim() || pickFallbackImage(listing);
+  // ✅ Updated image picker: supports image_id (Storage) + legacy image_url
+  const imgSrc = useMemo(() => pickImageSrc(listing), [listing]);
 
   const rawEndStr = String(anyL.auction_end ?? anyL.end_time ?? "");
   const rawStartStr = String(anyL.auction_start ?? anyL.start_time ?? "");
@@ -290,8 +327,6 @@ export default function ListingDetailsClient({ initial }: { initial: Listing }) 
           .filter(Boolean)
           .join(" • ")
       : "";
-
-  const canBid = isLive && !isSold;
 
   // Sold price display (prefer sold_price, else buy now if sold via buy_now, else current bid)
   const soldPrice =
@@ -376,6 +411,11 @@ export default function ListingDetailsClient({ initial }: { initial: Listing }) 
               alt={name}
               className="w-full h-[320px] md:h-[420px] object-cover block"
               loading="lazy"
+              onError={(e) => {
+                // if Storage link fails for some reason, fall back visually
+                const el = e.currentTarget as HTMLImageElement;
+                el.src = pickFallbackImage(listing);
+              }}
             />
           </div>
         </div>
@@ -443,9 +483,7 @@ export default function ListingDetailsClient({ initial }: { initial: Listing }) 
                 ) : (
                   <>
                     <p>
-                      <span className="font-semibold">
-                        {isLive ? "Auction ends in:" : "Auction starts in:"}
-                      </span>
+                      <span className="font-semibold">{isLive ? "Auction ends in:" : "Auction starts in:"}</span>
                     </p>
                     <div className="mt-1 inline-block">
                       {isLive ? (
