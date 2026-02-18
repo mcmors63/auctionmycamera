@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import Script from "next/script";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Client, Account, Databases, ID } from "appwrite";
 import {
   CheckCircleIcon,
@@ -21,6 +22,19 @@ const client = new Client()
 
 const account = new Account(client);
 const databases = new Databases(client);
+
+// ─────────────────────────────────────────────
+// TURNSTILE TYPES
+// ─────────────────────────────────────────────
+declare global {
+  interface Window {
+    turnstile?: {
+      render: (el: HTMLElement, options: any) => string;
+      reset: (widgetId?: string) => void;
+      remove: (widgetId: string) => void;
+    };
+  }
+}
 
 // ─────────────────────────────────────────────
 // REGISTER CLIENT
@@ -62,6 +76,92 @@ export default function RegisterClient() {
     color: "",
     score: 0,
   });
+
+  // ─────────────────────────────────────────────
+  // TURNSTILE STATE
+  // ─────────────────────────────────────────────
+  const TURNSTILE_SITE_KEY = (process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY || "").trim();
+  const turnstileElRef = useRef<HTMLDivElement | null>(null);
+  const turnstileWidgetIdRef = useRef<string | null>(null);
+
+  const [turnstileToken, setTurnstileToken] = useState<string>("");
+  const [turnstileError, setTurnstileError] = useState<string>("");
+
+  const canUseTurnstile = useMemo(() => !!TURNSTILE_SITE_KEY, [TURNSTILE_SITE_KEY]);
+
+  const resetTurnstile = () => {
+    setTurnstileToken("");
+    setTurnstileError("");
+    try {
+      if (typeof window !== "undefined" && window.turnstile) {
+        if (turnstileWidgetIdRef.current) window.turnstile.reset(turnstileWidgetIdRef.current);
+        else window.turnstile.reset();
+      }
+    } catch {
+      // ignore
+    }
+  };
+
+  // Render Turnstile widget once script is ready
+  useEffect(() => {
+    if (!canUseTurnstile) return;
+    if (typeof window === "undefined") return;
+
+    let cancelled = false;
+    let tries = 0;
+
+    const tryRender = () => {
+      if (cancelled) return;
+      if (!turnstileElRef.current) return;
+      if (!window.turnstile) {
+        tries += 1;
+        if (tries < 60) setTimeout(tryRender, 100); // up to ~6s
+        return;
+      }
+
+      // If already rendered, don’t double-render
+      if (turnstileWidgetIdRef.current) return;
+
+      try {
+        const widgetId = window.turnstile.render(turnstileElRef.current, {
+          sitekey: TURNSTILE_SITE_KEY,
+          theme: "dark",
+          callback: (token: string) => {
+            setTurnstileToken(token || "");
+            setTurnstileError("");
+          },
+          "expired-callback": () => {
+            setTurnstileToken("");
+            setTurnstileError("Turnstile expired — please try again.");
+          },
+          "error-callback": () => {
+            setTurnstileToken("");
+            setTurnstileError("Turnstile failed to load — please refresh and try again.");
+          },
+        });
+
+        turnstileWidgetIdRef.current = widgetId;
+      } catch {
+        setTurnstileError("Turnstile failed to initialise — please refresh and try again.");
+      }
+    };
+
+    tryRender();
+
+    return () => {
+      cancelled = true;
+      // Cleanup widget if component unmounts
+      try {
+        if (window.turnstile && turnstileWidgetIdRef.current) {
+          window.turnstile.remove(turnstileWidgetIdRef.current);
+        }
+      } catch {
+        // ignore
+      } finally {
+        turnstileWidgetIdRef.current = null;
+      }
+    };
+  }, [canUseTurnstile, TURNSTILE_SITE_KEY]);
 
   // UK POSTCODE REGEX
   const ukPostcodeRegex =
@@ -204,6 +304,42 @@ export default function RegisterClient() {
   };
 
   // ─────────────────────────────────────────────
+  // TURNSTILE VERIFY
+  // ─────────────────────────────────────────────
+  const verifyTurnstile = async () => {
+    if (!canUseTurnstile) return true; // if you haven’t configured it yet, don’t block
+    if (!turnstileToken) {
+      setTurnstileError("Please complete the Turnstile check.");
+      return false;
+    }
+
+    try {
+      const res = await fetch("/api/turnstile/verify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: turnstileToken }),
+      });
+
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok || !data?.ok) {
+        setTurnstileError(
+          data?.error || "Turnstile verification failed — please try again."
+        );
+        resetTurnstile();
+        return false;
+      }
+
+      setTurnstileError("");
+      return true;
+    } catch (e) {
+      setTurnstileError("Turnstile verification failed — please try again.");
+      resetTurnstile();
+      return false;
+    }
+  };
+
+  // ─────────────────────────────────────────────
   // SUBMIT FORM
   // ─────────────────────────────────────────────
   const handleSubmit = async (e: any) => {
@@ -212,6 +348,10 @@ export default function RegisterClient() {
     setSuccess(false);
 
     if (!validateFields()) return;
+
+    // Turnstile gate BEFORE creating Appwrite user
+    const okHuman = await verifyTurnstile();
+    if (!okHuman) return;
 
     setLoading(true);
 
@@ -268,9 +408,12 @@ export default function RegisterClient() {
       setAddresses([]);
       setSelectedAddress("");
       setManualEntry(false);
+      resetTurnstile();
     } catch (err: any) {
       console.error(err);
       setError(err?.message || "Registration failed.");
+      // force a fresh turnstile if something goes wrong
+      resetTurnstile();
     } finally {
       setLoading(false);
     }
@@ -349,6 +492,14 @@ export default function RegisterClient() {
   // ─────────────────────────────────────────────
   return (
     <main className="min-h-screen bg-black flex items-center justify-center px-4 py-10 text-gray-100">
+      {/* Turnstile script (only if configured) */}
+      {canUseTurnstile ? (
+        <Script
+          src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit"
+          strategy="afterInteractive"
+        />
+      ) : null}
+
       <div className="w-full max-w-lg bg-[#111111] shadow-lg rounded-2xl border border-yellow-700/60 p-8">
         <h1 className="text-2xl font-extrabold text-yellow-400 text-center mb-1">
           Create your AuctionMyCamera account
@@ -473,9 +624,31 @@ export default function RegisterClient() {
             </div>
             {fieldErrors.agree && <p className="text-xs text-red-400">{fieldErrors.agree}</p>}
 
+            {/* TURNSTILE WIDGET */}
+            {canUseTurnstile ? (
+              <div className="mt-2">
+                <div
+                  ref={turnstileElRef}
+                  className="min-h-[65px] flex items-center justify-center"
+                />
+                {turnstileError ? (
+                  <p className="text-xs text-red-300 mt-2 text-center">{turnstileError}</p>
+                ) : null}
+                {!turnstileToken && !turnstileError ? (
+                  <p className="text-[11px] text-gray-400 mt-2 text-center">
+                    Please complete the spam check to create your account.
+                  </p>
+                ) : null}
+              </div>
+            ) : (
+              <p className="text-[11px] text-yellow-200/80 text-center">
+                Turnstile not configured yet (NEXT_PUBLIC_TURNSTILE_SITE_KEY missing).
+              </p>
+            )}
+
             <button
               type="submit"
-              disabled={loading}
+              disabled={loading || (canUseTurnstile && !turnstileToken)}
               className="w-full mt-2 bg-yellow-500 hover:bg-yellow-600 text-black py-2.5 rounded-md font-semibold text-sm disabled:opacity-60"
             >
               {loading ? "Creating your account…" : "Create account"}
