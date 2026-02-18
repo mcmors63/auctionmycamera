@@ -5,9 +5,11 @@ import {
   StarIcon,
   ShieldCheckIcon,
   ArrowTrendingUpIcon,
+  TruckIcon,
+  ClockIcon,
+  BanknotesIcon,
 } from "@heroicons/react/24/solid";
 import { motion } from "framer-motion";
-import Link from "next/link";
 
 export default function AboutContent() {
   return (
@@ -21,16 +23,17 @@ export default function AboutContent() {
       >
         <p>
           AuctionMyCamera was created for people who care about photography gear
-          as much as they care about the craft. No clutter, no confusion — just a
-          clean, premium platform built specifically for buying and selling
+          as much as they care about the craft. No clutter, no confusion — just
+          a clean, premium platform built specifically for buying and selling
           cameras, lenses and kit.
         </p>
 
         <p>
-          We combine weekly auctions, modern technology and clear processes so
-          sellers know exactly what they&apos;re getting and buyers can bid with
-          confidence. Verified users, secure bidding and straightforward
-          post-sale steps sit at the heart of everything we do.
+          We combine weekly auctions, modern technology and clear processes so{" "}
+          <strong className="text-gray-100">buyers know what they’re bidding on</strong>{" "}
+          and <strong className="text-gray-100">sellers know exactly what happens next</strong>.
+          Verified users, secure payments, and straightforward post-sale steps sit at the
+          heart of everything we do.
         </p>
 
         <p className="font-semibold text-gold">
@@ -39,22 +42,68 @@ export default function AboutContent() {
         </p>
       </motion.div>
 
-      {/* ✅ Sister platform note (inside AboutContent so it can’t be hidden) */}
-      <div className="mb-16 rounded-xl border border-gold/20 bg-black/40 p-5 text-sm leading-relaxed text-gray-300">
-        <p>
-          Looking for a marketplace where the final price stays private and
-          sellers choose the outcome based on more than just the highest number?
-          We also operate{" "}
-          <Link
-            href="https://sealabid.com"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-gold underline hover:text-yellow-200 transition"
+      {/* TRUST STRIP */}
+      <div className="mb-10 grid md:grid-cols-3 gap-4">
+        {[
+          {
+            icon: <BanknotesIcon className="w-6 h-6 text-gold" />,
+            title: "Safer payments",
+            desc: "Funds are collected on a win and handled through a structured post-sale flow.",
+          },
+          {
+            icon: <ClockIcon className="w-6 h-6 text-gold" />,
+            title: "Delivery window",
+            desc: "Clear dispatch expectations so deals don’t drag on for weeks.",
+          },
+          {
+            icon: <TruckIcon className="w-6 h-6 text-gold" />,
+            title: "Tracked handover",
+            desc: "Dispatch proof / tracking where available, plus a simple receipt confirmation step.",
+          },
+        ].map((item, i) => (
+          <div
+            key={i}
+            className="flex gap-3 items-start bg-black/40 border border-gold/20 rounded-xl p-4"
           >
-            Sealabid
-          </Link>
-          , a sealed-bid marketplace built for discreet outcomes.
+            <div className="mt-0.5">{item.icon}</div>
+            <div>
+              <div className="font-semibold text-gray-100">{item.title}</div>
+              <div className="text-sm text-gray-400">{item.desc}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* PLATFORM FAMILY (Sealabid + AuctionMyPlate) */}
+      <div className="mb-16 rounded-xl border border-gold/20 bg-black/40 p-5 text-sm leading-relaxed text-gray-300">
+        <p className="mb-2">
+          AuctionMyCamera is built by the same team behind:
         </p>
+        <ul className="list-disc ml-5 space-y-1">
+          <li>
+            <a
+              href="https://sealabid.com"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-gold underline hover:text-yellow-200 transition"
+            >
+              Sealabid
+            </a>{" "}
+            — sealed-bid marketplace where the final price stays private and sellers choose
+            outcomes based on more than just the highest number.
+          </li>
+          <li>
+            <a
+              href="https://auctionmyplate.co.uk"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-gold underline hover:text-yellow-200 transition"
+            >
+              AuctionMyPlate
+            </a>{" "}
+            — UK number plate auctions with structured weekly windows and clear seller tooling.
+          </li>
+        </ul>
       </div>
 
       {/* HOW IT WORKS */}
@@ -67,7 +116,7 @@ export default function AboutContent() {
           {
             step: "1",
             title: "List Your Gear",
-            desc: "Enter your details, set your reserve and submit. Approval is fast, simple and verified.",
+            desc: "Enter details, upload clear photos, set your reserve (optional) and submit. Approval is fast, simple and verified.",
           },
           {
             step: "2",
@@ -77,7 +126,7 @@ export default function AboutContent() {
           {
             step: "3",
             title: "Secure Handover",
-            desc: "Once sold, we guide both parties through secure payment and clear collection/delivery steps.",
+            desc: "When an item sells, payment is collected and handled through the post-sale steps. The seller dispatches within the delivery window, and funds are released once the buyer confirms receipt (or the platform flow completes).",
           },
         ].map((item, i) => (
           <motion.div
@@ -116,11 +165,9 @@ export default function AboutContent() {
             desc: "Verified accounts, clear rules and transparent auctions — no games, no hidden tricks.",
           },
           {
-            icon: (
-              <ArrowTrendingUpIcon className="w-12 h-12 text-gold mx-auto" />
-            ),
+            icon: <ArrowTrendingUpIcon className="w-12 h-12 text-gold mx-auto" />,
             title: "Real Value",
-            desc: "Sensibly structured bidding designed for fair prices, strong returns and confident buyers.",
+            desc: "Structured bidding designed for fair prices, strong returns and confident buyers.",
           },
         ].map((item, i) => (
           <motion.div
@@ -148,15 +195,15 @@ export default function AboutContent() {
         {[
           {
             year: "2025",
-            text: "The idea: build a dedicated platform for camera gear that feels premium, fair and easy to use.",
+            text: "The idea: build a dedicated platform for camera gear that feels premium, fair and easy to use — without endless messages and time-wasting.",
           },
           {
             year: "2026",
-            text: "Development: shaping weekly auctions, seller tools and a smooth post-sale handover journey.",
+            text: "Development: shaping weekly auctions, seller tools, and a post-sale flow designed around dispatch windows and receipt confirmation.",
           },
           {
             year: "Today",
-            text: "Growth: bringing photographers, collectors and enthusiasts into one focused marketplace.",
+            text: "Growth: bringing photographers, collectors and enthusiasts into one focused marketplace — built for confidence on both sides.",
           },
         ].map((item, i) => (
           <motion.div

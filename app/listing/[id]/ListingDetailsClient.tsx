@@ -123,7 +123,6 @@ function pickFallbackImage(l: Listing) {
   const gear = String(l.gear_type || "").toLowerCase();
   const era = String(l.era || "").toLowerCase();
 
-  // These exist in /public/hero (you showed them earlier)
   if (era === "antique" || era === "vintage") return "/hero/antique-cameras.jpg";
   if (gear === "lens") return "/hero/modern-lens.jpg";
   return "/hero/modern-lens.jpg";
@@ -136,6 +135,20 @@ function parseBids(bids: Listing["bids"]) {
     return Number.isFinite(n) ? n : 0;
   }
   return 0;
+}
+
+function parseMaybeDate(input: unknown): number | null {
+  const s = String(input || "").trim();
+  if (!s) return null;
+  const t = Date.parse(s);
+  return Number.isFinite(t) ? t : null;
+}
+
+function isUpdateEvent(events: string[] | undefined) {
+  if (!Array.isArray(events)) return false;
+  // Appwrite event strings are usually specific, not wildcard.
+  // This catches both: "...documents.<id>.update" and other update variants.
+  return events.some((e) => typeof e === "string" && e.endsWith(".update"));
 }
 
 export default function ListingDetailsClient({ initial }: { initial: Listing }) {
@@ -163,7 +176,6 @@ export default function ListingDetailsClient({ initial }: { initial: Listing }) 
     async function refreshOnce() {
       try {
         setRefreshNote(null);
-
         const doc = await databases.getDocument(DATABASE_ID, LISTINGS_COLLECTION_ID, initial.$id);
         if (!cancelled) setListing(doc as unknown as Listing);
       } catch (err) {
@@ -190,20 +202,24 @@ export default function ListingDetailsClient({ initial }: { initial: Listing }) 
     const unsub = client.subscribe(
       `databases.${DATABASE_ID}.collections.${LISTINGS_COLLECTION_ID}.documents.${currentId}`,
       (event) => {
-        if (!event.events.includes("databases.*.collections.*.documents.*.update")) return;
+        if (!isUpdateEvent((event as any)?.events)) return;
 
-        const payload = event.payload as Listing;
+        const payload = (event as any).payload as Listing;
         const prev = listingRef.current;
 
+        // Outbid popup (fires even for first bid; that's fine)
         const prevBid = prev?.current_bid ?? 0;
         const nextBid = payload.current_bid ?? 0;
-        if (nextBid > prevBid) setOutbidPopup({ oldBid: prevBid, newBid: nextBid });
+        if (typeof nextBid === "number" && nextBid > prevBid) {
+          setOutbidPopup({ oldBid: prevBid, newBid: nextBid });
+        }
 
+        // Soft close popup (only if end time moved forward)
         const oldEnd = String(prev?.auction_end ?? prev?.end_time ?? "");
         const newEnd = String(payload.auction_end ?? payload.end_time ?? "");
-        const oldT = Date.parse(oldEnd);
-        const newT = Date.parse(newEnd);
-        if ((Number.isFinite(newT) ? newT : 0) > (Number.isFinite(oldT) ? oldT : 0)) {
+        const oldT = parseMaybeDate(oldEnd) ?? 0;
+        const newT = parseMaybeDate(newEnd) ?? 0;
+        if (newT > oldT && newT > 0) {
           setSoftClosePopup({ oldEnd, newEnd });
         }
 
@@ -234,14 +250,16 @@ export default function ListingDetailsClient({ initial }: { initial: Listing }) 
   const anyL = listing as any;
 
   const status = String(anyL.status || "");
-  const isLive = status === "live";
+  const isLiveStatus = status === "live";
   const isComing = status === "queued";
   const isSold = status === "sold";
 
   const name = getListingName(listing);
   const buyNow = pickBuyNow(listing);
 
-  const currentBid = typeof anyL.current_bid === "number" ? anyL.current_bid : 0;
+  const currentBidRaw = typeof anyL.current_bid === "number" ? anyL.current_bid : null;
+  const currentBidForMath = typeof currentBidRaw === "number" ? currentBidRaw : 0;
+
   const startingPrice =
     typeof anyL.starting_price === "number" && anyL.starting_price > 0 ? anyL.starting_price : null;
 
@@ -255,8 +273,14 @@ export default function ListingDetailsClient({ initial }: { initial: Listing }) 
 
   const imgSrc = String(anyL.image_url || "").trim() || pickFallbackImage(listing);
 
-  const rawEnd = String(anyL.auction_end ?? anyL.end_time ?? "");
-  const rawStart = String(anyL.auction_start ?? anyL.start_time ?? "");
+  const rawEndStr = String(anyL.auction_end ?? anyL.end_time ?? "");
+  const rawStartStr = String(anyL.auction_start ?? anyL.start_time ?? "");
+
+  const endMs = parseMaybeDate(rawEndStr);
+  const auctionEnded = !!endMs && endMs <= Date.now();
+
+  // Only treat it as "live" if status is live AND we haven't passed the end time
+  const isLive = isLiveStatus && !auctionEnded && !isSold;
 
   const extraLine =
     String(anyL.gear_type || "").toLowerCase() === "camera" && typeof anyL.shutter_count === "number"
@@ -268,6 +292,23 @@ export default function ListingDetailsClient({ initial }: { initial: Listing }) 
       : "";
 
   const canBid = isLive && !isSold;
+
+  // Sold price display (prefer sold_price, else buy now if sold via buy_now, else current bid)
+  const soldPrice =
+    typeof anyL.sold_price === "number"
+      ? anyL.sold_price
+      : anyL.sold_via === "buy_now" && typeof buyNow === "number"
+      ? buyNow
+      : typeof currentBidRaw === "number"
+      ? currentBidRaw
+      : null;
+
+  const currentBidDisplay =
+    currentBidRaw == null
+      ? startingPrice != null
+        ? "No bids yet"
+        : money(0)
+      : money(currentBidRaw);
 
   return (
     <main className="min-h-screen bg-black text-gray-100 py-10 px-4">
@@ -294,6 +335,11 @@ export default function ListingDetailsClient({ initial }: { initial: Listing }) 
                 LIVE
               </span>
             )}
+            {!isSold && auctionEnded && (
+              <span className="inline-flex items-center rounded-full bg-gray-200 px-3 py-1 font-semibold text-gray-700">
+                ENDED
+              </span>
+            )}
           </div>
         </div>
 
@@ -304,8 +350,7 @@ export default function ListingDetailsClient({ initial }: { initial: Listing }) 
           <p className="mt-2 text-xs text-gray-600">
             {metaLine ? <span className="font-semibold">{metaLine}</span> : null}
             {metaLine ? " • " : null}
-            Listing ID: {displayRef}{" "}
-            <span className="text-gray-400">•</span>{" "}
+            Listing ID: {displayRef} <span className="text-gray-400">•</span>{" "}
             <Link href="/how-it-works" className="text-blue-700 underline">
               How it works
             </Link>{" "}
@@ -339,6 +384,11 @@ export default function ListingDetailsClient({ initial }: { initial: Listing }) 
         {isSold && (
           <div className="mx-6 my-6 p-5 bg-green-600 text-white rounded-xl shadow text-center">
             <p className="text-2xl font-extrabold">SOLD</p>
+            {soldPrice != null ? (
+              <p className="text-lg mt-2">
+                Final Price: <span className="font-bold">{money(soldPrice)}</span>
+              </p>
+            ) : null}
             <p className="text-sm opacity-90 mt-1">
               {anyL.sold_via === "buy_now" ? "Bought via Buy Now" : "Sold at Auction"}
             </p>
@@ -354,7 +404,7 @@ export default function ListingDetailsClient({ initial }: { initial: Listing }) 
               {!isSold ? (
                 <>
                   <p>
-                    <span className="font-semibold">Current bid:</span> {money(currentBid) || "£0"}
+                    <span className="font-semibold">Current bid:</span> {currentBidDisplay}
                   </p>
 
                   <p>
@@ -364,7 +414,7 @@ export default function ListingDetailsClient({ initial }: { initial: Listing }) 
                   {startingPrice != null && (
                     <p>
                       <span className="font-semibold">Starting price:</span> {money(startingPrice)}
-                      {currentBid === 0 ? " (first bid starts here)" : ""}
+                      {currentBidRaw == null ? " (first bid starts here)" : ""}
                     </p>
                   )}
 
@@ -388,18 +438,24 @@ export default function ListingDetailsClient({ initial }: { initial: Listing }) 
 
             <div className="space-y-2 md:text-right">
               {!isSold ? (
-                <>
-                  <p>
-                    <span className="font-semibold">{isLive ? "Auction ends in:" : "Auction starts in:"}</span>
-                  </p>
-                  <div className="mt-1 inline-block">
-                    {isLive ? (
-                      <AuctionTimer mode="live" endTime={rawEnd || undefined} />
-                    ) : (
-                      <AuctionTimer mode="coming" endTime={rawStart || undefined} />
-                    )}
-                  </div>
-                </>
+                auctionEnded ? (
+                  <p className="font-semibold text-red-600">Auction ended</p>
+                ) : (
+                  <>
+                    <p>
+                      <span className="font-semibold">
+                        {isLive ? "Auction ends in:" : "Auction starts in:"}
+                      </span>
+                    </p>
+                    <div className="mt-1 inline-block">
+                      {isLive ? (
+                        <AuctionTimer mode="live" endTime={rawEndStr || undefined} />
+                      ) : (
+                        <AuctionTimer mode="coming" endTime={rawStartStr || undefined} />
+                      )}
+                    </div>
+                  </>
+                )
               ) : (
                 <p className="font-semibold text-red-600">Auction ended</p>
               )}
@@ -421,7 +477,7 @@ export default function ListingDetailsClient({ initial }: { initial: Listing }) 
             <ul className="mt-3 list-disc list-inside space-y-1 text-sm">
               <li>Check condition notes carefully (marks, fungus/haze, faults, battery health, etc.).</li>
               <li>Confirm what’s included (caps, straps, chargers, boxes, filters, tripod plates).</li>
-              <li>If it’s a camera, shutter count (if provided) is a useful indicator — not the whole story.</li>
+              <li>If it’s a camera, shutter count (if provided) is helpful — but not the whole story.</li>
             </ul>
           </div>
         </div>
@@ -455,6 +511,14 @@ export default function ListingDetailsClient({ initial }: { initial: Listing }) 
                   .
                 </p>
               </div>
+            ) : auctionEnded ? (
+              <p className="text-sm text-gray-700">
+                This auction has ended.{" "}
+                <Link href="/current-listings" className="text-blue-700 underline">
+                  Browse current listings
+                </Link>
+                .
+              </p>
             ) : (
               <p className="text-sm text-gray-700">
                 Bidding opens when this item goes live.{" "}
@@ -476,9 +540,7 @@ export default function ListingDetailsClient({ initial }: { initial: Listing }) 
             </div>
           )}
 
-          <p className="text-xs text-gray-500 sm:text-right">
-            Listings are only sold if the reserve is met.
-          </p>
+          <p className="text-xs text-gray-500 sm:text-right">Listings are only sold if the reserve is met.</p>
         </div>
       </div>
 
@@ -502,7 +564,7 @@ export default function ListingDetailsClient({ initial }: { initial: Listing }) 
       {softClosePopup && (
         <div className="fixed bottom-6 left-6 bg-yellow-500 text-black p-4 rounded-xl shadow-xl z-50 w-80 animate-pulse">
           <h3 className="text-xl font-bold mb-1">Auction Extended</h3>
-          <p className="text-lg">Extra 2 minutes added!</p>
+          <p className="text-lg">Extra time added!</p>
           <button
             onClick={() => setSoftClosePopup(null)}
             className="mt-3 w-full bg-black text-yellow-400 font-semibold rounded-lg py-2 hover:bg-gray-900"

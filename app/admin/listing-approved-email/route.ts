@@ -2,19 +2,41 @@
 import { NextRequest, NextResponse } from "next/server";
 import nodemailer from "nodemailer";
 
+export const runtime = "nodejs";
+
 const host = process.env.SMTP_HOST!;
 const port = Number(process.env.SMTP_PORT || 465);
 const user = process.env.SMTP_USER!;
 const pass = process.env.SMTP_PASS!;
-const fromEmail = process.env.FROM_EMAIL || "admin@auctionmyplate.co.uk";
+
+// Prefer your real camera domain + camera-from address
+const SITE_URL = (process.env.NEXT_PUBLIC_SITE_URL || "https://auctionmycamera.co.uk").replace(/\/+$/, "");
+
+const fromEmail =
+  process.env.FROM_EMAIL ||
+  process.env.CONTACT_FROM_EMAIL ||
+  "admin@auctionmycamera.co.uk";
+
+function esc(s: string) {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
 
 export async function POST(req: NextRequest) {
   try {
-    const { to, registration } = await req.json();
+    const body = await req.json();
 
-    if (!to || !registration) {
+    const to = String(body?.to || "").trim();
+    // Backwards compatible: some callers may still send "registration"
+    const title = String(body?.title || body?.item_title || body?.listing_title || body?.registration || "").trim();
+
+    if (!to || !title) {
       return NextResponse.json(
-        { error: "Missing 'to' or 'registration' in body" },
+        { error: "Missing 'to' or listing title in body (expected 'title' or legacy 'registration')." },
         { status: 400 }
       );
     }
@@ -28,22 +50,25 @@ export async function POST(req: NextRequest) {
 
     const html = `
       <div style="font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 640px; margin: 0 auto; padding: 24px;">
-        <h1 style="color: #f5a800; font-size: 28px; margin-bottom: 16px;">
-          Your number plate is now approved!
+        <h1 style="color: #d6b45f; font-size: 26px; margin: 0 0 14px;">
+          Your listing is now approved
         </h1>
-        <p style="font-size: 16px; color: #333;">Hi there,</p>
-        <p style="font-size: 16px; color: #333;">
-          Great news — your plate
-          <strong>${registration}</strong>
-          has been approved and will soon appear in our weekly auction listings.
+
+        <p style="font-size: 15px; color: #333; margin: 0 0 10px;">Hi there,</p>
+
+        <p style="font-size: 15px; color: #333; margin: 0 0 14px;">
+          Good news — your listing <strong>${esc(title)}</strong> has been approved and will soon appear in our weekly auctions.
         </p>
-        <p style="font-size: 16px; color: #333;">
-          You can check its progress anytime in your
-          <a href="https://auctionmyplate.co.uk/dashboard" style="color: #2563eb;">Seller Dashboard</a>.
+
+        <p style="font-size: 15px; color: #333; margin: 0 0 14px;">
+          You can check progress anytime in your
+          <a href="${SITE_URL}/dashboard" style="color: #2563eb; text-decoration: underline;">Seller Dashboard</a>.
         </p>
-        <hr style="margin: 24px 0; border: none; border-top: 1px solid #e5e7eb;" />
-        <p style="font-size: 12px; color: #6b7280;">
-          Auction My Plate © 2025 — Helping you sell your cherished number plates easily.
+
+        <hr style="margin: 20px 0; border: none; border-top: 1px solid #e5e7eb;" />
+
+        <p style="font-size: 12px; color: #6b7280; margin: 0;">
+          AuctionMyCamera © ${new Date().getFullYear()} — buy and sell camera gear with weekly auctions.
         </p>
       </div>
     `;
@@ -51,7 +76,7 @@ export async function POST(req: NextRequest) {
     await transporter.sendMail({
       from: fromEmail,
       to,
-      subject: "Your number plate is now approved!",
+      subject: "Your AuctionMyCamera listing is approved",
       html,
     });
 

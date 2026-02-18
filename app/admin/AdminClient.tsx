@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Client, Account, Databases, Query } from "appwrite";
 import { useRouter } from "next/navigation";
 import AdminAuctionTimer from "../components/ui/AdminAuctionTimer";
@@ -32,7 +32,7 @@ const LISTINGS_COLLECTION_ID =
   process.env.NEXT_PUBLIC_APPWRITE_PLATES_COLLECTION_ID ||
   "plates";
 
-// ✅ Transactions may be a separate DB/Table (your Appwrite shows a “transactions” database)
+// ✅ Transactions may be a separate DB/Table
 const TRANSACTIONS_DB_ID =
   process.env.NEXT_PUBLIC_APPWRITE_TRANSACTIONS_DATABASE_ID ||
   process.env.NEXT_PUBLIC_APPWRITE_TRANSACTIONS_DB_ID ||
@@ -43,49 +43,95 @@ const TRANSACTIONS_COLLECTION_ID =
   process.env.NEXT_PUBLIC_APPWRITE_TRANSACTIONS_TABLE_ID ||
   "transactions";
 
-type AdminTab =
-  | "pending"
-  | "queued"
-  | "live"
-  | "rejected"
-  | "soldPending"
-  | "complete";
+type AdminTab = "pending" | "queued" | "live" | "rejected" | "soldPending" | "complete";
 
 // Public listing statuses – these match isIndexableStatus() on /listing/[id]
 const PUBLIC_LISTING_STATUSES = new Set(["queued", "live", "sold"]);
 
-// -----------------------------
-// DVLA fee model (NEW + legacy exceptions)
-// (Keep for now if you still use this transaction logic)
-// -----------------------------
-const DVLA_FEE_GBP = 80;
+// ------------------------------------------------------
+// Helpers (camera-safe)
+// ------------------------------------------------------
+function cap(s: string) {
+  if (!s) return s;
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
 
-const LEGACY_BUYER_PAYS_DVLA_IDS = new Set<string>([
-  "696ea3d0001a45280a16",
-  "697bccfd001325add473",
-]);
+function niceEnum(s?: string | null) {
+  const v = String(s || "").trim();
+  if (!v) return "";
+  return cap(v.replace(/_/g, " "));
+}
 
-function isLegacyBuyerPaysDvlaTx(tx: any) {
-  const id = String(tx?.listing_id || tx?.plate_id || "").trim();
-  return !!id && LEGACY_BUYER_PAYS_DVLA_IDS.has(id);
+function formatMoney(value: number | null | undefined) {
+  if (typeof value !== "number" || Number.isNaN(value)) return "—";
+  return `£${value.toLocaleString("en-GB")}`;
+}
+
+function formatDateTime(value: string | null | undefined) {
+  if (!value) return "—";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleString("en-GB", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function getListingTitle(doc: any) {
+  const itemTitle = String(doc?.item_title || doc?.title || "").trim();
+  if (itemTitle) return itemTitle;
+
+  const brand = String(doc?.brand || "").trim();
+  const model = String(doc?.model || "").trim();
+  const bm = [brand, model].filter(Boolean).join(" ");
+  if (bm) return bm;
+
+  const legacy = String(doc?.registration || doc?.reg_number || "").trim();
+  if (legacy) return legacy;
+
+  const gear = String(doc?.gear_type || doc?.type || "").trim();
+  if (gear) return `${niceEnum(gear)} listing`;
+
+  return "Camera gear listing";
+}
+
+function getListingMeta(doc: any) {
+  const bits = [niceEnum(doc?.gear_type), niceEnum(doc?.condition), niceEnum(doc?.era)].filter(Boolean);
+  return bits.join(" • ");
+}
+
+function pickBuyNow(doc: any): number | null {
+  if (typeof doc?.buy_now_price === "number") return doc.buy_now_price;
+  if (typeof doc?.buy_now === "number") return doc.buy_now;
+  return null;
+}
+
+function txCreated(tx: any) {
+  return tx?.created_at || tx?.$createdAt || null;
+}
+function txUpdated(tx: any) {
+  return tx?.updated_at || tx?.$updatedAt || null;
 }
 
 export default function AdminClient() {
   const router = useRouter();
 
   const [authState, setAuthState] = useState<"checking" | "yes">("checking");
-
   const [activeTab, setActiveTab] = useState<AdminTab>("pending");
 
-  const [plates, setPlates] = useState<any[]>([]);
+  const [listings, setListings] = useState<any[]>([]);
   const [transactions, setTransactions] = useState<any[]>([]);
 
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
-  const [selectedPlate, setSelectedPlate] = useState<any>(null);
+
+  const [selectedListing, setSelectedListing] = useState<any>(null);
 
   // ------------------------------------------------------
-  // VERIFY ADMIN LOGIN (no localStorage bounce)
+  // VERIFY ADMIN LOGIN
   // ------------------------------------------------------
   useEffect(() => {
     let alive = true;
@@ -106,7 +152,6 @@ export default function AdminClient() {
     };
 
     verify();
-
     return () => {
       alive = false;
     };
@@ -123,18 +168,16 @@ export default function AdminClient() {
       setMessage("");
 
       try {
-        // Guard: DB not configured
         if (!LISTINGS_DB_ID || !LISTINGS_COLLECTION_ID) {
           setMessage(
             "Missing Appwrite env for listings. Set NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID and NEXT_PUBLIC_APPWRITE_LISTINGS_COLLECTION_ID (or the legacy PLATES envs)."
           );
-          setPlates([]);
+          setListings([]);
           setTransactions([]);
           return;
         }
 
         if (activeTab === "soldPending" || activeTab === "complete") {
-          // Transactions view
           const txStatus = activeTab === "soldPending" ? "pending" : "complete";
 
           if (!TRANSACTIONS_DB_ID || !TRANSACTIONS_COLLECTION_ID) {
@@ -142,24 +185,26 @@ export default function AdminClient() {
               "Missing Appwrite env for transactions. Set NEXT_PUBLIC_APPWRITE_TRANSACTIONS_DATABASE_ID and NEXT_PUBLIC_APPWRITE_TRANSACTIONS_COLLECTION_ID."
             );
             setTransactions([]);
+            setListings([]);
             return;
           }
 
-          const res = await databases.listDocuments(
-            TRANSACTIONS_DB_ID,
-            TRANSACTIONS_COLLECTION_ID,
-            [Query.equal("transaction_status", txStatus)]
-          );
-
-          setTransactions(res.documents);
-          setPlates([]);
-        } else {
-          // Listings view
-          const res = await databases.listDocuments(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, [
-            Query.equal("status", activeTab),
+          const res = await databases.listDocuments(TRANSACTIONS_DB_ID, TRANSACTIONS_COLLECTION_ID, [
+            Query.equal("transaction_status", txStatus),
+            Query.orderDesc("$updatedAt"),
+            Query.limit(200),
           ]);
 
-          setPlates(res.documents);
+          setTransactions(res.documents);
+          setListings([]);
+        } else {
+          const res = await databases.listDocuments(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, [
+            Query.equal("status", activeTab),
+            Query.orderDesc("$updatedAt"),
+            Query.limit(200),
+          ]);
+
+          setListings(res.documents);
           setTransactions([]);
         }
       } catch (err) {
@@ -176,19 +221,22 @@ export default function AdminClient() {
   // ------------------------------------------------------
   // APPROVE LISTING (server-only)
   // ------------------------------------------------------
-  const approvePlate = async () => {
-    if (!selectedPlate) return;
+  const approveListing = async () => {
+    if (!selectedListing) return;
+
+    const title = getListingTitle(selectedListing);
 
     try {
       const res = await fetch("/api/approve-listing", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          listingId: selectedPlate.$id,
-          sellerEmail: selectedPlate.seller_email,
-          interesting_fact: selectedPlate.interesting_fact || "",
-          starting_price: Number(selectedPlate.starting_price) || 0,
-          reserve_price: Number(selectedPlate.reserve_price) || 0,
+          // keep existing backend expectations
+          listingId: selectedListing.$id,
+          sellerEmail: selectedListing.seller_email,
+          interesting_fact: selectedListing.admin_notes || selectedListing.interesting_fact || "",
+          starting_price: Number(selectedListing.starting_price) || 0,
+          reserve_price: Number(selectedListing.reserve_price) || 0,
         }),
       });
 
@@ -204,8 +252,8 @@ export default function AdminClient() {
         throw new Error(data?.error || "Failed to approve listing.");
       }
 
-      setMessage(`Listing ${selectedPlate.registration} approved & queued`);
-      setSelectedPlate(null);
+      setMessage(`Listing "${title}" approved & queued.`);
+      setSelectedListing(null);
       setActiveTab("queued");
     } catch (err) {
       console.error(err);
@@ -216,21 +264,21 @@ export default function AdminClient() {
   // ------------------------------------------------------
   // REJECT LISTING
   // ------------------------------------------------------
-  const rejectPlate = async (plate: any) => {
-    if (!plate) return;
+  const rejectListing = async (doc: any) => {
+    if (!doc) return;
 
-    if (!window.confirm(`Are you sure you want to reject ${plate.registration}?`)) {
-      return;
-    }
+    const title = getListingTitle(doc);
+    if (!window.confirm(`Are you sure you want to reject "${title}"?`)) return;
 
     try {
       const res = await fetch("/api/admin/reject-listing", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          plateId: plate.$id,
-          registration: plate.registration,
-          sellerEmail: plate.seller_email,
+          // keep existing backend expectations
+          plateId: doc.$id,
+          registration: title, // legacy key, but we pass a useful camera-safe title
+          sellerEmail: doc.seller_email,
         }),
       });
 
@@ -254,15 +302,17 @@ export default function AdminClient() {
         throw new Error(data?.error || "Failed to reject listing.");
       }
 
-      setMessage(`Listing ${plate.registration} rejected.`);
-      setSelectedPlate(null);
+      setMessage(`Listing "${title}" rejected.`);
+      setSelectedListing(null);
 
       const updated = await databases.listDocuments(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, [
         Query.equal("status", activeTab),
+        Query.orderDesc("$updatedAt"),
+        Query.limit(200),
       ]);
-      setPlates(updated.documents);
+      setListings(updated.documents);
     } catch (err: any) {
-      console.error("rejectPlate error:", err);
+      console.error("rejectListing error:", err);
       alert(err.message || "Failed to reject listing.");
     }
   };
@@ -278,9 +328,11 @@ export default function AdminClient() {
 
       const updated = await databases.listDocuments(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, [
         Query.equal("status", activeTab),
+        Query.orderDesc("$updatedAt"),
+        Query.limit(200),
       ]);
 
-      setPlates(updated.documents);
+      setListings(updated.documents);
       setMessage("Listing deleted.");
     } catch (err) {
       console.error(err);
@@ -291,10 +343,12 @@ export default function AdminClient() {
   // ------------------------------------------------------
   // MARK LISTING SOLD
   // ------------------------------------------------------
-  const markListingSold = async (listing: any) => {
+  const markListingSold = async (doc: any) => {
+    const title = getListingTitle(doc);
+
     const salePriceStr = window.prompt(
-      `Enter final sale price for ${listing.registration}:`,
-      listing.current_bid?.toString() || ""
+      `Enter final sale price for "${title}":`,
+      (doc.current_bid ?? "").toString()
     );
     if (!salePriceStr) return;
 
@@ -313,7 +367,8 @@ export default function AdminClient() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          plateId: listing.$id,
+          // keep existing backend expectations
+          plateId: doc.$id,
           finalPrice: salePrice,
           buyerEmail,
         }),
@@ -332,12 +387,14 @@ export default function AdminClient() {
         return;
       }
 
-      setMessage(`Listing ${listing.registration} marked as sold and transaction created.`);
+      setMessage(`Listing "${title}" marked as sold and transaction created.`);
 
       const updated = await databases.listDocuments(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, [
         Query.equal("status", "live"),
+        Query.orderDesc("$updatedAt"),
+        Query.limit(200),
       ]);
-      setPlates(updated.documents);
+      setListings(updated.documents);
     } catch (err) {
       console.error(err);
       alert("Failed to mark listing as sold.");
@@ -357,26 +414,8 @@ export default function AdminClient() {
   };
 
   // ------------------------------------------------------
-  // HELPERS
+  // UI
   // ------------------------------------------------------
-  const formatDateTime = (value: string | null | undefined) => {
-    if (!value) return "-";
-    const d = new Date(value);
-    if (Number.isNaN(d.getTime())) return "-";
-    return d.toLocaleString("en-GB", {
-      day: "2-digit",
-      month: "2-digit",
-      year: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-  };
-
-  const formatMoney = (value: number | null | undefined) => {
-    if (value == null) return "-";
-    return `£${value.toLocaleString("en-GB")}`;
-  };
-
   if (authState === "checking") {
     return (
       <div className="min-h-screen flex items-center justify-center bg-neutral-50">
@@ -387,9 +426,6 @@ export default function AdminClient() {
     );
   }
 
-  // ------------------------------------------------------
-  // UI
-  // ------------------------------------------------------
   return (
     <div className="min-h-screen bg-neutral-50 py-10 px-6">
       <div className="max-w-5xl mx-auto bg-white rounded-2xl p-8 shadow-lg border border-neutral-200">
@@ -407,15 +443,13 @@ export default function AdminClient() {
 
         {/* TABS */}
         <div className="flex flex-wrap gap-6 border-b pb-3">
-          {["pending", "queued", "live", "rejected", "soldPending", "complete"].map((t) => (
+          {(["pending", "queued", "live", "rejected", "soldPending", "complete"] as AdminTab[]).map((t) => (
             <button
               key={t}
               className={`pb-2 font-semibold ${
-                activeTab === t
-                  ? "border-b-4 border-orange-500 text-orange-700"
-                  : "text-neutral-500"
+                activeTab === t ? "border-b-4 border-orange-500 text-orange-700" : "text-neutral-500"
               }`}
-              onClick={() => setActiveTab(t as AdminTab)}
+              onClick={() => setActiveTab(t)}
             >
               {t === "queued"
                 ? "Approved / Queued"
@@ -436,237 +470,159 @@ export default function AdminClient() {
         </div>
 
         {message && (
-          <p className="bg-green-100 text-green-700 p-3 rounded-md my-4 font-semibold">
-            {message}
-          </p>
+          <p className="bg-green-100 text-green-700 p-3 rounded-md my-4 font-semibold">{message}</p>
         )}
 
         {loading && <p className="text-center text-neutral-600 mt-10 text-lg">Loading…</p>}
 
         {/* LISTINGS VIEW */}
-        {!loading &&
-          activeTab !== "soldPending" &&
-          activeTab !== "complete" &&
-          plates.map((p) => (
-            <div key={p.$id} className="border rounded-xl p-5 bg-neutral-50 shadow-sm mt-5">
-              <div className="flex justify-between items-start gap-4">
-                <div className="space-y-1 text-sm text-neutral-800">
-                  <h2 className="text-2xl font-bold text-orange-700 mb-1">
-                    {p.registration}
-                  </h2>
-
-                  <p>
-                    <strong>Plate Type:</strong> {p.plate_type || "—"}
-                  </p>
-
-                  {p.expiry_date && (
-                    <p>
-                      <strong>Retention Expiry:</strong> {formatDateTime(p.expiry_date)}
-                    </p>
-                  )}
-
-                  <p>
-                    <strong>Reserve:</strong>{" "}
-                    {formatMoney(typeof p.reserve_price === "number" ? p.reserve_price : 0)}
-                  </p>
-
-                  <p>
-                    <strong>Starting Price:</strong>{" "}
-                    {formatMoney(typeof p.starting_price === "number" ? p.starting_price : 0)}
-                  </p>
-
-                  <p>
-                    <strong>Buy Now:</strong>{" "}
-                    {typeof p.buy_now === "number" ? formatMoney(p.buy_now) : "—"}
-                  </p>
-
-                  <p>
-                    <strong>Relist until sold:</strong> {p.relist_until_sold ? "Yes" : "No"}
-                  </p>
-
-                  <p>
-                    <strong>Seller Email:</strong> {p.seller_email || "—"}
-                  </p>
-
-                  {p.description && (
-                    <p className="mt-1">
-                      <strong>Description:</strong> {p.description}
-                    </p>
-                  )}
-
-                  <div className="mt-2 text-xs text-neutral-700 space-y-1">
-                    <p>
-                      <strong>Listing fee:</strong>{" "}
-                      {formatMoney(typeof p.listing_fee === "number" ? p.listing_fee : 0)}
-                    </p>
-                    <p>
-                      <strong>Commission rate:</strong>{" "}
-                      {typeof p.commission_rate === "number" ? `${p.commission_rate}%` : "—"}
-                    </p>
-                    <p>
-                      <strong>Estimated seller return:</strong>{" "}
-                      {formatMoney(typeof p.expected_return === "number" ? p.expected_return : 0)}
-                    </p>
-                  </div>
-
-                  <p className="mt-2">
-                    <strong>Status:</strong>{" "}
-                    {p.status === "queued" ? (
-                      <span className="text-blue-700 font-bold">Approved / Queued</span>
-                    ) : (
-                      p.status
-                    )}
-                  </p>
-
-                  <div className="mt-2">
-                    <AdminAuctionTimer start={p.auction_start} end={p.auction_end} status={p.status} />
-                  </div>
-                </div>
-
-                <div className="flex flex-col items-end gap-3">
-                  <button
-                    onClick={() => deleteListing(p.$id)}
-                    className="bg-red-600 text-white px-4 py-2 rounded-md font-semibold"
-                  >
-                    Delete
-                  </button>
-
-                  {PUBLIC_LISTING_STATUSES.has(p.status) && (
-                    <a
-                      href={`/listing/${p.$id}`}
-                      target="_blank"
-                      className="inline-block bg-blue-600 text-white px-4 py-2 rounded-md font-semibold hover:bg-blue-700"
-                    >
-                      View Full Listing
-                    </a>
-                  )}
-
-                  {activeTab === "live" && (
-                    <button
-                      onClick={() => markListingSold(p)}
-                      className="inline-block bg-emerald-600 text-white px-4 py-2 rounded-md font-semibold hover:bg-emerald-700"
-                    >
-                      Mark as Sold
-                    </button>
-                  )}
-
-                  {activeTab === "pending" && (
-                    <div className="flex flex-col gap-2 mt-2 w-full">
-                      <button
-                        onClick={() => setSelectedPlate(p)}
-                        className="bg-green-600 text-white py-2 px-4 rounded-md font-semibold w-full"
-                      >
-                        Review & Approve
-                      </button>
-
-                      <button
-                        onClick={() => rejectPlate(p)}
-                        className="bg-red-500 text-white py-2 px-4 rounded-md font-semibold w-full"
-                      >
-                        Reject
-                      </button>
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-          ))}
-
-        {/* TRANSACTIONS VIEW */}
-        {!loading && activeTab === "soldPending" && (
-          <div className="mt-6">
-            <h2 className="text-xl font-bold mb-2 text-orange-700">
-              Sold / Pending (Paperwork &amp; Payment)
-            </h2>
-
-            {transactions.length === 0 ? (
-              <p className="text-sm text-neutral-600">No sold items waiting for paperwork or payment.</p>
+        {!loading && activeTab !== "soldPending" && activeTab !== "complete" && (
+          <>
+            {listings.length === 0 ? (
+              <p className="text-sm text-neutral-600 mt-6">No listings in this tab.</p>
             ) : (
-              <div className="overflow-x-auto rounded-xl border border-neutral-200 bg-white shadow-sm">
-                <table className="min-w-full text-left text-xs md:text-sm">
-                  <thead className="bg-neutral-100 text-neutral-700">
-                    <tr>
-                      <th className="py-2 px-2">Reg</th>
-                      <th className="py-2 px-2">Listing ID</th>
-                      <th className="py-2 px-2">Seller Email</th>
-                      <th className="py-2 px-2">Buyer Email</th>
-                      <th className="py-2 px-2">Sale Price</th>
-                      <th className="py-2 px-2">Commission</th>
-                      <th className="py-2 px-2">Seller Payout</th>
-                      <th className="py-2 px-2">DVLA Fee</th>
-                      <th className="py-2 px-2">Payment Status</th>
-                      <th className="py-2 px-2">Transaction Status</th>
-                      <th className="py-2 px-2">Created</th>
-                      <th className="py-2 px-2">Updated</th>
-                      <th className="py-2 px-2 text-center">Action</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-neutral-200">
-                    {transactions.map((tx) => (
-                      <tr key={tx.$id} className="hover:bg-neutral-50">
-                        <td className="py-2 px-2 whitespace-nowrap">{tx.registration || "-"}</td>
-                        <td className="py-2 px-2 whitespace-nowrap">{tx.listing_id || "-"}</td>
-                        <td className="py-2 px-2 whitespace-nowrap">{tx.seller_email}</td>
-                        <td className="py-2 px-2 whitespace-nowrap">{tx.buyer_email || "-"}</td>
-                        <td className="py-2 px-2 whitespace-nowrap">
-                          £{(tx.sale_price ?? 0).toLocaleString("en-GB")}
-                        </td>
-                        <td className="py-2 px-2 whitespace-nowrap">
-                          £{(tx.commission_amount ?? 0).toLocaleString("en-GB")} ({tx.commission_rate ?? 0}%)
-                        </td>
-                        <td className="py-2 px-2 whitespace-nowrap font-semibold">
-                          £{(tx.seller_payout ?? 0).toLocaleString("en-GB")}
-                        </td>
-                        <td className="py-2 px-2 whitespace-nowrap">
-                          £{((tx.dvla_fee ?? DVLA_FEE_GBP) as number).toLocaleString("en-GB")}{" "}
-                          <span className="text-[11px] text-neutral-500">
-                            ({isLegacyBuyerPaysDvlaTx(tx) ? "paid by buyer (legacy)" : "paid by seller"})
-                          </span>
-                        </td>
-                        <td className="py-2 px-2 whitespace-nowrap">{tx.payment_status || "pending"}</td>
-                        <td className="py-2 px-2 whitespace-nowrap">{tx.transaction_status || "pending"}</td>
-                        <td className="py-2 px-2 whitespace-nowrap">
-                          {tx.created_at ? new Date(tx.created_at).toLocaleString("en-GB") : "-"}
-                        </td>
-                        <td className="py-2 px-2 whitespace-nowrap">
-                          {tx.updated_at ? new Date(tx.updated_at).toLocaleString("en-GB") : "-"}
-                        </td>
-                        <td className="py-2 px-2 text-center whitespace-nowrap">
-                          <a href={`/admin/transaction/${tx.$id}`} className="text-xs text-blue-600 underline">
-                            View
+              listings.map((doc) => {
+                const title = getListingTitle(doc);
+                const meta = getListingMeta(doc);
+                const buyNow = pickBuyNow(doc);
+
+                const extra =
+                  String(doc?.gear_type || "").toLowerCase() === "camera" && typeof doc?.shutter_count === "number"
+                    ? `Shutter count: ${doc.shutter_count.toLocaleString("en-GB")}`
+                    : String(doc?.gear_type || "").toLowerCase() === "lens"
+                    ? [doc?.lens_mount ? `Mount: ${doc.lens_mount}` : "", doc?.focal_length || "", doc?.max_aperture || ""]
+                        .filter(Boolean)
+                        .join(" • ")
+                    : "";
+
+                return (
+                  <div key={doc.$id} className="border rounded-xl p-5 bg-neutral-50 shadow-sm mt-5">
+                    <div className="flex justify-between items-start gap-4">
+                      <div className="space-y-1 text-sm text-neutral-800">
+                        <h2 className="text-2xl font-bold text-orange-700 mb-1">{title}</h2>
+
+                        {meta ? <p className="text-xs text-neutral-600 font-semibold">{meta}</p> : null}
+                        {extra ? <p className="text-xs text-neutral-600">{extra}</p> : null}
+
+                        <p className="mt-2">
+                          <strong>Listing ID:</strong>{" "}
+                          {String(doc?.listing_id || `AMC-${String(doc.$id).slice(-6).toUpperCase()}`)}
+                        </p>
+
+                        <p>
+                          <strong>Seller Email:</strong> {doc.seller_email || "—"}
+                        </p>
+
+                        <p>
+                          <strong>Reserve:</strong> {formatMoney(typeof doc.reserve_price === "number" ? doc.reserve_price : 0)}
+                        </p>
+
+                        <p>
+                          <strong>Starting price:</strong>{" "}
+                          {formatMoney(typeof doc.starting_price === "number" ? doc.starting_price : 0)}
+                        </p>
+
+                        <p>
+                          <strong>Buy Now:</strong>{" "}
+                          {typeof buyNow === "number" ? formatMoney(buyNow) : "—"}
+                        </p>
+
+                        <p className="mt-2">
+                          <strong>Status:</strong>{" "}
+                          {doc.status === "queued" ? (
+                            <span className="text-blue-700 font-bold">Approved / Queued</span>
+                          ) : (
+                            doc.status || "—"
+                          )}
+                        </p>
+
+                        {doc.description ? (
+                          <p className="mt-2">
+                            <strong>Description:</strong> {doc.description}
+                          </p>
+                        ) : null}
+
+                        <div className="mt-2">
+                          <AdminAuctionTimer start={doc.auction_start} end={doc.auction_end} status={doc.status} />
+                        </div>
+                      </div>
+
+                      <div className="flex flex-col items-end gap-3">
+                        <button
+                          onClick={() => deleteListing(doc.$id)}
+                          className="bg-red-600 text-white px-4 py-2 rounded-md font-semibold"
+                        >
+                          Delete
+                        </button>
+
+                        {PUBLIC_LISTING_STATUSES.has(String(doc.status || "")) && (
+                          <a
+                            href={`/listing/${doc.$id}`}
+                            target="_blank"
+                            className="inline-block bg-blue-600 text-white px-4 py-2 rounded-md font-semibold hover:bg-blue-700"
+                          >
+                            View Full Listing
                           </a>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                        )}
+
+                        {activeTab === "live" && (
+                          <button
+                            onClick={() => markListingSold(doc)}
+                            className="inline-block bg-emerald-600 text-white px-4 py-2 rounded-md font-semibold hover:bg-emerald-700"
+                          >
+                            Mark as Sold
+                          </button>
+                        )}
+
+                        {activeTab === "pending" && (
+                          <div className="flex flex-col gap-2 mt-2 w-full">
+                            <button
+                              onClick={() => setSelectedListing(doc)}
+                              className="bg-green-600 text-white py-2 px-4 rounded-md font-semibold w-full"
+                            >
+                              Review & Approve
+                            </button>
+
+                            <button
+                              onClick={() => rejectListing(doc)}
+                              className="bg-red-500 text-white py-2 px-4 rounded-md font-semibold w-full"
+                            >
+                              Reject
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })
             )}
-          </div>
+          </>
         )}
 
-        {/* COMPLETE TAB */}
-        {!loading && activeTab === "complete" && (
+        {/* TRANSACTIONS VIEW */}
+        {!loading && (activeTab === "soldPending" || activeTab === "complete") && (
           <div className="mt-6">
             <h2 className="text-xl font-bold mb-2 text-orange-700">
-              Completed Transactions
+              {activeTab === "soldPending" ? "Sold / Pending (Payment & Admin)" : "Completed Transactions"}
             </h2>
 
             {transactions.length === 0 ? (
-              <p className="text-sm text-neutral-600">No completed transactions yet.</p>
+              <p className="text-sm text-neutral-600">
+                {activeTab === "soldPending" ? "No sold items waiting." : "No completed transactions yet."}
+              </p>
             ) : (
               <div className="overflow-x-auto rounded-xl border border-neutral-200 bg-white shadow-sm">
                 <table className="min-w-full text-left text-xs md:text-sm">
                   <thead className="bg-neutral-100 text-neutral-700">
                     <tr>
-                      <th className="py-2 px-2">Reg</th>
+                      <th className="py-2 px-2">Item</th>
                       <th className="py-2 px-2">Listing ID</th>
                       <th className="py-2 px-2">Seller Email</th>
                       <th className="py-2 px-2">Buyer Email</th>
                       <th className="py-2 px-2">Sale Price</th>
                       <th className="py-2 px-2">Commission</th>
                       <th className="py-2 px-2">Seller Payout</th>
-                      <th className="py-2 px-2">DVLA Fee</th>
                       <th className="py-2 px-2">Payment Status</th>
                       <th className="py-2 px-2">Transaction Status</th>
                       <th className="py-2 px-2">Created</th>
@@ -674,43 +630,49 @@ export default function AdminClient() {
                       <th className="py-2 px-2 text-center">Action</th>
                     </tr>
                   </thead>
+
                   <tbody className="divide-y divide-neutral-200">
-                    {transactions.map((tx) => (
-                      <tr key={tx.$id} className="hover:bg-neutral-50">
-                        <td className="py-2 px-2 whitespace-nowrap">{tx.registration || "-"}</td>
-                        <td className="py-2 px-2 whitespace-nowrap">{tx.listing_id || "-"}</td>
-                        <td className="py-2 px-2 whitespace-nowrap">{tx.seller_email}</td>
-                        <td className="py-2 px-2 whitespace-nowrap">{tx.buyer_email || "-"}</td>
-                        <td className="py-2 px-2 whitespace-nowrap">
-                          £{(tx.sale_price ?? 0).toLocaleString("en-GB")}
-                        </td>
-                        <td className="py-2 px-2 whitespace-nowrap">
-                          £{(tx.commission_amount ?? 0).toLocaleString("en-GB")} ({tx.commission_rate ?? 0}%)
-                        </td>
-                        <td className="py-2 px-2 whitespace-nowrap font-semibold">
-                          £{(tx.seller_payout ?? 0).toLocaleString("en-GB")}
-                        </td>
-                        <td className="py-2 px-2 whitespace-nowrap">
-                          £{((tx.dvla_fee ?? DVLA_FEE_GBP) as number).toLocaleString("en-GB")}{" "}
-                          <span className="text-[11px] text-neutral-500">
-                            ({isLegacyBuyerPaysDvlaTx(tx) ? "paid by buyer (legacy)" : "paid by seller"})
-                          </span>
-                        </td>
-                        <td className="py-2 px-2 whitespace-nowrap">{tx.payment_status || "pending"}</td>
-                        <td className="py-2 px-2 whitespace-nowrap">{tx.transaction_status || "pending"}</td>
-                        <td className="py-2 px-2 whitespace-nowrap">
-                          {tx.created_at ? new Date(tx.created_at).toLocaleString("en-GB") : "-"}
-                        </td>
-                        <td className="py-2 px-2 whitespace-nowrap">
-                          {tx.updated_at ? new Date(tx.updated_at).toLocaleString("en-GB") : "-"}
-                        </td>
-                        <td className="py-2 px-2 text-center whitespace-nowrap">
-                          <a href={`/admin/transaction/${tx.$id}`} className="text-xs text-blue-600 underline">
-                            View
-                          </a>
-                        </td>
-                      </tr>
-                    ))}
+                    {transactions.map((tx) => {
+                      const item =
+                        tx.item_title ||
+                        tx.title ||
+                        [tx.brand, tx.model].filter(Boolean).join(" ") ||
+                        tx.registration ||
+                        "-";
+
+                      return (
+                        <tr key={tx.$id} className="hover:bg-neutral-50">
+                          <td className="py-2 px-2 whitespace-nowrap">{item}</td>
+                          <td className="py-2 px-2 whitespace-nowrap">{tx.listing_id || tx.plate_id || "-"}</td>
+                          <td className="py-2 px-2 whitespace-nowrap">{tx.seller_email || "-"}</td>
+                          <td className="py-2 px-2 whitespace-nowrap">{tx.buyer_email || "-"}</td>
+
+                          <td className="py-2 px-2 whitespace-nowrap">
+                            £{(tx.sale_price ?? 0).toLocaleString("en-GB")}
+                          </td>
+
+                          <td className="py-2 px-2 whitespace-nowrap">
+                            £{(tx.commission_amount ?? 0).toLocaleString("en-GB")} ({tx.commission_rate ?? 0}%)
+                          </td>
+
+                          <td className="py-2 px-2 whitespace-nowrap font-semibold">
+                            £{(tx.seller_payout ?? 0).toLocaleString("en-GB")}
+                          </td>
+
+                          <td className="py-2 px-2 whitespace-nowrap">{tx.payment_status || "pending"}</td>
+                          <td className="py-2 px-2 whitespace-nowrap">{tx.transaction_status || "pending"}</td>
+
+                          <td className="py-2 px-2 whitespace-nowrap">{formatDateTime(txCreated(tx))}</td>
+                          <td className="py-2 px-2 whitespace-nowrap">{formatDateTime(txUpdated(tx))}</td>
+
+                          <td className="py-2 px-2 text-center whitespace-nowrap">
+                            <a href={`/admin/transaction/${tx.$id}`} className="text-xs text-blue-600 underline">
+                              View
+                            </a>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -719,77 +681,55 @@ export default function AdminClient() {
         )}
 
         {/* REVIEW MODAL */}
-        {selectedPlate && (
+        {selectedListing && (
           <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 px-4">
             <div className="bg-white p-6 rounded-2xl w-full max-w-lg relative">
               <button
-                onClick={() => setSelectedPlate(null)}
+                onClick={() => setSelectedListing(null)}
                 className="absolute right-3 top-3 text-neutral-500 hover:text-black text-xl"
               >
                 ✕
               </button>
 
-              <h2 className="text-2xl font-bold text-orange-700 mb-3">
-                {selectedPlate.registration}
-              </h2>
+              <h2 className="text-2xl font-bold text-orange-700 mb-1">{getListingTitle(selectedListing)}</h2>
+              <p className="text-xs text-neutral-600 font-semibold mb-3">{getListingMeta(selectedListing)}</p>
 
-              <p className="text-sm mb-2">
-                <strong>Plate Type:</strong> {selectedPlate.plate_type}
-              </p>
-
-              <label className="block mt-2 font-semibold text-sm">
-                Seller description (read-only)
-              </label>
+              <label className="block mt-2 font-semibold text-sm">Seller description (read-only)</label>
               <div className="border rounded-md p-2 text-sm bg-neutral-50 whitespace-pre-line max-h-32 overflow-y-auto">
-                {selectedPlate.description || "No description provided by seller."}
+                {selectedListing.description || "No description provided by seller."}
               </div>
 
-              <label className="block mt-3 font-semibold text-sm">
-                Reserve Price (£)
-              </label>
+              <label className="block mt-3 font-semibold text-sm">Reserve Price (£)</label>
               <input
                 type="number"
                 className="border w-full p-2 rounded-md text-sm"
-                value={selectedPlate.reserve_price}
-                onChange={(e) =>
-                  setSelectedPlate({ ...selectedPlate, reserve_price: e.target.value })
-                }
+                value={selectedListing.reserve_price ?? 0}
+                onChange={(e) => setSelectedListing({ ...selectedListing, reserve_price: e.target.value })}
               />
 
-              <label className="block mt-3 font-semibold text-sm">
-                Starting Price (£)
-              </label>
+              <label className="block mt-3 font-semibold text-sm">Starting Price (£)</label>
               <input
                 type="number"
                 className="border w-full p-2 rounded-md text-sm"
-                value={selectedPlate.starting_price || 0}
-                onChange={(e) =>
-                  setSelectedPlate({ ...selectedPlate, starting_price: e.target.value })
-                }
+                value={selectedListing.starting_price ?? 0}
+                onChange={(e) => setSelectedListing({ ...selectedListing, starting_price: e.target.value })}
               />
 
-              <label className="block mt-4 font-semibold text-sm">
-                Plate history &amp; interesting facts
-              </label>
+              <label className="block mt-4 font-semibold text-sm">Admin notes (optional)</label>
               <textarea
                 className="border w-full p-2 rounded-md text-sm"
                 rows={4}
-                value={selectedPlate.interesting_fact || ""}
-                onChange={(e) =>
-                  setSelectedPlate({ ...selectedPlate, interesting_fact: e.target.value })
-                }
+                value={selectedListing.admin_notes || selectedListing.interesting_fact || ""}
+                onChange={(e) => setSelectedListing({ ...selectedListing, admin_notes: e.target.value })}
               />
 
               <div className="mt-6 flex justify-between">
-                <button
-                  onClick={approvePlate}
-                  className="bg-green-600 text-white py-2 px-4 rounded-md font-semibold"
-                >
+                <button onClick={approveListing} className="bg-green-600 text-white py-2 px-4 rounded-md font-semibold">
                   Approve
                 </button>
 
                 <button
-                  onClick={() => rejectPlate(selectedPlate)}
+                  onClick={() => rejectListing(selectedListing)}
                   className="bg-red-600 text-white py-2 px-4 rounded-md font-semibold"
                 >
                   Reject
