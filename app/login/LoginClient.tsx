@@ -1,9 +1,9 @@
-// app/login/LoginClient.tsx
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import Script from "next/script";
 import { Client, Account } from "appwrite";
 
 // -----------------------------
@@ -15,6 +15,19 @@ const client = new Client()
 
 const account = new Account(client);
 
+// -----------------------------
+// Turnstile types
+// -----------------------------
+declare global {
+  interface Window {
+    turnstile?: {
+      render: (el: HTMLElement, options: any) => string;
+      reset: (widgetId?: string) => void;
+      remove: (widgetId: string) => void;
+    };
+  }
+}
+
 export default function LoginClient() {
   const router = useRouter();
 
@@ -25,17 +38,188 @@ export default function LoginClient() {
   const [submitting, setSubmitting] = useState(false);
 
   // ---------------------------------
+  // Existing session detection
+  // ---------------------------------
+  const [sessionChecked, setSessionChecked] = useState(false);
+  const [hasActiveSession, setHasActiveSession] = useState(false);
+  const [activeEmail, setActiveEmail] = useState<string>("");
+
+  // ---------------------------------
   // Simple local lockout state
   // ---------------------------------
   const [attempts, setAttempts] = useState(0);
   const [lockedUntil, setLockedUntil] = useState<number | null>(null);
 
+  // ✅ Use AMC keys so cloned projects don’t share lockouts
+  const ATTEMPTS_KEY = "amc_login_attempts";
+  const LOCK_KEY = "amc_login_locked_until";
+
+  // ---------------------------------
+  // Turnstile state
+  // ---------------------------------
+  const TURNSTILE_SITE_KEY = (process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY || "").trim();
+  const canUseTurnstile = useMemo(() => !!TURNSTILE_SITE_KEY, [TURNSTILE_SITE_KEY]);
+
+  const turnstileElRef = useRef<HTMLDivElement | null>(null);
+  const turnstileWidgetIdRef = useRef<string | null>(null);
+
+  const [turnstileToken, setTurnstileToken] = useState<string>("");
+  const [turnstileError, setTurnstileError] = useState<string>("");
+
+  const resetTurnstile = () => {
+    setTurnstileToken("");
+    setTurnstileError("");
+    try {
+      if (typeof window !== "undefined" && window.turnstile) {
+        if (turnstileWidgetIdRef.current) window.turnstile.reset(turnstileWidgetIdRef.current);
+        else window.turnstile.reset();
+      }
+    } catch {
+      // ignore
+    }
+  };
+
+  // Detect active session (prevents the “session active” error & gives proper UX)
+  useEffect(() => {
+    let cancelled = false;
+
+    const check = async () => {
+      try {
+        const me: any = await account.get();
+        if (cancelled) return;
+        if (me?.email) {
+          setHasActiveSession(true);
+          setActiveEmail(String(me.email));
+        } else {
+          setHasActiveSession(false);
+          setActiveEmail("");
+        }
+      } catch {
+        if (cancelled) return;
+        setHasActiveSession(false);
+        setActiveEmail("");
+      } finally {
+        if (!cancelled) setSessionChecked(true);
+      }
+    };
+
+    check();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const handleLogoutCurrent = async () => {
+    setError(null);
+    try {
+      await account.deleteSession("current");
+    } catch {
+      // ignore
+    } finally {
+      setHasActiveSession(false);
+      setActiveEmail("");
+      resetTurnstile();
+    }
+  };
+
+  // Render Turnstile widget once script is ready
+  useEffect(() => {
+    if (!canUseTurnstile) return;
+    if (typeof window === "undefined") return;
+
+    let cancelled = false;
+    let tries = 0;
+
+    const tryRender = () => {
+      if (cancelled) return;
+      if (!turnstileElRef.current) return;
+
+      if (!window.turnstile) {
+        tries += 1;
+        if (tries < 60) setTimeout(tryRender, 100); // up to ~6s
+        return;
+      }
+
+      // already rendered
+      if (turnstileWidgetIdRef.current) return;
+
+      try {
+        const widgetId = window.turnstile.render(turnstileElRef.current, {
+          sitekey: TURNSTILE_SITE_KEY,
+          theme: "dark",
+          callback: (token: string) => {
+            setTurnstileToken(token || "");
+            setTurnstileError("");
+          },
+          "expired-callback": () => {
+            setTurnstileToken("");
+            setTurnstileError("Spam check expired — please try again.");
+          },
+          "error-callback": () => {
+            setTurnstileToken("");
+            setTurnstileError("Spam check failed to load — please refresh and try again.");
+          },
+        });
+
+        turnstileWidgetIdRef.current = widgetId;
+      } catch {
+        setTurnstileError("Spam check failed to initialise — please refresh and try again.");
+      }
+    };
+
+    tryRender();
+
+    return () => {
+      cancelled = true;
+      try {
+        if (window.turnstile && turnstileWidgetIdRef.current) {
+          window.turnstile.remove(turnstileWidgetIdRef.current);
+        }
+      } catch {
+        // ignore
+      } finally {
+        turnstileWidgetIdRef.current = null;
+      }
+    };
+  }, [canUseTurnstile, TURNSTILE_SITE_KEY]);
+
+  const verifyTurnstile = async () => {
+    if (!canUseTurnstile) return true; // if not configured, don’t block
+    if (!turnstileToken) {
+      setTurnstileError("Please complete the spam check.");
+      return false;
+    }
+
+    try {
+      const res = await fetch("/api/turnstile/verify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: turnstileToken }),
+      });
+
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok || !data?.ok) {
+        setTurnstileError(data?.error || "Spam check failed — please try again.");
+        resetTurnstile();
+        return false;
+      }
+
+      setTurnstileError("");
+      return true;
+    } catch {
+      setTurnstileError("Spam check failed — please try again.");
+      resetTurnstile();
+      return false;
+    }
+  };
+
   // Load attempts / lock state from localStorage
   useEffect(() => {
     if (typeof window === "undefined") return;
 
-    const storedAttempts = window.localStorage.getItem("amp_login_attempts");
-    const storedLockedUntil = window.localStorage.getItem("amp_login_locked_until");
+    const storedAttempts = window.localStorage.getItem(ATTEMPTS_KEY);
+    const storedLockedUntil = window.localStorage.getItem(LOCK_KEY);
 
     if (storedAttempts) {
       setAttempts(parseInt(storedAttempts, 10) || 0);
@@ -46,8 +230,7 @@ export default function LoginClient() {
       if (!Number.isNaN(ts) && ts > Date.now()) {
         setLockedUntil(ts);
       } else {
-        // lock expired – clear it
-        window.localStorage.removeItem("amp_login_locked_until");
+        window.localStorage.removeItem(LOCK_KEY);
       }
     }
   }, []);
@@ -55,14 +238,14 @@ export default function LoginClient() {
   const persistAttempts = (count: number, lockTs: number | null) => {
     if (typeof window === "undefined") return;
 
-    window.localStorage.setItem("amp_login_attempts", String(count));
+    window.localStorage.setItem(ATTEMPTS_KEY, String(count));
     setAttempts(count);
 
     if (lockTs) {
-      window.localStorage.setItem("amp_login_locked_until", String(lockTs));
+      window.localStorage.setItem(LOCK_KEY, String(lockTs));
       setLockedUntil(lockTs);
     } else {
-      window.localStorage.removeItem("amp_login_locked_until");
+      window.localStorage.removeItem(LOCK_KEY);
       setLockedUntil(null);
     }
   };
@@ -116,19 +299,35 @@ export default function LoginClient() {
       return;
     }
 
+    // ✅ Turnstile gate BEFORE attempting Appwrite login
+    const okHuman = await verifyTurnstile();
+    if (!okHuman) return;
+
     try {
       setSubmitting(true);
 
-      // ✅ Correct for Appwrite v11+
+      // ✅ FIX: if a session exists, clear it first so Appwrite doesn't throw
+      try {
+        await account.deleteSession("current");
+      } catch {
+        // ignore
+      }
+
       await account.createEmailPasswordSession(email, password);
 
-      // ✅ Success: clear attempts and redirect
+      // ✅ Success: clear attempts + reset turnstile + redirect
       resetAttempts();
-      router.push("/dashboard");
+      resetTurnstile();
+      router.replace("/dashboard");
     } catch (err: any) {
       console.error("Login error:", err);
 
-      const msg = err?.message?.toLowerCase?.() ?? err?.toString?.().toLowerCase() ?? "";
+      resetTurnstile();
+
+      const msg =
+        err?.message?.toLowerCase?.() ??
+        err?.toString?.().toLowerCase?.() ??
+        "";
 
       if (msg.includes("invalid credentials") || msg.includes("invalid email")) {
         recordFailedAttempt();
@@ -147,9 +346,19 @@ export default function LoginClient() {
   // ---------------------------------
   return (
     <main className="min-h-screen flex items-center justify-center bg-black px-4 text-gray-100">
-      <div className="w-full max-w-md bg-[#111111] rounded-2xl shadow-lg border border-yellow-700/60 p-6">
-        <h1 className="text-2xl font-extrabold text-yellow-400 mb-1">Login</h1>
-        <p className="text-xs text-gray-400 mb-4">Enter your email and password to access your dashboard.</p>
+      {/* Turnstile script (only if configured) */}
+      {canUseTurnstile ? (
+        <Script
+          src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit"
+          strategy="afterInteractive"
+        />
+      ) : null}
+
+      <div className="w-full max-w-md bg-[#111111] rounded-2xl shadow-lg border border-sky-700/60 p-6">
+        <h1 className="text-2xl font-extrabold text-sky-300 mb-1">Login</h1>
+        <p className="text-xs text-gray-400 mb-4">
+          Enter your email and password to access your dashboard.
+        </p>
 
         {error && (
           <div className="mb-3 text-xs bg-red-900/30 border border-red-600 text-red-200 rounded-md px-3 py-2">
@@ -158,45 +367,91 @@ export default function LoginClient() {
         )}
 
         {lockoutMessage() && (
-          <div className="mb-3 text-[11px] bg-yellow-900/30 border border-yellow-600 text-yellow-200 rounded-md px-3 py-2">
+          <div className="mb-3 text-[11px] bg-amber-900/30 border border-amber-700 text-amber-200 rounded-md px-3 py-2">
             {lockoutMessage()}
           </div>
         )}
 
+        {/* If already logged in, show clear options */}
+        {sessionChecked && hasActiveSession ? (
+          <div className="mb-4 rounded-md border border-sky-700/50 bg-sky-900/20 px-3 py-3 text-xs text-sky-100">
+            <p className="font-semibold">You’re already logged in{activeEmail ? ` as ${activeEmail}` : ""}.</p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => router.replace("/dashboard")}
+                className="px-3 py-2 rounded-md bg-sky-500 hover:bg-sky-600 text-black font-semibold text-xs"
+              >
+                Go to dashboard
+              </button>
+              <button
+                type="button"
+                onClick={handleLogoutCurrent}
+                className="px-3 py-2 rounded-md border border-sky-500 text-sky-200 hover:bg-sky-900/30 font-semibold text-xs"
+              >
+                Log out and use a different account
+              </button>
+            </div>
+          </div>
+        ) : null}
+
         <form onSubmit={handleSubmit} className="space-y-3">
           <div>
-            <label className="block text-xs font-semibold text-yellow-400 mb-1 uppercase tracking-wide">Email</label>
+            <label className="block text-xs font-semibold text-sky-300 mb-1 uppercase tracking-wide">
+              Email
+            </label>
             <input
               type="email"
               value={email}
               autoComplete="email"
               onChange={(e) => setEmail(e.target.value)}
-              className="w-full border border-neutral-700 rounded-md px-3 py-2 text-sm bg-black text-gray-100 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-yellow-500 focus:border-yellow-500"
+              className="w-full border border-neutral-700 rounded-md px-3 py-2 text-sm bg-black text-gray-100 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-sky-500"
             />
           </div>
 
           <div>
-            <label className="block text-xs font-semibold text-yellow-400 mb-1 uppercase tracking-wide">Password</label>
+            <label className="block text-xs font-semibold text-sky-300 mb-1 uppercase tracking-wide">
+              Password
+            </label>
             <input
               type="password"
               value={password}
               autoComplete="current-password"
               onChange={(e) => setPassword(e.target.value)}
-              className="w-full border border-neutral-700 rounded-md px-3 py-2 text-sm bg-black text-gray-100 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-yellow-500 focus:border-yellow-500"
+              className="w-full border border-neutral-700 rounded-md px-3 py-2 text-sm bg-black text-gray-100 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-sky-500"
             />
           </div>
 
           <div className="flex justify-between items-center text-[11px] text-gray-400">
-            <Link href="/reset-password" className="text-yellow-400 hover:underline">
+            <Link href="/reset-password" className="text-sky-300 hover:underline">
               Forgot your password?
             </Link>
             {attempts > 0 && attempts < 3 && <span>Failed attempts: {attempts} / 3</span>}
           </div>
 
+          {/* TURNSTILE WIDGET */}
+          {canUseTurnstile ? (
+            <div className="mt-2">
+              <div ref={turnstileElRef} className="min-h-[65px] flex items-center justify-center" />
+              {turnstileError ? (
+                <p className="text-xs text-red-300 mt-2 text-center">{turnstileError}</p>
+              ) : null}
+              {!turnstileToken && !turnstileError ? (
+                <p className="text-[11px] text-gray-400 mt-2 text-center">
+                  Please complete the spam check to log in.
+                </p>
+              ) : null}
+            </div>
+          ) : (
+            <p className="text-[11px] text-gray-400 text-center mt-2">
+              Spam check not configured yet (NEXT_PUBLIC_TURNSTILE_SITE_KEY missing).
+            </p>
+          )}
+
           <button
             type="submit"
-            disabled={submitting || isLocked()}
-            className="w-full mt-1 bg-yellow-500 hover:bg-yellow-600 text-black font-semibold py-2.5 rounded-md text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+            disabled={submitting || isLocked() || (canUseTurnstile && !turnstileToken)}
+            className="w-full mt-1 bg-sky-500 hover:bg-sky-600 text-black font-semibold py-2.5 rounded-md text-sm disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {submitting ? "Logging in…" : "Login"}
           </button>
@@ -204,7 +459,7 @@ export default function LoginClient() {
 
         <p className="mt-4 text-xs text-gray-400 text-center">
           Don&apos;t have an account?{" "}
-          <Link href="/register" className="text-yellow-400 hover:underline font-semibold">
+          <Link href="/register" className="text-sky-300 hover:underline font-semibold">
             Register here
           </Link>
         </p>

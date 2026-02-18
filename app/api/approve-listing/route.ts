@@ -1,6 +1,6 @@
 // app/api/approve-listing/route.ts
 import { NextRequest, NextResponse } from "next/server";
-import { Client, Databases } from "node-appwrite";
+import { Client, Databases, Account, Permission, Role } from "node-appwrite";
 import nodemailer from "nodemailer";
 import { getAuctionWindow } from "@/lib/getAuctionWindow";
 
@@ -14,7 +14,6 @@ const endpoint = process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT!;
 const projectId = process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID!;
 const apiKey = process.env.APPWRITE_API_KEY!;
 
-// ✅ Keep backwards compatibility with cloned AuctionMyPlate env names
 const LISTINGS_DB_ID =
   process.env.APPWRITE_LISTINGS_DATABASE_ID ||
   process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID ||
@@ -22,7 +21,6 @@ const LISTINGS_DB_ID =
   process.env.NEXT_PUBLIC_APPWRITE_PLATES_DATABASE_ID ||
   "690fc34a0000ce1baa63";
 
-// ✅ Keep backwards compatibility with cloned AuctionMyPlate collection name
 const LISTINGS_COLLECTION_ID =
   process.env.APPWRITE_LISTINGS_COLLECTION_ID ||
   process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_COLLECTION_ID ||
@@ -34,6 +32,15 @@ const SITE_URL = (process.env.NEXT_PUBLIC_SITE_URL || "https://auctionmycamera.c
   /\/$/,
   ""
 );
+
+// ✅ Admin auth options:
+// Option A) browser admin calls with Authorization: Bearer <JWT> (recommended)
+// Option B) server-to-server with x-admin-secret / ?secret=
+const APPROVE_LISTING_SECRET = (process.env.APPROVE_LISTING_SECRET || "").trim();
+const ADMIN_EMAILS = (process.env.ADMIN_EMAILS || "admin@auctionmycamera.co.uk")
+  .split(",")
+  .map((s) => s.trim().toLowerCase())
+  .filter(Boolean);
 
 // Sender address MUST be email-only (display name handled separately)
 const RAW_FROM_EMAIL =
@@ -52,23 +59,14 @@ const REPLY_TO_EMAIL = (
   "support@auctionmycamera.co.uk"
 ).trim();
 
-// Optional: set this in Vercel if you want a copy of every approval email
-// e.g. APPROVAL_EMAIL_BCC=admin@auctionmycamera.co.uk
 const APPROVAL_EMAIL_BCC = (process.env.APPROVAL_EMAIL_BCC || "").trim();
 
 function normalizeEmailAddress(input: string) {
   let v = (input || "").trim();
-
-  // If someone pasted: Name <email@domain>
   const angleMatch = v.match(/<([^>]+)>/);
   if (angleMatch?.[1]) v = angleMatch[1].trim();
-
-  // Remove surrounding quotes
   v = v.replace(/^"+|"+$/g, "").trim();
-
-  // Remove whitespace inside
   v = v.replace(/\s+/g, "");
-
   return v;
 }
 
@@ -76,7 +74,6 @@ function isValidEmail(email: string) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
 
-// Prevent header injection via subjects/names (strip CR/LF)
 function safeHeaderValue(v: unknown, fallback = "") {
   const s = String(v ?? fallback);
   return s.replace(/[\r\n]+/g, " ").trim();
@@ -94,9 +91,61 @@ function escapeHtml(s: unknown) {
 
 const FROM_ADDRESS = normalizeEmailAddress(RAW_FROM_EMAIL);
 
-function getDatabases() {
+function getAdminDatabases() {
   const client = new Client().setEndpoint(endpoint).setProject(projectId).setKey(apiKey);
   return new Databases(client);
+}
+
+function getJwtFromRequest(req: NextRequest) {
+  const auth = req.headers.get("authorization") || "";
+  if (auth.toLowerCase().startsWith("bearer ")) return auth.slice(7).trim();
+  const alt = req.headers.get("x-appwrite-user-jwt") || "";
+  return alt.trim();
+}
+
+async function getAuthedUser(req: NextRequest) {
+  const jwt = getJwtFromRequest(req);
+  if (!jwt) return null;
+
+  const userClient = new Client().setEndpoint(endpoint).setProject(projectId).setJWT(jwt);
+  const account = new Account(userClient);
+
+  try {
+    const me: any = await account.get();
+    if (!me?.$id || !me?.email) return null;
+
+    return {
+      id: String(me.$id),
+      email: String(me.email),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function isAdminRequest(req: NextRequest, authedUser: { email: string } | null) {
+  const secretHeader = (req.headers.get("x-admin-secret") || "").trim();
+  const secretQuery = (req.nextUrl.searchParams.get("secret") || "").trim();
+
+  const secretOk =
+    !!APPROVE_LISTING_SECRET &&
+    (secretHeader === APPROVE_LISTING_SECRET || secretQuery === APPROVE_LISTING_SECRET);
+
+  const emailOk =
+    !!authedUser?.email &&
+    ADMIN_EMAILS.includes(String(authedUser.email).trim().toLowerCase());
+
+  return secretOk || emailOk;
+}
+
+// If you ever enable Document Security (Row Security), you’ll want queued/live listings to be publicly readable.
+function buildPublicReadPermissions(ownerId: string) {
+  return [
+    Permission.read(Role.any()),
+    Permission.read(Role.user(ownerId)),
+    Permission.update(Role.user(ownerId)),
+    Permission.delete(Role.user(ownerId)),
+  ];
 }
 
 function toNumberOrFallback(value: any, fallback: number) {
@@ -124,6 +173,19 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Server Appwrite config missing." }, { status: 500 });
     }
 
+    const authedUser = await getAuthedUser(req);
+
+    // ✅ Production safety: require admin auth
+    if (process.env.NODE_ENV === "production" && !isAdminRequest(req, authedUser)) {
+      return NextResponse.json(
+        {
+          error:
+            "Forbidden. Admin auth required (send Authorization: Bearer <JWT> as an admin, or x-admin-secret).",
+        },
+        { status: 403 }
+      );
+    }
+
     const body = await req.json().catch(() => null);
     if (!body) {
       return NextResponse.json({ error: "Invalid JSON body." }, { status: 400 });
@@ -134,22 +196,26 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "listingId is required." }, { status: 400 });
     }
 
-    const databases = getDatabases();
+    const databases = getAdminDatabases();
 
-    // Load existing listing (may still be the old “plates” document shape)
-    const listing: any = await databases.getDocument(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, listingId);
+    const listing: any = await databases.getDocument(
+      LISTINGS_DB_ID,
+      LISTINGS_COLLECTION_ID,
+      listingId
+    );
 
-    // Best-effort title (new camera fields first, then legacy)
+    // Best-effort title (camera fields first, then legacy)
     const itemTitle =
       safeString(listing.item_title, "").trim() ||
       safeString(listing.title, "").trim() ||
       safeString(listing.registration, "").trim() ||
       `Listing ${listingId}`;
 
+    const ownerId = String(listing.owner_id || listing.ownerId || "").trim();
+
     const sellerEmailFromBody = safeString(body.sellerEmail, "").trim();
     const sellerEmail = sellerEmailFromBody || safeString(listing.seller_email, "").trim() || "";
 
-    // Normalise fields (use admin input if provided, else keep existing)
     const startingPrice = toNumberOrFallback(
       body.starting_price,
       typeof listing.starting_price === "number" ? listing.starting_price : 0
@@ -188,13 +254,15 @@ export async function POST(req: NextRequest) {
     }
 
     // -----------------------------
-    // Choose the NEXT UPCOMING auction window safely
+    // Choose the correct auction window
+    // ✅ If we are BEFORE the end of the current window, use currentStart/currentEnd.
+    // Otherwise, use nextStart/nextEnd.
     // -----------------------------
-    const { now, currentStart, currentEnd, nextStart, nextEnd } = getAuctionWindow();
+    const { now, currentStart, currentEnd, nextStart, nextEnd } = getAuctionWindow(new Date());
 
-    const useCurrentUpcoming = now.getTime() < currentStart.getTime();
-    const start = useCurrentUpcoming ? currentStart : nextStart;
-    const end = useCurrentUpcoming ? currentEnd : nextEnd;
+    const useCurrentWindow = now.getTime() < currentEnd.getTime();
+    const start = useCurrentWindow ? currentStart : nextStart;
+    const end = useCurrentWindow ? currentEnd : nextEnd;
 
     const auction_start = start.toISOString();
     const auction_end = end.toISOString();
@@ -202,13 +270,12 @@ export async function POST(req: NextRequest) {
     console.log("✅ APPROVE-LISTING auction window", {
       listingId,
       now: now.toISOString(),
-      chosen: useCurrentUpcoming ? "currentStart/currentEnd" : "nextStart/nextEnd",
+      chosen: useCurrentWindow ? "currentStart/currentEnd" : "nextStart/nextEnd",
       auction_start,
       auction_end,
     });
 
-    // Approve & queue for the upcoming auction
-    const updated = await databases.updateDocument(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, listingId, {
+    const updateData: Record<string, any> = {
       status: "queued",
       starting_price: startingPrice,
       reserve_price: reservePrice,
@@ -216,7 +283,40 @@ export async function POST(req: NextRequest) {
       interesting_fact: interestingFact,
       auction_start,
       auction_end,
-    });
+
+      // ✅ Reset bid state on approval (prevents £0 base bid bugs)
+      current_bid: null,
+      bids: 0,
+      highest_bidder: null,
+      last_bidder: null,
+      last_bid_time: null,
+      bidder_email: null,
+      bidder_id: null,
+    };
+
+    let updated: any;
+
+    // Try to also make it publicly readable if Document Security is on (safe fallback)
+    if (ownerId) {
+      try {
+        updated = await (databases as any).updateDocument(
+          LISTINGS_DB_ID,
+          LISTINGS_COLLECTION_ID,
+          listingId,
+          updateData,
+          buildPublicReadPermissions(ownerId)
+        );
+      } catch {
+        updated = await databases.updateDocument(
+          LISTINGS_DB_ID,
+          LISTINGS_COLLECTION_ID,
+          listingId,
+          updateData
+        );
+      }
+    } else {
+      updated = await databases.updateDocument(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, listingId, updateData);
+    }
 
     // -----------------------------
     // Email seller (non-fatal)
@@ -274,15 +374,15 @@ export async function POST(req: NextRequest) {
           to: String(sellerEmail),
           ...(APPROVAL_EMAIL_BCC ? { bcc: APPROVAL_EMAIL_BCC } : {}),
           ...(isValidEmail(REPLY_TO_EMAIL) ? { replyTo: REPLY_TO_EMAIL } : {}),
-          subject: safeHeaderValue("✅ Approved: your listing is queued for the next auction"),
+          subject: safeHeaderValue("✅ Approved: your listing is queued for the weekly auction"),
           headers: {
             "X-AuctionMyCamera-Event": "listing-approved",
             "X-AuctionMyCamera-ListingId": listingId,
           },
           html: `
             <p>Good news!</p>
-            <p>Your listing <strong>${safeTitle}</strong> has been approved and queued for the next weekly auction.</p>
-            <p><strong>Next auction window (UK time):</strong><br/>
+            <p>Your listing <strong>${safeTitle}</strong> has been approved and queued for the weekly auction.</p>
+            <p><strong>Auction window (UK time):</strong><br/>
               Start: ${escapeHtml(fmtLondon(start))}<br/>
               End: ${escapeHtml(fmtLondon(end))}
             </p>

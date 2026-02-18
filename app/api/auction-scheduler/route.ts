@@ -1,11 +1,12 @@
 // app/api/auction-scheduler/route.ts
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { Client, Databases, Query, ID } from "node-appwrite";
 import Stripe from "stripe";
 import nodemailer from "nodemailer";
 import { getAuctionWindow } from "@/lib/getAuctionWindow";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 // -----------------------------
 // APPWRITE SETUP
@@ -14,20 +15,25 @@ const endpoint = process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT!;
 const projectId = process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID!;
 const apiKey = process.env.APPWRITE_API_KEY!;
 
+// ✅ Backwards compatible: LISTINGS_* first, then PLATES_* (clone support)
 const DB_ID =
+  process.env.APPWRITE_LISTINGS_DATABASE_ID ||
+  process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID ||
   process.env.APPWRITE_PLATES_DATABASE_ID ||
   process.env.NEXT_PUBLIC_APPWRITE_PLATES_DATABASE_ID ||
   "690fc34a0000ce1baa63";
 
-const PLATES_COLLECTION_ID =
+const LISTINGS_COLLECTION_ID =
+  process.env.APPWRITE_LISTINGS_COLLECTION_ID ||
+  process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_COLLECTION_ID ||
   process.env.APPWRITE_PLATES_COLLECTION_ID ||
   process.env.NEXT_PUBLIC_APPWRITE_PLATES_COLLECTION_ID ||
   "plates";
 
 // BIDS collection (same DB)
 const BIDS_COLLECTION_ID =
-  process.env.NEXT_PUBLIC_APPWRITE_BIDS_COLLECTION_ID ||
   process.env.APPWRITE_BIDS_COLLECTION_ID ||
+  process.env.NEXT_PUBLIC_APPWRITE_BIDS_COLLECTION_ID ||
   "";
 
 // TRANSACTIONS collection (same DB)
@@ -40,44 +46,69 @@ const client = new Client().setEndpoint(endpoint).setProject(projectId).setKey(a
 const databases = new Databases(client);
 
 // -----------------------------
+// CRON / SECURITY
+// -----------------------------
+const CRON_SECRET = (process.env.CRON_SECRET || process.env.AUCTION_CRON_SECRET || "").trim();
+
+function cronAuthed(req: NextRequest) {
+  if (!CRON_SECRET) return true; // if you don't set a secret, it's open (not recommended)
+  const q = (req.nextUrl.searchParams.get("secret") || "").trim();
+  const h = (req.headers.get("x-cron-secret") || "").trim();
+  return q === CRON_SECRET || h === CRON_SECRET;
+}
+
+// -----------------------------
 // STRIPE
 // -----------------------------
-const stripeSecret = process.env.STRIPE_SECRET_KEY || "";
-const stripe = stripeSecret
-  ? new Stripe(stripeSecret, { apiVersion: "2025-11-17.clover" as any })
-  : null;
+const stripeSecret = (process.env.STRIPE_SECRET_KEY || "").trim();
+const stripe = stripeSecret ? new Stripe(stripeSecret) : null;
 
 // -----------------------------
 // EMAIL
 // -----------------------------
+const SITE_URL = (process.env.NEXT_PUBLIC_SITE_URL || "https://auctionmycamera.co.uk").replace(
+  /\/$/,
+  ""
+);
+
+const RAW_FROM_EMAIL =
+  process.env.FROM_EMAIL ||
+  process.env.CONTACT_FROM_EMAIL ||
+  process.env.EMAIL_FROM ||
+  process.env.SMTP_FROM ||
+  process.env.SMTP_USER ||
+  "no-reply@auctionmycamera.co.uk";
+
+const FROM_NAME = (process.env.FROM_NAME || "AuctionMyCamera").trim();
+
+function normalizeEmailAddress(input: string) {
+  let v = (input || "").trim();
+  const angleMatch = v.match(/<([^>]+)>/);
+  if (angleMatch?.[1]) v = angleMatch[1].trim();
+  v = v.replace(/^"+|"+$/g, "").trim();
+  v = v.replace(/\s+/g, "");
+  return v;
+}
+
+function isValidEmail(email: string) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
+const FROM_ADDRESS = normalizeEmailAddress(RAW_FROM_EMAIL);
+
 function getMailer() {
-  if (
-    process.env.SMTP_HOST &&
-    process.env.SMTP_PORT &&
-    process.env.SMTP_USER &&
-    process.env.SMTP_PASS
-  ) {
+  const host = (process.env.SMTP_HOST || "").trim();
+  const user = (process.env.SMTP_USER || "").trim();
+  const pass = (process.env.SMTP_PASS || "").trim();
+  const port = Number(process.env.SMTP_PORT || "465");
+  if (host && user && pass) {
     return nodemailer.createTransport({
-      host: process.env.SMTP_HOST,
-      port: Number(process.env.SMTP_PORT),
-      secure: true,
-      auth: {
-        user: process.env.SMTP_USER,
-        pass: process.env.SMTP_PASS,
-      },
+      host,
+      port,
+      secure: port === 465, // ✅ correct for 465 vs 587
+      auth: { user, pass },
     });
   }
-
-  if (process.env.SMTP_USER && process.env.SMTP_PASS) {
-    return nodemailer.createTransport({
-      service: "gmail",
-      auth: {
-        user: process.env.SMTP_USER,
-        pass: process.env.SMTP_PASS,
-      },
-    });
-  }
-
   return null;
 }
 
@@ -86,23 +117,10 @@ function fmtLondon(d: Date) {
 }
 
 // -----------------------------
-// DVLA POLICY
+// CAMERA POLICY
+// (No DVLA fee for cameras)
 // -----------------------------
-const DVLA_FEE_GBP = 80;
-
-/**
- * IMPORTANT:
- * These are the TWO legacy listings that must remain "buyer pays £80".
- * These must be the Appwrite document IDs (listing $id values).
- */
-const LEGACY_BUYER_PAYS_IDS = new Set<string>([
-  "696ea3d0001a45280a16",
-  "697bccfd001325add473",
-]);
-
-function isLegacyBuyerPays(listingId: string): boolean {
-  return LEGACY_BUYER_PAYS_IDS.has(listingId);
-}
+const EXTRA_FEE_GBP = 0;
 
 // -----------------------------
 // SMALL HELPERS
@@ -123,21 +141,16 @@ function parseTimestamp(ts: any): number {
 }
 
 // -----------------------------
-// Helper: create transaction doc (aligned with your schema)
-// Enforces DVLA policy:
-// - legacy: buyer pays £80 extra, seller payout NOT reduced
-// - new: buyer does NOT pay extra, seller payout reduced by £80
+// Helper: create transaction doc (schema-tolerant)
 // -----------------------------
 async function createTransactionForWinner(params: {
   listing: any;
-  finalBidAmount: number; // plate-only price
+  finalBidAmount: number; // winning bid (GBP)
   winnerEmail: string;
   paymentIntentId: string;
 }) {
   if (!TRANSACTIONS_COLLECTION_ID) {
-    console.warn(
-      "No TRANSACTIONS_COLLECTION_ID configured; skipping transaction creation."
-    );
+    console.warn("No TRANSACTIONS_COLLECTION_ID configured; skipping transaction creation.");
     return;
   }
 
@@ -146,10 +159,13 @@ async function createTransactionForWinner(params: {
   const nowIso = new Date().toISOString();
 
   const listingId = String(listing.$id || "");
-  const reg = (listing.registration as string | undefined) || "";
-  const sellerEmail = (listing.seller_email as string | undefined) || "";
+  const display =
+    (listing.item_title as string | undefined) ||
+    (listing.title as string | undefined) ||
+    (listing.registration as string | undefined) ||
+    "";
 
-  const legacyBuyerPays = isLegacyBuyerPays(listingId);
+  const sellerEmail = (listing.seller_email as string | undefined) || "";
 
   const commissionRate = getNumeric(listing.commission_rate); // e.g. 10 = 10%
   const salePriceInt = Math.round(finalBidAmount);
@@ -158,55 +174,53 @@ async function createTransactionForWinner(params: {
     commissionRate > 0 ? (salePriceInt * commissionRate) / 100 : 0
   );
 
-  const sellerPayoutBeforeDvla = salePriceInt - commissionAmount;
-
-  // NEW policy: deduct £80 from seller payout for non-legacy listings
-  const sellerDvlaDeduction = legacyBuyerPays ? 0 : DVLA_FEE_GBP;
-  const sellerPayout = Math.max(0, sellerPayoutBeforeDvla - sellerDvlaDeduction);
+  const sellerPayout = Math.max(0, salePriceInt - commissionAmount - EXTRA_FEE_GBP);
 
   const data: Record<string, any> = {
     listing_id: listingId,
     seller_email: sellerEmail,
     buyer_email: winnerEmail,
 
-    // Plate-only sale price (DVLA fee is always recorded separately)
     sale_price: salePriceInt,
 
     commission_rate: commissionRate,
     commission_amount: commissionAmount,
 
-    // Payout adjusted for seller-side DVLA fee on non-legacy listings
     seller_payout: sellerPayout,
 
-    // Always record DVLA fee amount (exists in both cases)
-    dvla_fee: DVLA_FEE_GBP,
+    // Keep field if your schema expects it; cameras set it to 0
+    dvla_fee: 0,
 
     transaction_status: "pending_documents",
     created_at: nowIso,
 
     payment_status: "paid",
-    registration: reg,
+    registration: display,
     stripe_payment_intent_id: paymentIntentId,
   };
 
   try {
     await databases.createDocument(DB_ID, TRANSACTIONS_COLLECTION_ID, ID.unique(), data);
   } catch (err) {
-    console.error(
-      "Failed to create transaction document for listing",
-      listingId,
-      err
-    );
+    console.error("Failed to create transaction document for listing", listingId, err);
   }
 }
 
 // -----------------------------
-// GET = manual scheduler run
+// GET = scheduler run (use via Vercel Cron)
 // -----------------------------
-export async function GET() {
+export async function GET(req: NextRequest) {
   const winnerCharges: any[] = [];
 
   try {
+    if (!endpoint || !projectId || !apiKey) {
+      return NextResponse.json({ ok: false, error: "Missing Appwrite env config." }, { status: 500 });
+    }
+
+    if (!cronAuthed(req)) {
+      return NextResponse.json({ ok: false, error: "Forbidden (cron secret required)." }, { status: 403 });
+    }
+
     const now = new Date();
     const nowIso = now.toISOString();
     const nowTs = now.getTime();
@@ -214,7 +228,7 @@ export async function GET() {
     // ---------------------------------
     // 1) Promote queued -> live
     // ---------------------------------
-    const queuedRes = await databases.listDocuments(DB_ID, PLATES_COLLECTION_ID, [
+    const queuedRes = await databases.listDocuments(DB_ID, LISTINGS_COLLECTION_ID, [
       Query.equal("status", ["queued", "approvedQueued"]),
       Query.limit(200),
     ]);
@@ -223,9 +237,14 @@ export async function GET() {
 
     for (const doc of queuedRes.documents as any[]) {
       const startTs = parseTimestamp(doc.auction_start);
-      if (startTs && startTs > nowTs) continue;
 
-      await databases.updateDocument(DB_ID, PLATES_COLLECTION_ID, doc.$id, {
+      // If auction_start missing, do NOT auto-promote blindly.
+      // Leave queued (admin approval should always set auction_start/auction_end).
+      if (!startTs) continue;
+
+      if (startTs > nowTs) continue;
+
+      await databases.updateDocument(DB_ID, LISTINGS_COLLECTION_ID, doc.$id, {
         status: "live",
       });
       promoted++;
@@ -234,7 +253,7 @@ export async function GET() {
     // ---------------------------------
     // 2) End live auctions
     // ---------------------------------
-    const liveRes = await databases.listDocuments(DB_ID, PLATES_COLLECTION_ID, [
+    const liveRes = await databases.listDocuments(DB_ID, LISTINGS_COLLECTION_ID, [
       Query.equal("status", "live"),
       Query.lessThanEqual("auction_end", nowIso),
       Query.limit(200),
@@ -259,7 +278,7 @@ export async function GET() {
       const reserveMet = reserve <= 0 ? hasBid : currentBid >= reserve;
 
       if (hasBid && reserveMet) {
-        const updated = await databases.updateDocument(DB_ID, PLATES_COLLECTION_ID, lid, {
+        const updated = await databases.updateDocument(DB_ID, LISTINGS_COLLECTION_ID, lid, {
           status: "completed",
         });
         completed++;
@@ -268,14 +287,13 @@ export async function GET() {
       }
 
       if (wantsAutoRelist) {
-        const { currentStart, currentEnd, nextStart, nextEnd, now: wnNow } =
-          getAuctionWindow();
+        const { currentStart, currentEnd, nextStart, nextEnd, now: wnNow } = getAuctionWindow();
 
         const useNext = wnNow.getTime() > currentEnd.getTime();
         const start = useNext ? nextStart : currentStart;
         const end = useNext ? nextEnd : currentEnd;
 
-        await databases.updateDocument(DB_ID, PLATES_COLLECTION_ID, lid, {
+        await databases.updateDocument(DB_ID, LISTINGS_COLLECTION_ID, lid, {
           status: "queued",
           auction_start: start.toISOString(),
           auction_end: end.toISOString(),
@@ -292,22 +310,24 @@ export async function GET() {
         relisted++;
 
         const sellerEmail = (doc.seller_email as string | undefined) || "";
-        const registration = (doc.registration as string | undefined) || "your plate";
+        const title =
+          (doc.item_title as string | undefined) ||
+          (doc.title as string | undefined) ||
+          (doc.registration as string | undefined) ||
+          "your listing";
 
-        if (mailer && sellerEmail) {
+        if (mailer && sellerEmail && isValidEmail(sellerEmail) && isValidEmail(FROM_ADDRESS)) {
           try {
-            const fromEmail = process.env.SMTP_USER || "no-reply@auctionmyplate.co.uk";
-
             await mailer.sendMail({
-              from: `"AuctionMyPlate" <${fromEmail}>`,
+              from: { name: FROM_NAME, address: FROM_ADDRESS },
               to: sellerEmail,
-              subject: `✅ ${registration} has been re-listed`,
-              text: `Your number plate ${registration} did not sell this week, so we have automatically re-listed it for the next auction window.
+              subject: `✅ ${title} has been re-listed`,
+              text: `Your listing "${title}" did not sell this week, so we have automatically re-listed it for the next auction window.
 
 Start: ${fmtLondon(start)}
 End:   ${fmtLondon(end)}
 
-— AuctionMyPlate Team`,
+— AuctionMyCamera Team`,
             });
 
             relistEmailsSent++;
@@ -319,14 +339,14 @@ End:   ${fmtLondon(end)}
         continue;
       }
 
-      await databases.updateDocument(DB_ID, PLATES_COLLECTION_ID, lid, {
+      await databases.updateDocument(DB_ID, LISTINGS_COLLECTION_ID, lid, {
         status: "not_sold",
       });
       markedNotSold++;
     }
 
     // ---------------------------------
-    // 3) Charge winners for SOLD listings only
+    // 3) Charge winners for completed listings only
     // ---------------------------------
     if (!stripe || !BIDS_COLLECTION_ID) {
       return NextResponse.json({
@@ -338,7 +358,7 @@ End:   ${fmtLondon(end)}
         relisted,
         relistEmailsSent,
         winnerCharges: [],
-        note: "Stripe or BIDS collection not configured – skipped winner charging.",
+        note: "Stripe or BIDS collection not configured — skipped winner charging.",
       });
     }
 
@@ -370,34 +390,21 @@ End:   ${fmtLondon(end)}
           Query.limit(1000),
         ]);
       } catch (err) {
-        console.error(
-          `Failed to list bids for listing ${lid}. Check BIDS indexes/attributes.`,
-          err
-        );
-        winnerCharges.push({
-          listingId: lid,
-          skipped: true,
-          reason: "failed to load bids (Appwrite error)",
-        });
+        console.error(`Failed to list bids for listing ${lid}. Check BIDS indexes/attributes.`, err);
+        winnerCharges.push({ listingId: lid, skipped: true, reason: "failed to load bids (Appwrite error)" });
         continue;
       }
 
       const bids = (bidsRes.documents as any[]) || [];
       if (!bids.length) {
-        winnerCharges.push({
-          listingId: lid,
-          skipped: true,
-          reason: "no bids found in BIDS collection",
-        });
+        winnerCharges.push({ listingId: lid, skipped: true, reason: "no bids found in BIDS collection" });
         continue;
       }
 
       bids.sort((a, b) => parseTimestamp(b.timestamp) - parseTimestamp(a.timestamp));
       const winningBid = bids[0];
 
-      const rawAmount =
-        winningBid.amount !== undefined ? winningBid.amount : winningBid.bid_amount;
-
+      const rawAmount = winningBid.amount !== undefined ? winningBid.amount : winningBid.bid_amount;
       const winningAmount = getNumeric(rawAmount);
       const winnerEmail = winningBid.bidder_email || "";
 
@@ -411,22 +418,14 @@ End:   ${fmtLondon(end)}
         continue;
       }
 
-      const finalBidAmount = winningAmount || currentBid; // plate-only price
-
-      // DVLA policy:
-      // - legacy: buyer pays +£80 (add to charge)
-      // - new: buyer pays plate-only (no add)
-      const legacyBuyerPays = isLegacyBuyerPays(lid);
-      const totalToCharge = legacyBuyerPays ? finalBidAmount + DVLA_FEE_GBP : finalBidAmount;
+      const finalBidAmount = winningAmount || currentBid;
+      const totalToCharge = finalBidAmount; // cameras: no extra fee
       const amountInPence = Math.round(totalToCharge * 100);
 
       try {
         const existing = await stripe.customers.list({ email: winnerEmail, limit: 1 });
-
         let customer = existing.data[0];
-        if (!customer) {
-          customer = await stripe.customers.create({ email: winnerEmail });
-        }
+        if (!customer) customer = await stripe.customers.create({ email: winnerEmail });
 
         const paymentMethods = await stripe.paymentMethods.list({
           customer: customer.id,
@@ -438,8 +437,7 @@ End:   ${fmtLondon(end)}
           winnerCharges.push({
             listingId: lid,
             skipped: true,
-            reason:
-              "winner has no saved card in Stripe (must add card via payment-method page)",
+            reason: "winner has no saved card in Stripe (must add card via payment-method page)",
             winnerEmail,
           });
           continue;
@@ -448,11 +446,10 @@ End:   ${fmtLondon(end)}
         const paymentMethod = paymentMethods.data[0];
         const idempotencyKey = `winner-charge-${lid}`;
 
-        const description = legacyBuyerPays
-          ? `Auction winner - ${
-              listing.registration || listing.listing_id || lid
-            } (incl. £${DVLA_FEE_GBP} DVLA fee)`
-          : `Auction winner - ${listing.registration || listing.listing_id || lid}`;
+        const label =
+          listing.item_title || listing.title || listing.registration || listing.listing_id || lid;
+
+        const description = `Auction winner - ${label}`;
 
         const intent = await stripe.paymentIntents.create(
           {
@@ -468,27 +465,21 @@ End:   ${fmtLondon(end)}
               winnerEmail,
               type: "auction_winner",
               finalBidAmount: String(finalBidAmount),
-              buyerPaysTransferFee: legacyBuyerPays ? "true" : "false",
-              dvlaFeeAmount: String(DVLA_FEE_GBP),
-              dvlaFeeChargedToBuyer: legacyBuyerPays ? String(DVLA_FEE_GBP) : "0",
             },
           },
           { idempotencyKey }
         );
 
-        // Update plate document (best-effort)
+        // Update listing doc (best-effort)
         try {
           const commissionRate = getNumeric(listing.commission_rate);
-          const soldPrice = finalBidAmount; // plate-only
+          const soldPrice = finalBidAmount;
           const saleFee = commissionRate > 0 ? (soldPrice * commissionRate) / 100 : 0;
-
-          // NEW policy: deduct £80 from seller net for non-legacy
-          const sellerDvlaDeduction = legacyBuyerPays ? 0 : DVLA_FEE_GBP;
-          const sellerNetAmount = Math.max(0, soldPrice - saleFee - sellerDvlaDeduction);
+          const sellerNetAmount = Math.max(0, soldPrice - saleFee);
 
           const buyerId = listing.buyer_id || listing.highest_bidder || null;
 
-          await databases.updateDocument(DB_ID, PLATES_COLLECTION_ID, lid, {
+          await databases.updateDocument(DB_ID, LISTINGS_COLLECTION_ID, lid, {
             buyer_email: winnerEmail,
             buyer_id: buyerId,
             sold_price: soldPrice,
@@ -498,10 +489,7 @@ End:   ${fmtLondon(end)}
             payout_status: "pending",
           });
         } catch (updateErr) {
-          console.error(
-            `Failed to update plate doc for listing ${lid} after charge`,
-            updateErr
-          );
+          console.error(`Failed to update listing doc for ${lid} after charge`, updateErr);
         }
 
         await createTransactionForWinner({
@@ -517,7 +505,6 @@ End:   ${fmtLondon(end)}
           winnerEmail,
           bid: finalBidAmount,
           totalCharged: totalToCharge,
-          buyerPaysTransferFee: legacyBuyerPays,
           paymentIntentId: intent.id,
           paymentStatus: intent.status,
         });

@@ -42,7 +42,10 @@ function safeString(v: any) {
 }
 
 function getAdminDatabases() {
-  const client = new Client().setEndpoint(endpoint).setProject(projectId).setKey(apiKey);
+  const client = new Client()
+    .setEndpoint(endpoint)
+    .setProject(projectId)
+    .setKey(apiKey);
   return new Databases(client);
 }
 
@@ -66,7 +69,6 @@ async function getAuthedUser(req: NextRequest) {
     const me: any = await account.get(); // validates JWT
     if (!me?.$id || !me?.email) return null;
 
-    // Appwrite exposes email verification as `emailVerification` on the Account object.
     const emailVerified = !!me?.emailVerification;
 
     return {
@@ -81,9 +83,6 @@ async function getAuthedUser(req: NextRequest) {
 }
 
 function buildCreatePermissions(userId: string) {
-  // IMPORTANT:
-  // - This only has effect if Row Security / Document Security is enabled on the collection.
-  // - If you don't enable Row Security, Appwrite collection permissions control access.
   const perms: string[] = [
     Permission.read(Role.user(userId)),
     Permission.update(Role.user(userId)),
@@ -112,7 +111,7 @@ function buildCreatePermissions(userId: string) {
 // -----------------------------
 // POST /api/listings
 // Requires Authorization: Bearer <Appwrite JWT>
-// Creates a NEW listing document in Appwrite as pending_approval
+// Creates a NEW listing document as pending_approval
 // Then triggers emails via /api/admin/new-listing
 // -----------------------------
 export async function POST(req: NextRequest) {
@@ -125,11 +124,7 @@ export async function POST(req: NextRequest) {
     const me = await getAuthedUser(req);
     if (!me) {
       return NextResponse.json(
-        {
-          error:
-            "Not authenticated. Please log in or register before selling.",
-          code: "NOT_AUTHENTICATED",
-        },
+        { error: "Not authenticated. Please log in or register before selling.", code: "NOT_AUTHENTICATED" },
         { status: 401 }
       );
     }
@@ -138,8 +133,7 @@ export async function POST(req: NextRequest) {
     if (!me.emailVerified) {
       return NextResponse.json(
         {
-          error:
-            "Email not verified. Please verify your email before submitting a listing.",
+          error: "Email not verified. Please verify your email before submitting a listing.",
           code: "EMAIL_NOT_VERIFIED",
         },
         { status: 403 }
@@ -204,19 +198,21 @@ export async function POST(req: NextRequest) {
     const sellerEmail = me.email;
     const ownerId = me.id;
 
-    // If you enabled Row Security, these permissions keep pending listings private
     const permissions = buildCreatePermissions(ownerId);
 
+    const nowIso = new Date().toISOString();
+
     const data: Record<string, any> = {
-      // Base / compatibility
+      // Base / compatibility (legacy uses "registration" as label)
       registration: displayName,
 
-      // Write both “old” and “new” naming where possible (schema tolerant)
+      // Ownership / seller
       seller_email: sellerEmail,
       sellerEmail: sellerEmail,
       owner_id: ownerId,
       ownerId: ownerId,
 
+      // Pricing
       starting_price: startingPrice,
       reserve_price: reservePrice,
       buy_now: buyNow,
@@ -224,7 +220,14 @@ export async function POST(req: NextRequest) {
       // ✅ Always pending until admin approves
       status: "pending_approval",
 
-      // Camera fields (will work once schema exists)
+      // ✅ Auction timings are ADMIN-controlled (never trust client)
+      auction_start: null,
+      auction_end: null,
+
+      // Optional bid tracking fields (safe defaults if schema supports them)
+      current_bid: 0,
+
+      // Camera fields (schema-tolerant)
       item_title: itemTitle || null,
       gear_type: gearType || null,
       era: era || null,
@@ -233,14 +236,13 @@ export async function POST(req: NextRequest) {
       model: model || null,
       description: description || null,
 
-      // Keep these as harmless defaults if old schema expects them
+      // Legacy harmless defaults
       plate_status: body.plate_status || "available",
       expiry_date: body.expiry_date || null,
       interesting_fact: body.interesting_fact || null,
 
-      // Optional auction fields if provided (approval overwrites anyway)
-      auction_start: body.auction_start || null,
-      auction_end: body.auction_end || null,
+      created_at: nowIso,
+      updated_at: nowIso,
     };
 
     let created: any;
@@ -250,10 +252,9 @@ export async function POST(req: NextRequest) {
         LISTINGS_COLLECTION_ID,
         ID.unique(),
         data,
-        permissions // only meaningful if Row Security is ON
+        permissions
       );
     } catch (err: any) {
-      // If schema rejects new fields, fall back to minimal write
       const msg = String(err?.message || err);
       console.error("❌ createDocument failed, attempting minimal fallback", msg);
 
@@ -267,8 +268,8 @@ export async function POST(req: NextRequest) {
         reserve_price: reservePrice,
         buy_now: buyNow,
         status: "pending_approval",
-        plate_status: body.plate_status || "available",
-        expiry_date: body.expiry_date || null,
+        created_at: nowIso,
+        updated_at: nowIso,
       };
 
       created = await databases.createDocument(
@@ -283,7 +284,6 @@ export async function POST(req: NextRequest) {
     const listingId = created?.$id;
 
     // Trigger admin notification (non-fatal)
-    // NOTE: your /api/admin/new-listing currently expects plateId + registration (legacy naming)
     try {
       const url = new URL("/api/admin/new-listing", req.url);
       await fetch(url, {
@@ -296,8 +296,6 @@ export async function POST(req: NextRequest) {
           reserve_price: reservePrice,
           starting_price: startingPrice,
           buy_now: buyNow,
-
-          // extras (ignored by legacy handler, useful later)
           item_title: itemTitle || displayName,
           gear_type: gearType || undefined,
           era: era || undefined,
