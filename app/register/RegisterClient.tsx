@@ -3,7 +3,7 @@
 import Link from "next/link";
 import Script from "next/script";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Client, Account, Databases, ID } from "appwrite";
+import { Client, Account, Databases, ID, Permission, Role } from "appwrite";
 import {
   CheckCircleIcon,
   XCircleIcon,
@@ -40,7 +40,6 @@ declare global {
 // REGISTER CLIENT
 // ─────────────────────────────────────────────
 export default function RegisterClient() {
-  // FORM STATE
   const [formData, setFormData] = useState({
     first_name: "",
     surname: "",
@@ -62,15 +61,16 @@ export default function RegisterClient() {
   const [manualEntry, setManualEntry] = useState(false);
 
   const [success, setSuccess] = useState(false);
+  const [successMsg, setSuccessMsg] = useState(
+    "✅ Registration successful. Please check your email and click the link to verify your account."
+  );
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
-  // Password visibility
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
 
-  // Password strength
   const [passwordStrength, setPasswordStrength] = useState({
     label: "",
     color: "",
@@ -78,14 +78,17 @@ export default function RegisterClient() {
   });
 
   // ─────────────────────────────────────────────
-  // TURNSTILE STATE
+  // TURNSTILE
   // ─────────────────────────────────────────────
-  const TURNSTILE_SITE_KEY = (process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY || "").trim();
+  const TURNSTILE_SITE_KEY = (
+    process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY || ""
+  ).trim();
+
   const turnstileElRef = useRef<HTMLDivElement | null>(null);
   const turnstileWidgetIdRef = useRef<string | null>(null);
 
-  const [turnstileToken, setTurnstileToken] = useState<string>("");
-  const [turnstileError, setTurnstileError] = useState<string>("");
+  const [turnstileToken, setTurnstileToken] = useState("");
+  const [turnstileError, setTurnstileError] = useState("");
 
   const canUseTurnstile = useMemo(() => !!TURNSTILE_SITE_KEY, [TURNSTILE_SITE_KEY]);
 
@@ -93,16 +96,13 @@ export default function RegisterClient() {
     setTurnstileToken("");
     setTurnstileError("");
     try {
-      if (typeof window !== "undefined" && window.turnstile) {
+      if (window.turnstile) {
         if (turnstileWidgetIdRef.current) window.turnstile.reset(turnstileWidgetIdRef.current);
         else window.turnstile.reset();
       }
-    } catch {
-      // ignore
-    }
+    } catch {}
   };
 
-  // Render Turnstile widget once script is ready
   useEffect(() => {
     if (!canUseTurnstile) return;
     if (typeof window === "undefined") return;
@@ -113,13 +113,13 @@ export default function RegisterClient() {
     const tryRender = () => {
       if (cancelled) return;
       if (!turnstileElRef.current) return;
+
       if (!window.turnstile) {
         tries += 1;
-        if (tries < 60) setTimeout(tryRender, 100); // up to ~6s
+        if (tries < 60) setTimeout(tryRender, 100);
         return;
       }
 
-      // If already rendered, don’t double-render
       if (turnstileWidgetIdRef.current) return;
 
       try {
@@ -150,20 +150,18 @@ export default function RegisterClient() {
 
     return () => {
       cancelled = true;
-      // Cleanup widget if component unmounts
       try {
         if (window.turnstile && turnstileWidgetIdRef.current) {
           window.turnstile.remove(turnstileWidgetIdRef.current);
         }
-      } catch {
-        // ignore
-      } finally {
-        turnstileWidgetIdRef.current = null;
-      }
+      } catch {}
+      turnstileWidgetIdRef.current = null;
     };
   }, [canUseTurnstile, TURNSTILE_SITE_KEY]);
 
-  // UK POSTCODE REGEX
+  // ─────────────────────────────────────────────
+  // VALIDATION HELPERS
+  // ─────────────────────────────────────────────
   const ukPostcodeRegex =
     /^([GIR] 0AA|[A-PR-UWYZ][A-HK-Y]?[0-9][0-9ABEHMNPRV-Y]?\s?[0-9][ABD-HJLNP-UW-Z]{2})$/i;
 
@@ -177,16 +175,9 @@ export default function RegisterClient() {
       { label: "Strong", color: "bg-green-600" },
       { label: "Very Strong", color: "bg-blue-600" },
     ];
-    return {
-      label: map[score].label,
-      color: map[score].color,
-      score,
-    };
+    return { label: map[score].label, color: map[score].color, score };
   };
 
-  // ─────────────────────────────────────────────
-  // VALIDATION
-  // ─────────────────────────────────────────────
   const validateFields = () => {
     const errors: Record<string, string> = {};
 
@@ -202,43 +193,33 @@ export default function RegisterClient() {
     if (!formData.town.trim()) errors.town = "Required";
     if (!formData.county.trim()) errors.county = "Required";
 
-    // PHONE
     if (!formData.phone.trim()) errors.phone = "Required";
     else {
       const parsed = parsePhoneNumberFromString(formData.phone, "GB");
       if (!parsed || !parsed.isValid()) errors.phone = "Invalid UK number";
     }
 
-    // EMAIL
-    if (!/^\S+@\S+\.\S+$/.test(formData.email))
-      errors.email = "Invalid email address";
-
-    // PASSWORD
+    if (!/^\S+@\S+\.\S+$/.test(formData.email)) errors.email = "Invalid email address";
     if (formData.password.length < 8) errors.password = "Minimum 8 characters";
-
-    if (formData.password !== formData.confirm)
-      errors.confirm = "Passwords do not match";
-
-    // TERMS
+    if (formData.password !== formData.confirm) errors.confirm = "Passwords do not match";
     if (!formData.agree) errors.agree = "You must agree to the Terms";
+
+    if (canUseTurnstile && !turnstileToken) {
+      errors.turnstile = "Please complete the spam check.";
+    }
 
     setFieldErrors(errors);
     return Object.keys(errors).length === 0;
   };
 
-  // ─────────────────────────────────────────────
-  // FORM INPUT HANDLER
-  // ─────────────────────────────────────────────
-  const handleChange = (e: any) => {
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value, type, checked } = e.target;
     const val = type === "checkbox" ? checked : value;
 
     setFormData((prev) => ({ ...prev, [name]: val }));
     setFieldErrors((prev) => ({ ...prev, [name]: "" }));
 
-    if (name === "password") {
-      setPasswordStrength(calculateStrength(value));
-    }
+    if (name === "password") setPasswordStrength(calculateStrength(value));
   };
 
   // ─────────────────────────────────────────────
@@ -258,8 +239,7 @@ export default function RegisterClient() {
       const res = await fetch(
         `/api/getaddress?postcode=${encodeURIComponent(formData.postcode)}`
       );
-
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
 
       if (!res.ok) {
         console.error("Address lookup error:", data);
@@ -304,10 +284,10 @@ export default function RegisterClient() {
   };
 
   // ─────────────────────────────────────────────
-  // TURNSTILE VERIFY
+  // TURNSTILE VERIFY (server verify)
   // ─────────────────────────────────────────────
   const verifyTurnstile = async () => {
-    if (!canUseTurnstile) return true; // if you haven’t configured it yet, don’t block
+    if (!canUseTurnstile) return true;
     if (!turnstileToken) {
       setTurnstileError("Please complete the Turnstile check.");
       return false;
@@ -321,18 +301,15 @@ export default function RegisterClient() {
       });
 
       const data = await res.json().catch(() => ({}));
-
       if (!res.ok || !data?.ok) {
-        setTurnstileError(
-          data?.error || "Turnstile verification failed — please try again."
-        );
+        setTurnstileError(data?.error || "Turnstile verification failed — please try again.");
         resetTurnstile();
         return false;
       }
 
       setTurnstileError("");
       return true;
-    } catch (e) {
+    } catch {
       setTurnstileError("Turnstile verification failed — please try again.");
       resetTurnstile();
       return false;
@@ -340,42 +317,45 @@ export default function RegisterClient() {
   };
 
   // ─────────────────────────────────────────────
-  // SUBMIT FORM
+  // SUBMIT
   // ─────────────────────────────────────────────
-  const handleSubmit = async (e: any) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
     setSuccess(false);
 
     if (!validateFields()) return;
 
-    // Turnstile gate BEFORE creating Appwrite user
     const okHuman = await verifyTurnstile();
     if (!okHuman) return;
 
     setLoading(true);
 
     try {
-      // Create user
-      await account.create(
+      // 1) Create user
+      const createdUser = await account.create(
         ID.unique(),
         formData.email,
         formData.password,
-        `${formData.first_name} ${formData.surname}`
+        `${formData.first_name} ${formData.surname}`.trim()
       );
 
-      // Create session
+      // 2) Create session
       await account.createEmailPasswordSession(formData.email, formData.password);
 
-      // Send verification
-      const verifyUrl = `${window.location.origin.replace(/\/$/, "")}/verified`;
+      // 3) Send verification email
+      const base =
+        (process.env.NEXT_PUBLIC_SITE_URL || "").trim().replace(/\/+$/, "") ||
+        window.location.origin.replace(/\/+$/, "");
+
+      const verifyUrl = `${base}/verified`;
       await account.createVerification(verifyUrl);
 
-      // Save profile
+      // 4) Save profile (doc id = user id)
       await databases.createDocument(
         process.env.NEXT_PUBLIC_APPWRITE_PROFILES_DATABASE_ID!,
         process.env.NEXT_PUBLIC_APPWRITE_PROFILES_COLLECTION_ID!,
-        ID.unique(),
+        createdUser.$id,
         {
           first_name: formData.first_name,
           surname: formData.surname,
@@ -387,10 +367,15 @@ export default function RegisterClient() {
           phone: formData.phone,
           email: formData.email,
           agree_to_terms: true,
-        }
+        },
+        [Permission.read(Role.user(createdUser.$id)), Permission.write(Role.user(createdUser.$id))]
       );
 
+      setSuccessMsg(
+        "✅ Registration successful. Please check your email and click the verification link."
+      );
       setSuccess(true);
+
       setFormData({
         first_name: "",
         surname: "",
@@ -412,37 +397,41 @@ export default function RegisterClient() {
     } catch (err: any) {
       console.error(err);
       setError(err?.message || "Registration failed.");
-      // force a fresh turnstile if something goes wrong
       resetTurnstile();
     } finally {
       setLoading(false);
     }
   };
 
-  // ─────────────────────────────────────────────
-  // INPUT COMPONENT
-  // ─────────────────────────────────────────────
-  const renderInput = (
-    name: string,
-    placeholder: string,
-    type = "text",
-    toggle = false
-  ) => {
+  const renderInput = (name: string, placeholder: string, type = "text", toggle = false) => {
     const value = (formData as any)[name];
     const err = fieldErrors[name];
     const isPassword = type === "password";
 
     const visible =
-      name === "password"
-        ? showPassword
-        : name === "confirm"
-        ? showConfirm
-        : false;
+      name === "password" ? showPassword : name === "confirm" ? showConfirm : false;
 
     const toggleFn =
       name === "password"
         ? () => setShowPassword((s) => !s)
         : () => setShowConfirm((s) => !s);
+
+    const autoComplete =
+      name === "first_name"
+        ? "given-name"
+        : name === "surname"
+        ? "family-name"
+        : name === "email"
+        ? "email"
+        : name === "phone"
+        ? "tel"
+        : name === "postcode"
+        ? "postal-code"
+        : name === "password"
+        ? "new-password"
+        : name === "confirm"
+        ? "new-password"
+        : "on";
 
     return (
       <div className="relative">
@@ -452,21 +441,16 @@ export default function RegisterClient() {
           placeholder={placeholder}
           value={value}
           onChange={handleChange}
+          autoComplete={autoComplete}
           className={`border rounded-md px-3 py-2 w-full pr-10 text-sm bg-white text-gray-900 ${
-            err
-              ? "border-red-500 bg-red-50"
-              : value
-              ? "border-green-500"
-              : "border-gray-300"
+            err ? "border-red-500 bg-red-50" : value ? "border-green-500" : "border-gray-300"
           }`}
         />
 
         {value && !err && (
           <CheckCircleIcon className="w-5 h-5 text-green-600 absolute right-2 top-2.5" />
         )}
-        {err && (
-          <XCircleIcon className="w-5 h-5 text-red-500 absolute right-2 top-2.5" />
-        )}
+        {err && <XCircleIcon className="w-5 h-5 text-red-500 absolute right-2 top-2.5" />}
 
         {toggle && (
           <button
@@ -474,11 +458,7 @@ export default function RegisterClient() {
             onClick={toggleFn}
             className="absolute right-8 top-2.5 text-gray-600 cursor-pointer"
           >
-            {visible ? (
-              <EyeSlashIcon className="w-5 h-5" />
-            ) : (
-              <EyeIcon className="w-5 h-5" />
-            )}
+            {visible ? <EyeSlashIcon className="w-5 h-5" /> : <EyeIcon className="w-5 h-5" />}
           </button>
         )}
 
@@ -487,12 +467,8 @@ export default function RegisterClient() {
     );
   };
 
-  // ─────────────────────────────────────────────
-  // RENDER
-  // ─────────────────────────────────────────────
   return (
     <main className="min-h-screen bg-black flex items-center justify-center px-4 py-10 text-gray-100">
-      {/* Turnstile script (only if configured) */}
       {canUseTurnstile ? (
         <Script
           src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit"
@@ -504,6 +480,7 @@ export default function RegisterClient() {
         <h1 className="text-2xl font-extrabold text-yellow-400 text-center mb-1">
           Create your AuctionMyCamera account
         </h1>
+
         <p className="text-xs text-gray-300 text-center mb-5">
           One account to bid on gear, list items for auction, and manage your activity.
         </p>
@@ -516,7 +493,7 @@ export default function RegisterClient() {
 
         {success && (
           <p className="bg-green-900/40 text-green-200 border border-green-500 p-2 rounded-md mb-4 text-xs text-center">
-            ✅ Registration successful. Please check your email and click the link to verify your account before logging in.
+            {successMsg}
           </p>
         )}
 
@@ -612,19 +589,29 @@ export default function RegisterClient() {
               />
               <label className="text-xs text-gray-200">
                 I agree to the{" "}
-                <Link href="/terms" className="text-yellow-300 underline" target="_blank" rel="noreferrer">
+                <Link
+                  href="/terms"
+                  className="text-yellow-300 underline"
+                  target="_blank"
+                  rel="noreferrer"
+                >
                   Terms &amp; Conditions
                 </Link>{" "}
                 and{" "}
-                <Link href="/privacy" className="text-yellow-300 underline" target="_blank" rel="noreferrer">
+                <Link
+                  href="/privacy"
+                  className="text-yellow-300 underline"
+                  target="_blank"
+                  rel="noreferrer"
+                >
                   Privacy Policy
                 </Link>
                 .
               </label>
             </div>
+
             {fieldErrors.agree && <p className="text-xs text-red-400">{fieldErrors.agree}</p>}
 
-            {/* TURNSTILE WIDGET */}
             {canUseTurnstile ? (
               <div className="mt-2">
                 <div
@@ -634,10 +621,8 @@ export default function RegisterClient() {
                 {turnstileError ? (
                   <p className="text-xs text-red-300 mt-2 text-center">{turnstileError}</p>
                 ) : null}
-                {!turnstileToken && !turnstileError ? (
-                  <p className="text-[11px] text-gray-400 mt-2 text-center">
-                    Please complete the spam check to create your account.
-                  </p>
+                {fieldErrors.turnstile ? (
+                  <p className="text-xs text-red-300 mt-2 text-center">{fieldErrors.turnstile}</p>
                 ) : null}
               </div>
             ) : (

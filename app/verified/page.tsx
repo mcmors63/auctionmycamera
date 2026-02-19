@@ -15,7 +15,7 @@ export default function VerifiedPage() {
   const searchParams = useSearchParams();
   const router = useRouter();
 
-  const [status, setStatus] = useState("verifying");
+  const [status, setStatus] = useState<"verifying" | "success" | "error">("verifying");
   const [message, setMessage] = useState("");
 
   useEffect(() => {
@@ -28,35 +28,31 @@ export default function VerifiedPage() {
       return;
     }
 
-    const verify = async () => {
+    (async () => {
       try {
         await account.updateVerification(uid, sec);
         setStatus("success");
         setMessage("Your email has been verified successfully!");
-      } catch (err: any) {
+      } catch (err) {
         setStatus("error");
         setMessage("Verification failed or expired.");
       }
-    };
-
-    verify();
+    })();
   }, [searchParams]);
 
   return (
-    <div className="min-h-screen flex justify-center items-center bg-gray-50 p-6">
-      <div className="bg-white p-8 rounded-xl shadow-lg w-full max-w-md text-center">
-        {status === "verifying" && (
-          <p className="text-gray-700">Verifying...</p>
-        )}
+    <div className="min-h-screen flex justify-center items-center bg-black p-6 text-gray-100">
+      <div className="bg-[#111111] p-8 rounded-xl shadow-lg w-full max-w-md text-center border border-yellow-700/60">
+        {status === "verifying" && <p className="text-gray-300">Verifying...</p>}
 
         {status === "success" && (
           <>
             <CheckCircleIcon className="w-16 h-16 text-green-500 mx-auto mb-4" />
-            <h1 className="text-xl font-bold mb-2">Email Verified</h1>
-            <p className="text-gray-700 mb-6">{message}</p>
+            <h1 className="text-xl font-bold mb-2 text-yellow-400">Email Verified</h1>
+            <p className="text-gray-300 mb-6">{message}</p>
             <button
               onClick={() => router.push("/login")}
-              className="w-full bg-yellow-500 hover:bg-yellow-600 text-white font-semibold py-2 rounded-md"
+              className="w-full bg-yellow-500 hover:bg-yellow-600 text-black font-semibold py-2 rounded-md"
             >
               Go to Login
             </button>
@@ -66,13 +62,13 @@ export default function VerifiedPage() {
         {status === "error" && (
           <>
             <XCircleIcon className="w-16 h-16 text-red-500 mx-auto mb-4" />
-            <h1 className="text-xl font-bold mb-2">Verification Failed</h1>
-            <p className="text-gray-700 mb-6">{message}</p>
+            <h1 className="text-xl font-bold mb-2 text-yellow-400">Verification Failed</h1>
+            <p className="text-gray-300 mb-6">{message}</p>
             <button
-              onClick={() => router.push("/resend-verification")}
-              className="w-full bg-yellow-500 hover:bg-yellow-600 text-white font-semibold py-2 rounded-md"
+              onClick={() => router.push("/login")}
+              className="w-full bg-yellow-500 hover:bg-yellow-600 text-black font-semibold py-2 rounded-md"
             >
-              Resend Verification
+              Go to Login
             </button>
           </>
         )}
