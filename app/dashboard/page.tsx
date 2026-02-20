@@ -5,9 +5,8 @@ import type React from "react";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { Client, Account, Databases, ID, Query } from "appwrite";
+import { Client, Account, Databases, Storage, ID, Query } from "appwrite";
 import { CheckCircleIcon, XCircleIcon } from "@heroicons/react/24/solid";
-
 // -----------------------------
 // Appwrite (browser)
 // -----------------------------
@@ -661,7 +660,6 @@ export default function DashboardPage() {
   // -----------------------------
 // Upload photo for dashboard sell
 // -----------------------------
-import { Storage, ID } from "appwrite";
 
 const storage = new Storage(client);
 
@@ -746,38 +744,41 @@ async function uploadDashboardPhotoIfProvided(): Promise<string | null> {
     try {
       // ✅ Get a JWT so the API can verify who the user is
       const jwt = await account.createJWT();
-      const token = (jwt as any)?.jwt || "";
+const token = (jwt as any)?.jwt || "";
 
-      if (!token) {
-        setSellError("Could not create auth token. Please log out and log in again.");
-        setSellSubmitting(false);
-        return;
-      }
+if (!token) {
+  setSellError("Could not create auth token. Please log out and log in again.");
+  setSellSubmitting(false);
+  return;
+}
 
-      const res = await fetch("/api/listings", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          item_title: title,
-          gear_type: safeStr(sellForm.gear_type),
-          brand: safeStr(sellForm.brand),
-          model: safeStr(sellForm.model),
-          era: safeStr(sellForm.era),
-          condition: safeStr(sellForm.condition),
-          description: safeStr(sellForm.description),
+// ✅ ADD THIS LINE
+const uploadedImageId = await uploadDashboardPhotoIfProvided();
 
-          reserve_price: reserve,
-          starting_price: !isNaN(starting) ? starting : 0,
-          buy_now: !isNaN(buyNow) ? buyNow : 0,
+const res = await fetch("/api/listings", {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${token}`,
+  },
+  body: JSON.stringify({
+    item_title: title,
+    gear_type: safeStr(sellForm.gear_type),
+    brand: safeStr(sellForm.brand),
+    model: safeStr(sellForm.model),
+    era: safeStr(sellForm.era),
+    condition: safeStr(sellForm.condition),
+    description: safeStr(sellForm.description),
 
-          image_id: uploadedImageId,
+    reserve_price: reserve,
+    starting_price: !isNaN(starting) ? starting : 0,
+    buy_now: !isNaN(buyNow) ? buyNow : 0,
 
-          relist_until_sold: !!sellForm.relist_until_sold,
-        }),
-      });
+    image_id: uploadedImageId,
+
+    relist_until_sold: !!sellForm.relist_until_sold,
+  }),
+});
 
       const data = await res.json().catch(() => ({} as any));
 
