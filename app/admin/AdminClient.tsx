@@ -198,8 +198,13 @@ export default function AdminClient() {
           setTransactions(res.documents);
           setListings([]);
         } else {
+          // ✅ IMPORTANT FIX:
+          // Seller submissions are created with status "pending_approval" by /api/listings.
+          // Your tab is called "pending" but the underlying status is "pending_approval".
+          const statusFilter = activeTab === "pending" ? "pending_approval" : activeTab;
+
           const res = await databases.listDocuments(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, [
-            Query.equal("status", activeTab),
+            Query.equal("status", statusFilter),
             Query.orderDesc("$updatedAt"),
             Query.limit(200),
           ]);
@@ -233,7 +238,8 @@ export default function AdminClient() {
         body: JSON.stringify({
           // keep existing backend expectations
           listingId: selectedListing.$id,
-          sellerEmail: selectedListing.seller_email,
+          // ✅ safer: support either seller_email or sellerEmail depending on schema
+          sellerEmail: selectedListing.seller_email || selectedListing.sellerEmail,
           interesting_fact: selectedListing.admin_notes || selectedListing.interesting_fact || "",
           starting_price: Number(selectedListing.starting_price) || 0,
           reserve_price: Number(selectedListing.reserve_price) || 0,
@@ -278,7 +284,8 @@ export default function AdminClient() {
           // keep existing backend expectations
           plateId: doc.$id,
           registration: title, // legacy key, but we pass a useful camera-safe title
-          sellerEmail: doc.seller_email,
+          // ✅ safer: support either seller_email or sellerEmail depending on schema
+          sellerEmail: doc.seller_email || doc.sellerEmail,
         }),
       });
 
@@ -305,8 +312,11 @@ export default function AdminClient() {
       setMessage(`Listing "${title}" rejected.`);
       setSelectedListing(null);
 
+      // Re-load current tab (same mapping as above)
+      const statusFilter = activeTab === "pending" ? "pending_approval" : activeTab;
+
       const updated = await databases.listDocuments(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, [
-        Query.equal("status", activeTab),
+        Query.equal("status", statusFilter),
         Query.orderDesc("$updatedAt"),
         Query.limit(200),
       ]);
@@ -326,8 +336,11 @@ export default function AdminClient() {
     try {
       await databases.deleteDocument(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, id);
 
+      // Re-load current tab (same mapping as above)
+      const statusFilter = activeTab === "pending" ? "pending_approval" : activeTab;
+
       const updated = await databases.listDocuments(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, [
-        Query.equal("status", activeTab),
+        Query.equal("status", statusFilter),
         Query.orderDesc("$updatedAt"),
         Query.limit(200),
       ]);
@@ -469,9 +482,7 @@ export default function AdminClient() {
           </Link>
         </div>
 
-        {message && (
-          <p className="bg-green-100 text-green-700 p-3 rounded-md my-4 font-semibold">{message}</p>
-        )}
+        {message && <p className="bg-green-100 text-green-700 p-3 rounded-md my-4 font-semibold">{message}</p>}
 
         {loading && <p className="text-center text-neutral-600 mt-10 text-lg">Loading…</p>}
 
@@ -510,7 +521,7 @@ export default function AdminClient() {
                         </p>
 
                         <p>
-                          <strong>Seller Email:</strong> {doc.seller_email || "—"}
+                          <strong>Seller Email:</strong> {doc.seller_email || doc.sellerEmail || "—"}
                         </p>
 
                         <p>
@@ -523,8 +534,7 @@ export default function AdminClient() {
                         </p>
 
                         <p>
-                          <strong>Buy Now:</strong>{" "}
-                          {typeof buyNow === "number" ? formatMoney(buyNow) : "—"}
+                          <strong>Buy Now:</strong> {typeof buyNow === "number" ? formatMoney(buyNow) : "—"}
                         </p>
 
                         <p className="mt-2">
@@ -560,6 +570,7 @@ export default function AdminClient() {
                             href={`/listing/${doc.$id}`}
                             target="_blank"
                             className="inline-block bg-blue-600 text-white px-4 py-2 rounded-md font-semibold hover:bg-blue-700"
+                            rel="noreferrer"
                           >
                             View Full Listing
                           </a>
@@ -647,9 +658,7 @@ export default function AdminClient() {
                           <td className="py-2 px-2 whitespace-nowrap">{tx.seller_email || "-"}</td>
                           <td className="py-2 px-2 whitespace-nowrap">{tx.buyer_email || "-"}</td>
 
-                          <td className="py-2 px-2 whitespace-nowrap">
-                            £{(tx.sale_price ?? 0).toLocaleString("en-GB")}
-                          </td>
+                          <td className="py-2 px-2 whitespace-nowrap">£{(tx.sale_price ?? 0).toLocaleString("en-GB")}</td>
 
                           <td className="py-2 px-2 whitespace-nowrap">
                             £{(tx.commission_amount ?? 0).toLocaleString("en-GB")} ({tx.commission_rate ?? 0}%)
