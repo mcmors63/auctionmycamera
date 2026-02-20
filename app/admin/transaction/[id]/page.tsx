@@ -1,12 +1,12 @@
 // app/admin/transaction/[id]/page.tsx
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter, useParams } from "next/navigation";
-import { Client, Account, Databases, Query } from "appwrite";
+import { Client, Account, Databases } from "appwrite";
 
 // -----------------------------
-// Appwrite client
+// Appwrite client (browser)
 // -----------------------------
 const client = new Client()
   .setEndpoint(process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT!)
@@ -15,21 +15,41 @@ const client = new Client()
 const account = new Account(client);
 const databases = new Databases(client);
 
-const DB_ID =
+// ✅ Single source of truth for admin email
+const ADMIN_EMAIL = (process.env.NEXT_PUBLIC_ADMIN_EMAIL || "admin@auctionmycamera.co.uk")
+  .trim()
+  .toLowerCase();
+
+// ✅ Transactions may be a separate DB/Table (match AdminClient.tsx)
+const TRANSACTIONS_DB_ID =
+  process.env.NEXT_PUBLIC_APPWRITE_TRANSACTIONS_DATABASE_ID ||
+  process.env.NEXT_PUBLIC_APPWRITE_TRANSACTIONS_DB_ID ||
+  process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID ||
   process.env.NEXT_PUBLIC_APPWRITE_PLATES_DATABASE_ID ||
-  "690fc34a0000ce1baa63";
+  "";
 
-const PLATES_COLLECTION_ID =
-  process.env.NEXT_PUBLIC_APPWRITE_PLATES_COLLECTION_ID || "plates";
+const TRANSACTIONS_COLLECTION_ID =
+  process.env.NEXT_PUBLIC_APPWRITE_TRANSACTIONS_COLLECTION_ID ||
+  process.env.NEXT_PUBLIC_APPWRITE_TRANSACTIONS_TABLE_ID ||
+  "transactions";
 
-const TX_COLLECTION_ID = "transactions";
+const SITE_URL = (process.env.NEXT_PUBLIC_SITE_URL || "https://auctionmycamera.co.uk").replace(/\/+$/, "");
 
 // -----------------------------
 // Types
 // -----------------------------
 type TxDoc = {
   $id: string;
+
+  // camera-friendly
+  item_title?: string;
+  title?: string;
+  brand?: string;
+  model?: string;
+
+  // legacy
   registration?: string;
+
   listing_id?: string;
   sale_price?: number;
   seller_payout?: number;
@@ -38,6 +58,7 @@ type TxDoc = {
   payment_status?: string;
   transaction_status?: string;
 
+  // legacy progress flags (safe if present)
   seller_docs_requested?: boolean;
   seller_docs_received?: boolean;
   seller_payment_transferred?: boolean;
@@ -53,8 +74,67 @@ type TxDoc = {
 
   created_at?: string;
   updated_at?: string;
+
+  $createdAt?: string;
+  $updatedAt?: string;
+
   [key: string]: any;
 };
+
+function formatMoney(value?: number) {
+  return value == null ? "—" : `£${value.toLocaleString("en-GB")}`;
+}
+
+function formatDateTime(value?: string) {
+  if (!value) return "—";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleString("en-GB", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+// Try to update with schema tolerance (strip unknown attributes)
+async function updateDocSchemaTolerant(
+  dbId: string,
+  colId: string,
+  docId: string,
+  payload: Record<string, any>
+) {
+  const data: Record<string, any> = { ...payload };
+
+  for (let i = 0; i < 12; i++) {
+    try {
+      return await databases.updateDocument(dbId, colId, docId, data);
+    } catch (err: any) {
+      const msg = String(err?.message || "");
+      const m = msg.match(/Unknown attribute:\s*([A-Za-z0-9_]+)/i);
+      if (m?.[1]) {
+        delete data[m[1]];
+        continue;
+      }
+      throw err;
+    }
+  }
+
+  // Last resort: update only core statuses/flags (no timestamps)
+  const minimal: Record<string, any> = {};
+  for (const k of Object.keys(payload)) {
+    if (
+      k === "payment_status" ||
+      k === "transaction_status" ||
+      k.startsWith("seller_") ||
+      k.startsWith("buyer_")
+    ) {
+      minimal[k] = payload[k];
+    }
+  }
+  return await databases.updateDocument(dbId, colId, docId, minimal);
+}
 
 export default function AdminTransactionPage() {
   const router = useRouter();
@@ -68,7 +148,7 @@ export default function AdminTransactionPage() {
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string>("");
 
-  // Local checkbox state
+  // Local checkbox state (legacy-compatible, but optional)
   const [sellerFlags, setSellerFlags] = useState({
     seller_docs_requested: false,
     seller_docs_received: false,
@@ -84,20 +164,16 @@ export default function AdminTransactionPage() {
     buyer_transfer_complete: false,
   });
 
-  // This will hold the plate document ID to use in /place_bid?id=...
-  const [publicListingId, setPublicListingId] = useState<string | null>(null);
-
   // -----------------------------
-  // Verify admin
+  // Verify admin (match AdminClient.tsx)
   // -----------------------------
   useEffect(() => {
     const verify = async () => {
       try {
-        const user = await account.get();
-        if (
-          user.email === "admin@auctionmyplate.co.uk" &&
-          localStorage.getItem("adminLoggedIn") === "true"
-        ) {
+        const user: any = await account.get();
+        const email = String(user?.email || "").trim().toLowerCase();
+
+        if (email === ADMIN_EMAIL) {
           setAuthorized(true);
         } else {
           router.push("/admin-login");
@@ -111,7 +187,7 @@ export default function AdminTransactionPage() {
   }, [router]);
 
   // -----------------------------
-  // Load transaction + resolve plate ID
+  // Load transaction
   // -----------------------------
   useEffect(() => {
     if (!authorized || !id) return;
@@ -121,14 +197,19 @@ export default function AdminTransactionPage() {
       setError("");
 
       try {
-        const doc: any = await databases.getDocument(
-          DB_ID,
-          TX_COLLECTION_ID,
-          id
-        );
+        if (!TRANSACTIONS_DB_ID || !TRANSACTIONS_COLLECTION_ID) {
+          setError(
+            "Missing Appwrite env for transactions. Set NEXT_PUBLIC_APPWRITE_TRANSACTIONS_DATABASE_ID and NEXT_PUBLIC_APPWRITE_TRANSACTIONS_COLLECTION_ID."
+          );
+          setTx(null);
+          return;
+        }
+
+        const doc: any = await databases.getDocument(TRANSACTIONS_DB_ID, TRANSACTIONS_COLLECTION_ID, id);
 
         setTx(doc);
 
+        // Flags are optional; default false if not present
         setSellerFlags({
           seller_docs_requested: !!doc.seller_docs_requested,
           seller_docs_received: !!doc.seller_docs_received,
@@ -143,32 +224,6 @@ export default function AdminTransactionPage() {
           buyer_payment_taken: !!doc.buyer_payment_taken,
           buyer_transfer_complete: !!doc.buyer_transfer_complete,
         });
-
-        // 🔍 Find the plate document for this transaction using listing_id
-        if (doc.listing_id) {
-          try {
-            const platesRes = await databases.listDocuments(
-              DB_ID,
-              PLATES_COLLECTION_ID,
-              [Query.equal("listing_id", doc.listing_id)]
-            );
-
-            if (platesRes.documents.length > 0) {
-              // Use this in /place_bid?id=...
-              setPublicListingId(platesRes.documents[0].$id);
-            } else {
-              console.warn(
-                "No plate found for transaction listing_id",
-                doc.listing_id
-              );
-            }
-          } catch (lookupErr) {
-            console.error(
-              "Failed to resolve plate for transaction:",
-              lookupErr
-            );
-          }
-        }
       } catch (err) {
         console.error("Failed to load transaction:", err);
         setError("Failed to load transaction.");
@@ -180,18 +235,19 @@ export default function AdminTransactionPage() {
     load();
   }, [authorized, id]);
 
-  const formatMoney = (value?: number) =>
-    value == null ? "-" : `£${value.toLocaleString("en-GB")}`;
+  const itemLabel = useMemo(() => {
+    if (!tx) return "";
+    const t =
+      String(tx.item_title || tx.title || "").trim() ||
+      [tx.brand, tx.model].filter(Boolean).join(" ").trim() ||
+      String(tx.registration || "").trim() ||
+      String(tx.listing_id || "").trim();
+    return t || "Transaction";
+  }, [tx]);
 
   if (!authorized) return null;
 
-  // Business rules:
-  // Payment to seller CANNOT be made until:
-  // - seller_docs_received
-  // - buyer_info_received
-  // - buyer_tax_mot_validated
-  // - buyer_payment_taken
-  // - buyer_transfer_complete
+  // Legacy business rules (keep if flags exist; harmless otherwise)
   const canPaySeller =
     sellerFlags.seller_docs_received &&
     buyerFlags.buyer_info_received &&
@@ -199,8 +255,9 @@ export default function AdminTransactionPage() {
     buyerFlags.buyer_payment_taken &&
     buyerFlags.buyer_transfer_complete;
 
-  const canMarkSellerComplete =
-    canPaySeller && sellerFlags.seller_payment_transferred;
+  const canMarkSellerComplete = canPaySeller && sellerFlags.seller_payment_transferred;
+
+  const publicListingHref = tx?.listing_id ? `/listing/${tx.listing_id}` : null;
 
   const handleSave = async () => {
     if (!tx) return;
@@ -210,26 +267,25 @@ export default function AdminTransactionPage() {
 
     try {
       const payment_status =
-        canPaySeller && sellerFlags.seller_payment_transferred
-          ? "paid"
-          : "pending";
+        canPaySeller && sellerFlags.seller_payment_transferred ? "paid" : (tx.payment_status || "pending");
 
       const transaction_status =
-        canMarkSellerComplete && sellerFlags.seller_process_complete
-          ? "complete"
-          : "pending";
+        canMarkSellerComplete && sellerFlags.seller_process_complete ? "complete" : (tx.transaction_status || "pending");
 
-      const updateData = {
+      const updateData: Record<string, any> = {
         ...sellerFlags,
         ...buyerFlags,
         payment_status,
         transaction_status,
+
+        // Prefer schema-safe timestamps (Appwrite has $updatedAt automatically).
+        // We'll attempt updated_at but strip it if schema rejects it.
         updated_at: new Date().toISOString(),
       };
 
-      const updated: any = await databases.updateDocument(
-        DB_ID,
-        TX_COLLECTION_ID,
+      const updated: any = await updateDocSchemaTolerant(
+        TRANSACTIONS_DB_ID,
+        TRANSACTIONS_COLLECTION_ID,
         tx.$id,
         updateData
       );
@@ -244,21 +300,18 @@ export default function AdminTransactionPage() {
     }
   };
 
-  // 🔥 HARD OVERRIDE: mark complete even if flags/business rules
+  // Hard override: complete
   const handleMarkCompleteOverride = async () => {
     if (!tx) return;
 
-    const ok = window.confirm(
-      "Force mark this transaction as COMPLETE?\n\n" +
-        "Use this only when you’re happy the DVLA transfer and payments are finished."
-    );
+    const ok = window.confirm("Force mark this transaction as COMPLETE?\n\nUse only when you’re happy everything is finished.");
     if (!ok) return;
 
     setSaving(true);
     setError("");
 
     try {
-      const updateData = {
+      const updateData: Record<string, any> = {
         ...sellerFlags,
         ...buyerFlags,
         payment_status: tx.payment_status || "paid",
@@ -266,9 +319,9 @@ export default function AdminTransactionPage() {
         updated_at: new Date().toISOString(),
       };
 
-      const updated: any = await databases.updateDocument(
-        DB_ID,
-        TX_COLLECTION_ID,
+      const updated: any = await updateDocSchemaTolerant(
+        TRANSACTIONS_DB_ID,
+        TRANSACTIONS_COLLECTION_ID,
         tx.$id,
         updateData
       );
@@ -291,12 +344,8 @@ export default function AdminTransactionPage() {
     );
     if (!confirmDelete) return;
 
-    const reasonInput = window.prompt(
-      "Reason for deleting / archiving this transaction? (This will be stored on the transaction record.)",
-      ""
-    );
-
-    if (reasonInput === null) return; // cancelled
+    const reasonInput = window.prompt("Reason for deleting / archiving this transaction?", "");
+    if (reasonInput === null) return;
 
     const reason = reasonInput.trim();
     if (!reason) {
@@ -310,10 +359,7 @@ export default function AdminTransactionPage() {
       const res = await fetch("/api/admin/delete-transaction", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          txId: tx.$id, // must match API
-          reason,
-        }),
+        body: JSON.stringify({ txId: tx.$id, reason }),
       });
 
       if (!res.ok) {
@@ -333,304 +379,254 @@ export default function AdminTransactionPage() {
   };
 
   return (
-    <main className="min-h-screen bg-yellow-50 py-10 px-6">
-      <div className="max-w-4xl mx-auto bg-white rounded-2xl shadow-lg p-8">
-        <button
-          onClick={() => router.push("/admin")}
-          className="text-sm text-blue-600 underline mb-4"
-        >
+    <main className="min-h-screen bg-neutral-50 py-10 px-6">
+      <div className="max-w-4xl mx-auto bg-white rounded-2xl shadow-lg p-8 border border-neutral-200">
+        <button onClick={() => router.push("/admin")} className="text-sm text-blue-600 underline mb-4">
           ← Back to Admin Dashboard
         </button>
 
-        {loading && <p>Loading transaction…</p>}
+        {loading && <p className="text-sm text-neutral-700">Loading transaction…</p>}
 
-        {error && (
-          <p className="bg-red-100 text-red-700 p-3 rounded mb-4">
-            {error}
-          </p>
-        )}
+        {error && <p className="bg-red-100 text-red-700 p-3 rounded mb-4 text-sm">{error}</p>}
 
         {tx && (
           <>
-            <h1 className="text-2xl font-bold text-yellow-700 mb-4">
-              Transaction for {tx.registration || tx.listing_id}
-            </h1>
+            <h1 className="text-2xl font-bold text-orange-700 mb-2">{itemLabel}</h1>
 
-            <div className="mb-4 text-sm text-gray-700 space-y-1">
+            <div className="mb-4 text-sm text-neutral-700 space-y-1">
               <p>
                 <strong>Sale price:</strong> {formatMoney(tx.sale_price)}
               </p>
               <p>
-                <strong>Seller payout:</strong>{" "}
-                {formatMoney(tx.seller_payout)}
+                <strong>Seller payout:</strong> {formatMoney(tx.seller_payout)}
               </p>
               <p>
-                <strong>Seller:</strong> {tx.seller_email}
+                <strong>Seller:</strong> {tx.seller_email || "—"}
               </p>
               <p>
-                <strong>Buyer:</strong> {tx.buyer_email || "-"}
+                <strong>Buyer:</strong> {tx.buyer_email || "—"}
               </p>
               <p>
-                <strong>Payment status:</strong>{" "}
-                {tx.payment_status || "pending"}
+                <strong>Payment status:</strong> {tx.payment_status || "pending"}
               </p>
               <p>
-                <strong>Transaction status:</strong>{" "}
-                {tx.transaction_status || "pending"}
+                <strong>Transaction status:</strong> {tx.transaction_status || "pending"}
+              </p>
+              <p>
+                <strong>Created:</strong> {formatDateTime(tx.created_at || tx.$createdAt)}
+              </p>
+              <p>
+                <strong>Updated:</strong> {formatDateTime(tx.updated_at || tx.$updatedAt)}
               </p>
 
-              {publicListingId && (
-                <p>
+              {publicListingHref && (
+                <p className="pt-2">
                   <a
-                    href={`/place_bid?id=${publicListingId}`}
+                    href={publicListingHref}
                     target="_blank"
+                    rel="noopener noreferrer"
                     className="text-blue-600 underline"
                   >
                     View public listing page
                   </a>
                 </p>
               )}
+
+              <p className="text-xs text-neutral-500 pt-2">
+                Dashboard link:{" "}
+                <a className="underline" href={`${SITE_URL}/dashboard`} target="_blank" rel="noopener noreferrer">
+                  {SITE_URL}/dashboard
+                </a>
+              </p>
             </div>
 
             <div className="grid md:grid-cols-2 gap-6 mb-6">
               {/* Seller Section */}
-              <div className="border rounded-xl p-4 bg-gray-50">
-                <h2 className="font-semibold text-lg mb-3">
-                  Seller Section
-                </h2>
+              <div className="border rounded-xl p-4 bg-neutral-50">
+                <h2 className="font-semibold text-lg mb-3">Seller</h2>
+
                 <label className="flex items-center gap-2 mb-2 text-sm">
                   <input
                     type="checkbox"
                     checked={sellerFlags.seller_docs_requested}
                     onChange={(e) =>
-                      setSellerFlags((prev) => ({
-                        ...prev,
-                        seller_docs_requested: e.target.checked,
-                      }))
+                      setSellerFlags((prev) => ({ ...prev, seller_docs_requested: e.target.checked }))
                     }
                   />
                   Documents requested
                 </label>
+
                 <label className="flex items-center gap-2 mb-2 text-sm">
                   <input
                     type="checkbox"
                     checked={sellerFlags.seller_docs_received}
                     onChange={(e) =>
-                      setSellerFlags((prev) => ({
-                        ...prev,
-                        seller_docs_received: e.target.checked,
-                      }))
+                      setSellerFlags((prev) => ({ ...prev, seller_docs_received: e.target.checked }))
                     }
                   />
                   Documents received
                 </label>
+
                 <label className="flex items-center gap-2 mb-2 text-sm">
                   <input
                     type="checkbox"
                     disabled={!canPaySeller}
                     checked={sellerFlags.seller_payment_transferred}
                     onChange={(e) =>
-                      setSellerFlags((prev) => ({
-                        ...prev,
-                        seller_payment_transferred: e.target.checked,
-                      }))
+                      setSellerFlags((prev) => ({ ...prev, seller_payment_transferred: e.target.checked }))
                     }
                   />
                   Payment transferred{" "}
                   {!canPaySeller && (
-                    <span className="text-xs text-gray-500">
-                      (requires buyer info, tax/MOT, funds & transfer
-                      complete)
+                    <span className="text-xs text-neutral-500">
+                      (requires buyer info, validation, payment taken, transfer complete)
                     </span>
                   )}
                 </label>
+
                 <label className="flex items-center gap-2 mb-2 text-sm">
                   <input
                     type="checkbox"
                     disabled={!canMarkSellerComplete}
                     checked={sellerFlags.seller_process_complete}
                     onChange={(e) =>
-                      setSellerFlags((prev) => ({
-                        ...prev,
-                        seller_process_complete: e.target.checked,
-                      }))
+                      setSellerFlags((prev) => ({ ...prev, seller_process_complete: e.target.checked }))
                     }
                   />
                   Seller process complete
                 </label>
+
+                <p className="text-xs text-neutral-500 mt-3">
+                  These progress flags are optional. If your camera transactions schema doesn’t include them, saves will
+                  still work (we auto-strip unknown fields).
+                </p>
               </div>
 
               {/* Buyer Section */}
-              <div className="border rounded-xl p-4 bg-gray-50">
-                <h2 className="font-semibold text-lg mb-3">
-                  Buyer Section
-                </h2>
+              <div className="border rounded-xl p-4 bg-neutral-50">
+                <h2 className="font-semibold text-lg mb-3">Buyer</h2>
+
                 <label className="flex items-center gap-2 mb-2 text-sm">
                   <input
                     type="checkbox"
                     checked={buyerFlags.buyer_info_requested}
-                    onChange={(e) =>
-                      setBuyerFlags((prev) => ({
-                        ...prev,
-                        buyer_info_requested: e.target.checked,
-                      }))
-                    }
+                    onChange={(e) => setBuyerFlags((prev) => ({ ...prev, buyer_info_requested: e.target.checked }))}
                   />
                   Information requested
                 </label>
+
                 <label className="flex items-center gap-2 mb-2 text-sm">
                   <input
                     type="checkbox"
                     checked={buyerFlags.buyer_info_received}
-                    onChange={(e) =>
-                      setBuyerFlags((prev) => ({
-                        ...prev,
-                        buyer_info_received: e.target.checked,
-                      }))
-                    }
+                    onChange={(e) => setBuyerFlags((prev) => ({ ...prev, buyer_info_received: e.target.checked }))}
                   />
                   Information received
                 </label>
+
                 <label className="flex items-center gap-2 mb-2 text-sm">
                   <input
                     type="checkbox"
                     checked={buyerFlags.buyer_tax_mot_validated}
                     onChange={(e) =>
-                      setBuyerFlags((prev) => ({
-                        ...prev,
-                        buyer_tax_mot_validated: e.target.checked,
-                      }))
+                      setBuyerFlags((prev) => ({ ...prev, buyer_tax_mot_validated: e.target.checked }))
                     }
                   />
-                  Tax and MOT validated
+                  Validation complete
                 </label>
+
                 <label className="flex items-center gap-2 mb-2 text-sm">
                   <input
                     type="checkbox"
                     checked={buyerFlags.buyer_payment_taken}
-                    onChange={(e) =>
-                      setBuyerFlags((prev) => ({
-                        ...prev,
-                        buyer_payment_taken: e.target.checked,
-                      }))
-                    }
+                    onChange={(e) => setBuyerFlags((prev) => ({ ...prev, buyer_payment_taken: e.target.checked }))}
                   />
                   Payment taken
                 </label>
+
                 <label className="flex items-center gap-2 mb-2 text-sm">
                   <input
                     type="checkbox"
                     checked={buyerFlags.buyer_transfer_complete}
                     onChange={(e) =>
-                      setBuyerFlags((prev) => ({
-                        ...prev,
-                        buyer_transfer_complete: e.target.checked,
-                      }))
+                      setBuyerFlags((prev) => ({ ...prev, buyer_transfer_complete: e.target.checked }))
                     }
                   />
-                  Transfer complete
+                  Deal complete
                 </label>
               </div>
             </div>
 
             {/* DOCUMENTS SECTION */}
-<div className="mt-6 border rounded-xl p-4 bg-gray-50">
-  <h2 className="font-semibold text-lg mb-2">
-    Documents &amp; uploads
-  </h2>
-  <p className="text-xs text-gray-600 mb-3">
-    These are the files attached to this transaction by the
-    seller or buyer in their dashboard.
-  </p>
+            <div className="mt-6 border rounded-xl p-4 bg-neutral-50">
+              <h2 className="font-semibold text-lg mb-2">Documents &amp; uploads</h2>
+              <p className="text-xs text-neutral-600 mb-3">
+                Files attached to this transaction by the seller or buyer in their dashboard.
+              </p>
 
-  {Array.isArray(tx.documents) && tx.documents.length > 0 ? (
-    <ul className="space-y-2 text-sm">
-      {tx.documents.map((doc: any, idx: number) => {
-        // Handle both "object" docs and plain string IDs just in case
-        const isStringId = typeof doc === "string";
+              {Array.isArray(tx.documents) && tx.documents.length > 0 ? (
+                <ul className="space-y-2 text-sm">
+                  {tx.documents.map((doc: any, idx: number) => {
+                    const isStringId = typeof doc === "string";
 
-        const label =
-          (!isStringId &&
-            (doc.label ||
-              doc.description ||
-              doc.type ||
-              doc.role)) ||
-          `Document ${idx + 1}`;
+                    const label =
+                      (!isStringId && (doc.label || doc.description || doc.type || doc.role)) || `Document ${idx + 1}`;
 
-        const fileName =
-          !isStringId &&
-          (doc.fileName ||
-            doc.name ||
-            doc.originalName ||
-            doc.filename);
+                    const fileName =
+                      !isStringId && (doc.fileName || doc.name || doc.originalName || doc.filename);
 
-        const directUrl =
-          !isStringId && (doc.url || doc.publicUrl || null);
+                    const directUrl = !isStringId && (doc.url || doc.publicUrl || null);
 
-        const fileId = isStringId
-          ? doc
-          : doc.fileId || doc.id || doc.documentId || null;
+                    const fileId = isStringId
+                      ? doc
+                      : doc.fileId || doc.id || doc.documentId || null;
 
-        // If we have a direct URL from when the user uploaded, use that.
-        // Otherwise, if we have an Appwrite fileId, go via our view-document route.
-        const viewHref = directUrl
-          ? directUrl
-          : fileId
-          ? `/api/admin/view-document?fileId=${encodeURIComponent(
-              fileId
-            )}`
-          : null;
+                    const viewHref = directUrl
+                      ? directUrl
+                      : fileId
+                      ? `/api/admin/view-document?fileId=${encodeURIComponent(fileId)}`
+                      : null;
 
-        return (
-          <li
-            key={fileId || fileName || idx}
-            className="flex items-center justify-between border-b last:border-b-0 pb-2"
-          >
-            <div className="mr-3 overflow-hidden">
-              <p className="font-semibold truncate">{label}</p>
-              {fileName && (
-                <p className="text-xs text-gray-500 truncate">
-                  {fileName}
-                </p>
-              )}
-              {fileId && !directUrl && (
-                <p className="text-[10px] text-gray-400 mt-0.5 font-mono truncate">
-                  ID: {fileId}
-                </p>
+                    return (
+                      <li
+                        key={fileId || fileName || idx}
+                        className="flex items-center justify-between border-b last:border-b-0 pb-2"
+                      >
+                        <div className="mr-3 overflow-hidden">
+                          <p className="font-semibold truncate">{label}</p>
+                          {fileName && <p className="text-xs text-neutral-500 truncate">{fileName}</p>}
+                          {fileId && !directUrl && (
+                            <p className="text-[10px] text-neutral-400 mt-0.5 font-mono truncate">ID: {fileId}</p>
+                          )}
+                        </div>
+
+                        {viewHref ? (
+                          <a
+                            href={viewHref}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-xs text-blue-600 underline"
+                          >
+                            View
+                          </a>
+                        ) : (
+                          <span className="text-xs text-neutral-400">No viewable link</span>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              ) : (
+                <p className="text-xs text-neutral-500">No documents are attached to this transaction yet.</p>
               )}
             </div>
-
-            {viewHref ? (
-              <a
-                href={viewHref}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-xs text-blue-600 underline"
-              >
-                View
-              </a>
-            ) : (
-              <span className="text-xs text-gray-400">
-                No viewable link for this file
-              </span>
-            )}
-          </li>
-        );
-      })}
-    </ul>
-  ) : (
-    <p className="text-xs text-gray-500">
-      No documents are attached to this transaction yet.
-    </p>
-  )}
-</div>
 
             {/* ACTION BUTTONS */}
             <div className="mt-6 flex flex-wrap gap-3">
               <button
                 disabled={saving}
                 onClick={handleSave}
-                className="bg-yellow-600 text-white px-6 py-2 rounded-md font-semibold disabled:opacity-60"
+                className="bg-orange-600 text-white px-6 py-2 rounded-md font-semibold disabled:opacity-60"
               >
                 {saving ? "Saving…" : "Save Progress"}
               </button>
