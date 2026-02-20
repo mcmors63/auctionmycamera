@@ -245,6 +245,9 @@ export default function DashboardPage() {
     relist_until_sold: false,
   });
 
+  // Photo (dashboard sell)
+  const [sellPhoto, setSellPhoto] = useState<File | null>(null);
+  const [sellPhotoPreview, setSellPhotoPreview] = useState<string | null>(null);
   // Fee preview (simple for now)
   const [commissionRate, setCommissionRate] = useState(0);
   const [commissionValue, setCommissionValue] = useState(0);
@@ -656,6 +659,38 @@ export default function DashboardPage() {
   };
 
   // -----------------------------
+// Upload photo for dashboard sell
+// -----------------------------
+import { Storage, ID } from "appwrite";
+
+const storage = new Storage(client);
+
+async function uploadDashboardPhotoIfProvided(): Promise<string | null> {
+  if (!sellPhoto) return null;
+
+  const bucketId =
+    process.env.NEXT_PUBLIC_APPWRITE_CAMERA_IMAGES_BUCKET_ID || "";
+
+  if (!bucketId) {
+    alert("Camera image bucket not configured.");
+    return null;
+  }
+
+  try {
+    const file = await storage.createFile(
+      bucketId,
+      ID.unique(),
+      sellPhoto
+    );
+
+    return file.$id;
+  } catch (err) {
+    console.error("Photo upload failed:", err);
+    alert("Failed to upload image.");
+    return null;
+  }
+}
+  // -----------------------------
   // Create listing via /api/listings (JWT auth)
   // -----------------------------
   const handleSellSubmit = async (e: React.FormEvent) => {
@@ -738,6 +773,8 @@ export default function DashboardPage() {
           starting_price: !isNaN(starting) ? starting : 0,
           buy_now: !isNaN(buyNow) ? buyNow : 0,
 
+          image_id: uploadedImageId,
+
           relist_until_sold: !!sellForm.relist_until_sold,
         }),
       });
@@ -779,7 +816,8 @@ export default function DashboardPage() {
       }
 
       alert("Listing submitted! Awaiting approval.");
-
+      setSellPhoto(null);
+      setSellPhotoPreview(null);
       setSellForm({
         item_title: "",
         gear_type: "",
@@ -1187,6 +1225,39 @@ export default function DashboardPage() {
                 />
               </div>
 
+              {/* Photo Upload */}
+<div>
+  <label className="block text-sm font-medium text-neutral-200 mb-1">
+    Photo (optional)
+  </label>
+
+  <input
+    type="file"
+    accept="image/*"
+    onChange={(e) => {
+      const file = e.target.files?.[0] || null;
+      setSellPhoto(file);
+
+      if (file) {
+        const url = URL.createObjectURL(file);
+        setSellPhotoPreview(url);
+      } else {
+        setSellPhotoPreview(null);
+      }
+    }}
+    className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100"
+  />
+
+  {sellPhotoPreview && (
+    <div className="mt-3">
+      <img
+        src={sellPhotoPreview}
+        alt="Preview"
+        className="h-40 rounded-lg border border-neutral-700 object-cover"
+      />
+    </div>
+  )}
+</div>
               {/* Prices */}
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <div>
