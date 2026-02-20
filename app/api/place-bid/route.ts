@@ -1,9 +1,11 @@
 // app/api/place-bid/route.ts
 import { NextResponse } from "next/server";
-import { Client, Databases, ID, Account } from "node-appwrite";
+import { Client, Databases, ID, Account, Query } from "node-appwrite";
 import nodemailer from "nodemailer";
+import Stripe from "stripe";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 // -----------------------------
 // Appwrite setup (SERVER-SAFE env)
@@ -14,28 +16,53 @@ const projectId =
   process.env.APPWRITE_PROJECT_ID || process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID || "";
 const apiKey = process.env.APPWRITE_API_KEY || "";
 
+// Listings DB/collection (camera-first, legacy fallback)
 const DB_ID =
+  process.env.APPWRITE_LISTINGS_DATABASE_ID ||
+  process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID ||
   process.env.APPWRITE_PLATES_DATABASE_ID ||
   process.env.NEXT_PUBLIC_APPWRITE_PLATES_DATABASE_ID ||
   "";
 
-const PLATES_COLLECTION =
+const LISTINGS_COLLECTION =
+  process.env.APPWRITE_LISTINGS_COLLECTION_ID ||
+  process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_COLLECTION_ID ||
   process.env.APPWRITE_PLATES_COLLECTION_ID ||
   process.env.NEXT_PUBLIC_APPWRITE_PLATES_COLLECTION_ID ||
   "";
 
+// Bids collection
 const BIDS_COLLECTION =
   process.env.APPWRITE_BIDS_COLLECTION_ID ||
   process.env.NEXT_PUBLIC_APPWRITE_BIDS_COLLECTION_ID ||
   "bids";
 
-// Admin client for database reads/writes
+// Profiles DB/collection (for Stripe gating)
+const PROFILES_DB_ID =
+  process.env.APPWRITE_PROFILES_DATABASE_ID ||
+  process.env.NEXT_PUBLIC_APPWRITE_PROFILES_DATABASE_ID ||
+  "";
+
+const PROFILES_COLLECTION_ID =
+  process.env.APPWRITE_PROFILES_COLLECTION_ID ||
+  process.env.NEXT_PUBLIC_APPWRITE_PROFILES_COLLECTION_ID ||
+  "";
+
+// Admin client for DB reads/writes
 const adminClient =
   endpoint && projectId && apiKey
     ? new Client().setEndpoint(endpoint).setProject(projectId).setKey(apiKey)
     : null;
 
 const databases = adminClient ? new Databases(adminClient) : null;
+
+// -----------------------------
+// Stripe (server-side)
+// -----------------------------
+const stripeSecretKey = process.env.STRIPE_SECRET_KEY || "";
+const stripe = stripeSecretKey
+  ? new Stripe(stripeSecretKey, { apiVersion: "2025-11-17.clover" as any })
+  : null;
 
 // -----------------------------
 // Email setup (re-uses global SMTP env)
@@ -99,10 +126,7 @@ async function requireAuthedUser(req: Request) {
   if (!endpoint || !projectId) {
     return {
       ok: false as const,
-      res: NextResponse.json(
-        { error: "Server missing Appwrite config." },
-        { status: 500 }
-      ),
+      res: NextResponse.json({ error: "Server missing Appwrite config." }, { status: 500 }),
     };
   }
 
@@ -126,7 +150,12 @@ async function requireAuthedUser(req: Request) {
 type Listing = {
   $id: string;
   status?: string;
-  registration?: string;
+  registration?: string; // legacy plates field (harmless if absent)
+  item_title?: string;
+  title?: string;
+  brand?: string;
+  model?: string;
+
   current_bid?: number | null;
   starting_price?: number | null;
   bids?: number | null;
@@ -141,17 +170,148 @@ type Listing = {
   [key: string]: any;
 };
 
-async function sendBidEmails(options: {
-  listing: Listing;
-  bidAmount: number;
-  bidderEmail: string;
-}) {
+function getListingName(l: Listing) {
+  const t = String(l.item_title || l.title || "").trim();
+  if (t) return t;
+  const bm = [l.brand, l.model].filter(Boolean).join(" ").trim();
+  if (bm) return bm;
+  const reg = String(l.registration || "").trim();
+  if (reg) return reg;
+  return "your item";
+}
+
+// -----------------------------
+// Schema-tolerant update (profiles cache)
+// -----------------------------
+async function updateDocSchemaTolerant(
+  db: Databases,
+  dbId: string,
+  colId: string,
+  docId: string,
+  payload: Record<string, any>
+) {
+  const data: Record<string, any> = { ...payload };
+
+  for (let i = 0; i < 12; i++) {
+    try {
+      return await db.updateDocument(dbId, colId, docId, data);
+    } catch (err: any) {
+      const msg = String(err?.message || "");
+      const m = msg.match(/Unknown attribute:\s*([A-Za-z0-9_]+)/i);
+      if (m?.[1]) {
+        delete data[m[1]];
+        continue;
+      }
+      throw err;
+    }
+  }
+
+  // If schema is extremely minimal, just stop silently.
+  return null;
+}
+
+// -----------------------------
+// Stripe gating: require saved card
+// -----------------------------
+async function requireCardOnFileOr403(opts: { email: string }) {
+  const { email } = opts;
+
+  // If Stripe isn’t configured, don’t brick bidding silently — but do fail loudly.
+  if (!stripe) {
+    return {
+      ok: false as const,
+      res: NextResponse.json(
+        { error: "Stripe is not configured on the server." },
+        { status: 500 }
+      ),
+    };
+  }
+
+  // Profiles must be configured to do the customer lookup reliably.
+  if (!databases || !PROFILES_DB_ID || !PROFILES_COLLECTION_ID) {
+    return {
+      ok: false as const,
+      res: NextResponse.json(
+        {
+          error:
+            "Profiles database is not configured on the server (cannot verify payment method).",
+        },
+        { status: 500 }
+      ),
+    };
+  }
+
+  // Find profile by email
+  const profRes = await databases.listDocuments(PROFILES_DB_ID, PROFILES_COLLECTION_ID, [
+    Query.equal("email", email),
+    Query.limit(1),
+  ]);
+  const profile: any = profRes.documents?.[0] || null;
+
+  const stripeCustomerId = String(profile?.stripe_customer_id || "").trim();
+
+  if (!stripeCustomerId) {
+    return {
+      ok: false as const,
+      res: NextResponse.json(
+        {
+          error: "Please add a card before you can bid.",
+          code: "card_required",
+        },
+        { status: 403 }
+      ),
+    };
+  }
+
+  // Check Stripe for at least 1 card
+  const pms = await stripe.paymentMethods.list({
+    customer: stripeCustomerId,
+    type: "card",
+    limit: 1,
+  });
+
+  const hasCard = Array.isArray(pms.data) && pms.data.length > 0;
+
+  if (!hasCard) {
+    return {
+      ok: false as const,
+      res: NextResponse.json(
+        {
+          error: "Please add a card before you can bid.",
+          code: "card_required",
+        },
+        { status: 403 }
+      ),
+    };
+  }
+
+  // Optional: cache in profile if your schema supports it (safe, schema-tolerant)
+  try {
+    const pmId = pms.data[0]?.id || null;
+    if (profile?.$id) {
+      await updateDocSchemaTolerant(databases, PROFILES_DB_ID, PROFILES_COLLECTION_ID, profile.$id, {
+        stripe_has_card: true,
+        stripe_default_payment_method_id: pmId,
+      });
+    }
+  } catch (e) {
+    // Don’t block bidding on cache failure
+    console.warn("[place-bid] profile cache update skipped:", e);
+  }
+
+  return { ok: true as const, profile };
+}
+
+// -----------------------------
+// Emails
+// -----------------------------
+async function sendBidEmails(options: { listing: Listing; bidAmount: number; bidderEmail: string }) {
   const { listing, bidAmount, bidderEmail } = options;
 
   const transporter = getTransporter();
   if (!transporter) return;
 
-  const reg = listing.registration || "your number plate";
+  const itemName = getListingName(listing);
   const amountLabel = `£${bidAmount.toLocaleString("en-GB", {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
@@ -169,9 +329,9 @@ async function sendBidEmails(options: {
     await transporter.sendMail({
       from: EMAIL_FROM,
       to: bidderEmail,
-      subject: `Bid placed on ${reg}: ${amountLabel}`,
+      subject: `Bid placed: ${itemName} (${amountLabel})`,
       text: [
-        `Thank you for your bid on ${reg}.`,
+        `Thank you for your bid on ${itemName}.`,
         "",
         `Bid amount: ${amountLabel}`,
         "",
@@ -180,33 +340,26 @@ async function sendBidEmails(options: {
         "If you did not place this bid, please contact support immediately.",
       ].join("\n"),
     });
-
-    console.log("[place-bid] Sent bid confirmation email to bidder:", bidderEmail);
   } catch (err) {
     console.error("[place-bid] Failed to send bidder email:", err);
   }
 
-  if (!sellerEmail) {
-    console.warn("[place-bid] No seller email field found on listing; skipping seller notification.");
-    return;
-  }
+  if (!sellerEmail) return;
 
   // Seller notification
   try {
     await transporter.sendMail({
       from: EMAIL_FROM,
       to: sellerEmail,
-      subject: `New bid on your number plate ${reg}`,
+      subject: `New bid on your listing: ${itemName}`,
       text: [
-        `A new bid has been placed on your number plate ${reg}.`,
+        `A new bid has been placed on your listing: ${itemName}.`,
         "",
         `Bid amount: ${amountLabel}`,
         "",
-        `You can log in to AuctionMyPlate to see the current bids and auction status.`,
+        `Log in to AuctionMyCamera to view the auction status.`,
       ].join("\n"),
     });
-
-    console.log("[place-bid] Sent bid notification email to seller:", sellerEmail);
   } catch (err) {
     console.error("[place-bid] Failed to send seller email:", err);
   }
@@ -234,14 +387,14 @@ function getBidIncrement(current: number): number {
 export async function POST(req: Request) {
   try {
     // Server sanity
-    if (!databases || !DB_ID || !PLATES_COLLECTION) {
+    if (!databases || !DB_ID || !LISTINGS_COLLECTION) {
       return NextResponse.json(
         { error: "Server configuration missing (Appwrite DB/collections)." },
         { status: 500 }
       );
     }
 
-    // Require logged-in user (prevents “ghost bids” after logout)
+    // Require logged-in user
     const auth = await requireAuthedUser(req);
     if (!auth.ok) return auth.res;
 
@@ -252,15 +405,16 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
     }
 
+    // ✅ Stripe gating (card required)
+    const gate = await requireCardOnFileOr403({ email: bidderEmail });
+    if (!gate.ok) return gate.res;
+
     const body = await req.json().catch(() => ({} as any));
     const listingId = body?.listingId as string | undefined;
     const amountRaw = body?.amount;
 
     if (!listingId || amountRaw == null) {
-      return NextResponse.json(
-        { error: "Missing listingId or amount." },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "Missing listingId or amount." }, { status: 400 });
     }
 
     const bidAmount =
@@ -270,22 +424,14 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Invalid bid amount." }, { status: 400 });
     }
 
-    // -----------------------------
     // Load listing
-    // -----------------------------
-    const listing = (await databases.getDocument(
-      DB_ID,
-      PLATES_COLLECTION,
-      listingId
-    )) as unknown as Listing;
+    const listing = (await databases.getDocument(DB_ID, LISTINGS_COLLECTION, listingId)) as unknown as Listing;
 
     if (!listing || (listing.status || "").toLowerCase() !== "live") {
       return NextResponse.json({ error: "Auction is not live." }, { status: 400 });
     }
 
-    // -----------------------------
-    // Safety check & SOFT CLOSE
-    // -----------------------------
+    // Soft close safety check
     const now = new Date();
     const nowMs = now.getTime();
     const auctionEnd = listing.auction_end ?? listing.end_time ?? null;
@@ -314,9 +460,7 @@ export async function POST(req: Request) {
       }
     }
 
-    // -----------------------------
-    // Calculate minimum allowed bid
-    // -----------------------------
+    // Minimum bid
     const effectiveBaseBid =
       listing.current_bid != null
         ? Number(listing.current_bid)
@@ -332,9 +476,7 @@ export async function POST(req: Request) {
       );
     }
 
-    // -----------------------------
-    // Create bid history doc (non-fatal if fails)
-    // -----------------------------
+    // Bid history doc (non-fatal)
     let bidDoc: any = null;
 
     if (BIDS_COLLECTION) {
@@ -351,9 +493,7 @@ export async function POST(req: Request) {
       }
     }
 
-    // -----------------------------
     // Update listing
-    // -----------------------------
     const newBidsCount = typeof listing.bids === "number" ? listing.bids + 1 : 1;
 
     const updatePayload: Record<string, any> = {
@@ -369,31 +509,16 @@ export async function POST(req: Request) {
       updatePayload.auction_end = newAuctionEnd;
     }
 
-    const updatedListing = await databases.updateDocument(
-      DB_ID,
-      PLATES_COLLECTION,
-      listing.$id,
-      updatePayload
-    );
+    const updatedListing = await databases.updateDocument(DB_ID, LISTINGS_COLLECTION, listing.$id, updatePayload);
 
-    // -----------------------------
-    // Send emails (non-fatal if they fail)
-    // -----------------------------
+    // Emails (non-fatal)
     try {
-      await sendBidEmails({
-        listing,
-        bidAmount,
-        bidderEmail,
-      });
+      await sendBidEmails({ listing, bidAmount, bidderEmail });
     } catch (err) {
       console.error("[place-bid] Unexpected error in sendBidEmails:", err);
     }
 
-    return NextResponse.json({
-      ok: true,
-      updatedListing,
-      bidDoc,
-    });
+    return NextResponse.json({ ok: true, updatedListing, bidDoc });
   } catch (err: any) {
     console.error("[place-bid] route fatal error:", err);
     return NextResponse.json(
