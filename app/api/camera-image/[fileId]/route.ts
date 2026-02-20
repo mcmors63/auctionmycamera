@@ -1,9 +1,10 @@
 // app/api/camera-image/[fileId]/route.ts
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+// --- Server env (use non-public where possible) ---
 const endpoint =
   process.env.APPWRITE_ENDPOINT ||
   process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT ||
@@ -16,84 +17,71 @@ const projectId =
 
 const apiKey = process.env.APPWRITE_API_KEY || "";
 
-// ✅ Your camera images bucket id (must exist in Vercel env)
-const CAMERA_IMAGES_BUCKET_ID =
-  process.env.NEXT_PUBLIC_APPWRITE_CAMERA_IMAGES_BUCKET_ID || "";
+// Bucket that stores camera images
+const bucketId = process.env.NEXT_PUBLIC_APPWRITE_CAMERA_IMAGES_BUCKET_ID || "";
 
-function safeId(id: string) {
-  // Appwrite IDs are generally safe-ish strings; just avoid path tricks
-  return String(id || "").replace(/[^a-zA-Z0-9._-]/g, "");
-}
-
+/**
+ * GET /api/camera-image/:fileId
+ * Proxies Appwrite Storage "view" using your server API key so images can load publicly.
+ *
+ * IMPORTANT:
+ * - This does NOT expose your key to the browser.
+ * - If you want images to be private, don’t use this. Use signed URLs or user sessions.
+ */
 export async function GET(
   req: NextRequest,
-  { params }: { params: { fileId: string } }
+  context: { params: Promise<{ fileId: string }> }
 ) {
   try {
-    const raw = String(params?.fileId || "");
-    const fileId = safeId(raw);
+    // ✅ Next.js 16 typing expects params as a Promise
+    const { fileId } = await context.params;
 
-    if (!fileId) {
-      return NextResponse.json({ error: "Missing fileId." }, { status: 400 });
+    if (!fileId || typeof fileId !== "string") {
+      return new Response("Missing fileId", { status: 400 });
     }
 
-    if (!endpoint || !projectId || !apiKey) {
-      return NextResponse.json(
-        { error: "Server missing Appwrite config." },
-        { status: 500 }
-      );
+    if (!endpoint || !projectId || !apiKey || !bucketId) {
+      return new Response("Server misconfigured (Appwrite env missing)", {
+        status: 500,
+      });
     }
 
-    if (!CAMERA_IMAGES_BUCKET_ID) {
-      return NextResponse.json(
-        { error: "Missing NEXT_PUBLIC_APPWRITE_CAMERA_IMAGES_BUCKET_ID." },
-        { status: 500 }
-      );
-    }
-
-    // ✅ Fetch the file bytes from Appwrite using the server API key
     const base = endpoint.replace(/\/+$/, "");
-    const url =
-      `${base}/storage/buckets/${encodeURIComponent(
-        CAMERA_IMAGES_BUCKET_ID
-      )}/files/${encodeURIComponent(fileId)}/view`;
+    const url = `${base}/storage/buckets/${encodeURIComponent(
+      bucketId
+    )}/files/${encodeURIComponent(fileId)}/view`;
 
+    // Proxy the file bytes from Appwrite using API key
     const upstream = await fetch(url, {
       method: "GET",
       headers: {
         "X-Appwrite-Project": projectId,
         "X-Appwrite-Key": apiKey,
       },
-      // streaming is fine
+      // Avoid Next caching weirdness
+      cache: "no-store",
     });
 
     if (!upstream.ok) {
       const text = await upstream.text().catch(() => "");
-      console.warn("[camera-image] upstream not ok:", upstream.status, text);
-      return NextResponse.json(
-        { error: "Image not found." },
-        { status: upstream.status === 404 ? 404 : 400 }
-      );
+      console.error("[camera-image] upstream failed:", upstream.status, text);
+      return new Response("Image not found", { status: 404 });
     }
 
+    // Pass through content-type if provided
     const contentType =
       upstream.headers.get("content-type") || "application/octet-stream";
 
-    // Cache hard — files are immutable once created (good for performance)
-    const res = new NextResponse(upstream.body, {
+    // Stream the response back to the browser
+    return new Response(upstream.body, {
       status: 200,
       headers: {
         "Content-Type": contentType,
         "Cache-Control": "public, max-age=31536000, immutable",
       },
     });
-
-    return res;
-  } catch (err: any) {
+  } catch (err) {
     console.error("[camera-image] fatal:", err);
-    return NextResponse.json(
-      { error: "Failed to load image." },
-      { status: 500 }
-    );
+    return new Response("Server error", { status: 500 });
   }
 }
