@@ -23,7 +23,7 @@ const LISTINGS_COLLECTION_ID =
   process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_COLLECTION_ID ||
   process.env.NEXT_PUBLIC_APPWRITE_PLATES_COLLECTION_ID!;
 
-// ✅ Storage bucket for camera images
+// ✅ Storage bucket for camera images (still used for sanity checks)
 const CAMERA_IMAGES_BUCKET_ID =
   process.env.NEXT_PUBLIC_APPWRITE_CAMERA_IMAGES_BUCKET_ID || "";
 
@@ -154,25 +154,21 @@ function parseMaybeDate(input: unknown): number | null {
 
 function isUpdateEvent(events: string[] | undefined) {
   if (!Array.isArray(events)) return false;
-  // Appwrite event strings are usually specific, not wildcard.
-  // This catches both: "...documents.<id>.update" and other update variants.
   return events.some((e) => typeof e === "string" && e.endsWith(".update"));
 }
 
-// ✅ Build Appwrite Storage view URL for images (works with existing session cookies)
-function buildStorageViewUrl(fileId: string) {
-  const endpoint = String(process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT || "").replace(/\/+$/, "");
-  const project = String(process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID || "").trim();
+// ✅ NEW: Serve images via OUR domain so it works even if bucket is private
+function buildLocalImageProxyUrl(fileId: string) {
+  const id = String(fileId || "").trim();
+  if (!id) return null;
 
-  if (!endpoint || !project || !CAMERA_IMAGES_BUCKET_ID || !fileId) return null;
+  // If you haven't set the bucket ID, don't pretend images will work
+  if (!CAMERA_IMAGES_BUCKET_ID) return null;
 
-  // Using the REST endpoint directly keeps this simple and fast.
-  return `${endpoint}/storage/buckets/${CAMERA_IMAGES_BUCKET_ID}/files/${encodeURIComponent(
-    fileId
-  )}/view?project=${encodeURIComponent(project)}`;
+  return `/api/camera-image/${encodeURIComponent(id)}`;
 }
 
-// ✅ Prefer: image_url (public) -> image_id (storage) -> fallback
+// ✅ Prefer: image_url (public) -> image_id (proxy) -> fallback
 function pickImageSrc(l: Listing) {
   const anyL = l as any;
 
@@ -181,7 +177,7 @@ function pickImageSrc(l: Listing) {
 
   const id = String(anyL.image_id || "").trim();
   if (id) {
-    const url = buildStorageViewUrl(id);
+    const url = buildLocalImageProxyUrl(id);
     if (url) return url;
   }
 
@@ -244,7 +240,7 @@ export default function ListingDetailsClient({ initial }: { initial: Listing }) 
         const payload = (event as any).payload as Listing;
         const prev = listingRef.current;
 
-        // Outbid popup (fires even for first bid; that's fine)
+        // Outbid popup
         const prevBid = prev?.current_bid ?? 0;
         const nextBid = payload.current_bid ?? 0;
         if (typeof nextBid === "number" && nextBid > prevBid) {
@@ -307,7 +303,6 @@ export default function ListingDetailsClient({ initial }: { initial: Listing }) 
   const metaBits = [niceEnum(anyL.gear_type), niceEnum(anyL.condition), niceEnum(anyL.era)].filter(Boolean);
   const metaLine = metaBits.join(" • ");
 
-  // ✅ Updated image picker: supports image_id (Storage) + legacy image_url
   const imgSrc = useMemo(() => pickImageSrc(listing), [listing]);
 
   const rawEndStr = String(anyL.auction_end ?? anyL.end_time ?? "");
@@ -316,7 +311,6 @@ export default function ListingDetailsClient({ initial }: { initial: Listing }) 
   const endMs = parseMaybeDate(rawEndStr);
   const auctionEnded = !!endMs && endMs <= Date.now();
 
-  // Only treat it as "live" if status is live AND we haven't passed the end time
   const isLive = isLiveStatus && !auctionEnded && !isSold;
 
   const extraLine =
@@ -328,7 +322,6 @@ export default function ListingDetailsClient({ initial }: { initial: Listing }) 
           .join(" • ")
       : "";
 
-  // Sold price display (prefer sold_price, else buy now if sold via buy_now, else current bid)
   const soldPrice =
     typeof anyL.sold_price === "number"
       ? anyL.sold_price
@@ -339,11 +332,7 @@ export default function ListingDetailsClient({ initial }: { initial: Listing }) 
       : null;
 
   const currentBidDisplay =
-    currentBidRaw == null
-      ? startingPrice != null
-        ? "No bids yet"
-        : money(0)
-      : money(currentBidRaw);
+    currentBidRaw == null ? (startingPrice != null ? "No bids yet" : money(0)) : money(currentBidRaw);
 
   return (
     <main className="min-h-screen bg-black text-gray-100 py-10 px-4">
@@ -412,7 +401,6 @@ export default function ListingDetailsClient({ initial }: { initial: Listing }) 
               className="w-full h-[320px] md:h-[420px] object-cover block"
               loading="lazy"
               onError={(e) => {
-                // if Storage link fails for some reason, fall back visually
                 const el = e.currentTarget as HTMLImageElement;
                 el.src = pickFallbackImage(listing);
               }}

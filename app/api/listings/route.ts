@@ -62,7 +62,11 @@ async function getAuthedUser(req: NextRequest) {
   const jwt = getJwtFromRequest(req);
   if (!jwt) return null;
 
-  const userClient = new Client().setEndpoint(endpoint).setProject(projectId).setJWT(jwt);
+  const userClient = new Client()
+    .setEndpoint(endpoint)
+    .setProject(projectId)
+    .setJWT(jwt);
+
   const account = new Account(userClient);
 
   try {
@@ -117,14 +121,20 @@ function buildCreatePermissions(userId: string) {
 export async function POST(req: NextRequest) {
   try {
     if (!endpoint || !projectId || !apiKey) {
-      return NextResponse.json({ error: "Server Appwrite config missing." }, { status: 500 });
+      return NextResponse.json(
+        { error: "Server Appwrite config missing." },
+        { status: 500 }
+      );
     }
 
     // ✅ HARD GATE: must be logged in
     const me = await getAuthedUser(req);
     if (!me) {
       return NextResponse.json(
-        { error: "Not authenticated. Please log in or register before selling.", code: "NOT_AUTHENTICATED" },
+        {
+          error: "Not authenticated. Please log in or register before selling.",
+          code: "NOT_AUTHENTICATED",
+        },
         { status: 401 }
       );
     }
@@ -133,7 +143,8 @@ export async function POST(req: NextRequest) {
     if (!me.emailVerified) {
       return NextResponse.json(
         {
-          error: "Email not verified. Please verify your email before submitting a listing.",
+          error:
+            "Email not verified. Please verify your email before submitting a listing.",
           code: "EMAIL_NOT_VERIFIED",
         },
         { status: 403 }
@@ -154,6 +165,20 @@ export async function POST(req: NextRequest) {
     const model = safeString(body.model);
     const description = safeString(body.description);
 
+    // ✅ Photo fields from SellClient
+    // - SellClient currently sends image_id (single). We also accept image_ids (array) for future-proofing.
+    const imageId = safeString(body.image_id || body.imageId);
+    const imageIdsRaw = Array.isArray(body.image_ids || body.imageIds)
+      ? (body.image_ids || body.imageIds)
+      : null;
+    const imageIds =
+      Array.isArray(imageIdsRaw) && imageIdsRaw.length
+        ? imageIdsRaw
+            .map((x: any) => safeString(x))
+            .filter(Boolean)
+            .slice(0, 10) // sensible cap
+        : null;
+
     // Legacy fields (old plate-era) — used as fallback display label
     const regNumber = safeString(body.reg_number || body.registration);
 
@@ -169,7 +194,10 @@ export async function POST(req: NextRequest) {
     }
 
     if (startingPrice < 0 || reservePrice < 0) {
-      return NextResponse.json({ error: "Prices cannot be negative." }, { status: 400 });
+      return NextResponse.json(
+        { error: "Prices cannot be negative." },
+        { status: 400 }
+      );
     }
 
     if (reservePrice > 0 && startingPrice > 0 && startingPrice >= reservePrice) {
@@ -183,7 +211,10 @@ export async function POST(req: NextRequest) {
       const minBuyNow = Math.max(reservePrice || 0, startingPrice || 0);
       if (buyNow < minBuyNow) {
         return NextResponse.json(
-          { error: "Buy Now price cannot be lower than the reserve price or starting price." },
+          {
+            error:
+              "Buy Now price cannot be lower than the reserve price or starting price.",
+          },
           { status: 400 }
         );
       }
@@ -200,8 +231,9 @@ export async function POST(req: NextRequest) {
 
     const permissions = buildCreatePermissions(ownerId);
 
-    const nowIso = new Date().toISOString();
-
+    // ✅ IMPORTANT:
+    // Avoid writing created_at / updated_at unless you have those attributes in Appwrite.
+    // Appwrite already provides $createdAt / $updatedAt automatically.
     const data: Record<string, any> = {
       // Base / compatibility (legacy uses "registration" as label)
       registration: displayName,
@@ -236,16 +268,20 @@ export async function POST(req: NextRequest) {
       model: model || null,
       description: description || null,
 
+      // ✅ Photo references (schema-tolerant)
+      // If you only add one attribute in Appwrite, add: image_id (string).
+      // If you later add gallery support, add: image_ids (string array).
+      image_id: imageId || null,
+      image_ids: imageIds || null,
+
       // Legacy harmless defaults
       plate_status: body.plate_status || "available",
       expiry_date: body.expiry_date || null,
       interesting_fact: body.interesting_fact || null,
-
-      created_at: nowIso,
-      updated_at: nowIso,
     };
 
     let created: any;
+
     try {
       created = await databases.createDocument(
         LISTINGS_DB_ID,
@@ -256,8 +292,9 @@ export async function POST(req: NextRequest) {
       );
     } catch (err: any) {
       const msg = String(err?.message || err);
-      console.error("❌ createDocument failed, attempting minimal fallback", msg);
+      console.error("❌ createDocument failed, attempting minimal fallback:", msg);
 
+      // Minimal payload that should work even on a strict schema
       const minimal: Record<string, any> = {
         registration: displayName,
         seller_email: sellerEmail,
@@ -268,17 +305,40 @@ export async function POST(req: NextRequest) {
         reserve_price: reservePrice,
         buy_now: buyNow,
         status: "pending_approval",
-        created_at: nowIso,
-        updated_at: nowIso,
+
+        // Try to keep photo even in minimal mode — if schema doesn’t have it,
+        // Appwrite will still reject, so we omit it if that happens next time.
+        image_id: imageId || null,
       };
 
-      created = await databases.createDocument(
-        LISTINGS_DB_ID,
-        LISTINGS_COLLECTION_ID,
-        ID.unique(),
-        minimal,
-        permissions
-      );
+      try {
+        created = await databases.createDocument(
+          LISTINGS_DB_ID,
+          LISTINGS_COLLECTION_ID,
+          ID.unique(),
+          minimal,
+          permissions
+        );
+      } catch (err2: any) {
+        // Ultra-minimal last resort (no optional fields at all)
+        const ultra: Record<string, any> = {
+          registration: displayName,
+          seller_email: sellerEmail,
+          owner_id: ownerId,
+          starting_price: startingPrice,
+          reserve_price: reservePrice,
+          buy_now: buyNow,
+          status: "pending_approval",
+        };
+
+        created = await databases.createDocument(
+          LISTINGS_DB_ID,
+          LISTINGS_COLLECTION_ID,
+          ID.unique(),
+          ultra,
+          permissions
+        );
+      }
     }
 
     const listingId = created?.$id;
@@ -290,18 +350,23 @@ export async function POST(req: NextRequest) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          plateId: listingId,
+          plateId: listingId, // legacy param name kept
           registration: displayName,
           sellerEmail,
           reserve_price: reservePrice,
           starting_price: startingPrice,
           buy_now: buyNow,
+
+          // camera context
           item_title: itemTitle || displayName,
           gear_type: gearType || undefined,
           era: era || undefined,
           condition: condition || undefined,
           brand: brand || undefined,
           model: model || undefined,
+
+          // photo info (handy for admin review later)
+          image_id: imageId || undefined,
         }),
       });
     } catch (e) {
