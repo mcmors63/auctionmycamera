@@ -7,7 +7,6 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Client, Account, Databases, Storage, ID, Query } from "appwrite";
 import { CheckCircleIcon, XCircleIcon } from "@heroicons/react/24/solid";
-
 // -----------------------------
 // Appwrite (browser)
 // -----------------------------
@@ -35,8 +34,6 @@ const LISTINGS_COLLECTION_ID =
   process.env.APPWRITE_PLATES_COLLECTION_ID ||
   "plates";
 
-// IMPORTANT: profiles should NOT silently point at listings unless you truly store profiles there.
-// We keep your fallback, but the real fix is setting NEXT_PUBLIC_APPWRITE_PROFILES_DATABASE_ID correctly.
 const PROFILES_DB_ID =
   process.env.NEXT_PUBLIC_APPWRITE_PROFILES_DATABASE_ID ||
   process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID ||
@@ -69,14 +66,15 @@ type Profile = {
   postcode?: string;
   phone?: string;
   email?: string;
-  userId?: string; // optional, but we’ll use it if your schema has it
 };
 
 type Listing = {
   $id: string;
 
+  // Compatibility label (your API writes registration = displayName)
   registration?: string;
 
+  // Camera fields
   item_title?: string | null;
   gear_type?: string | null;
   era?: string | null;
@@ -85,20 +83,25 @@ type Listing = {
   model?: string | null;
   description?: string | null;
 
+  // Pricing
   reserve_price: number;
   starting_price?: number;
   buy_now?: number;
 
+  // Seller + status
   status: string;
   seller_email?: string;
   sellerEmail?: string;
 
+  // Auction fields (optional)
   auction_start?: string | null;
   auction_end?: string | null;
 
+  // Behaviour flags
   relist_until_sold?: boolean;
   withdraw_after_current?: boolean;
 
+  // Bids (optional)
   current_bid?: number;
 };
 
@@ -114,13 +117,14 @@ type Transaction = {
   commission_rate?: number;
   seller_payout?: number;
 
-  payment_status?: string;
-  transaction_status?: string;
+  payment_status?: string; // pending | paid
+  transaction_status?: string; // pending | processing | complete
 
   documents?: any[];
   created_at?: string;
   updated_at?: string;
 
+  // flags
   seller_docs_requested?: boolean;
   seller_docs_received?: boolean;
   buyer_info_requested?: boolean;
@@ -170,7 +174,12 @@ function isFinishedTransaction(tx: Transaction) {
 }
 
 function listingTitle(l: Listing) {
-  return safeStr(l.item_title) || safeStr((l as any).title) || safeStr(l.registration) || "Untitled listing";
+  return (
+    safeStr(l.item_title) ||
+    safeStr((l as any).title) ||
+    safeStr(l.registration) ||
+    "Untitled listing"
+  );
 }
 
 function listingSubtitle(l: Listing) {
@@ -180,90 +189,13 @@ function listingSubtitle(l: Listing) {
   return bits.length ? bits.join(" • ") : "Camera listing";
 }
 
-function splitName(full: string) {
-  const cleaned = safeStr(full);
-  if (!cleaned) return { first: "", last: "" };
-  const parts = cleaned.split(/\s+/).filter(Boolean);
-  if (parts.length === 1) return { first: parts[0], last: "" };
-  return { first: parts[0], last: parts.slice(1).join(" ") };
-}
-
-async function loadOrCreateProfileForUser(current: any): Promise<Profile | null> {
-  const userId = String(current?.$id || "");
-  const email = String(current?.email || "");
-  if (!userId) return null;
-
-  // 1) Fast path: doc id == userId
-  try {
-    const prof = await databases.getDocument(PROFILES_DB_ID, PROFILES_COLLECTION_ID, userId);
-    return prof as any;
-  } catch {
-    // fallthrough
-  }
-
-  // 2) Fallback: find by userId/email (works if your profile doc uses ID.unique())
-  try {
-    const queries = [
-      Query.limit(1),
-      // If your schema has userId, this will hit
-      Query.equal("userId", userId),
-    ];
-
-    let found = null as any;
-
-    try {
-      const byUserId = await databases.listDocuments(PROFILES_DB_ID, PROFILES_COLLECTION_ID, queries);
-      found = (byUserId.documents?.[0] as any) || null;
-    } catch {
-      // ignore if attribute doesn't exist
-    }
-
-    if (!found && email) {
-      try {
-        const byEmail = await databases.listDocuments(PROFILES_DB_ID, PROFILES_COLLECTION_ID, [
-          Query.equal("email", email),
-          Query.limit(1),
-        ]);
-        found = (byEmail.documents?.[0] as any) || null;
-      } catch {
-        // ignore
-      }
-    }
-
-    if (found) return found as Profile;
-  } catch {
-    // ignore
-  }
-
-  // 3) Still nothing: create a profile doc with ID = userId so future loads always work
-  // This requires your profiles collection permissions to allow the logged-in user to create/update their own doc.
-  try {
-    const { first, last } = splitName(String(current?.name || ""));
-    const created = await databases.createDocument(PROFILES_DB_ID, PROFILES_COLLECTION_ID, ID.custom(userId), {
-      email: email || "",
-      userId,
-      first_name: first,
-      surname: last,
-      house: "",
-      street: "",
-      town: "",
-      county: "",
-      postcode: "",
-      phone: "",
-    });
-    return created as any;
-  } catch (e) {
-    console.warn("Profile create failed (check collection permissions/schema):", e);
-    return null;
-  }
-}
-
 // -----------------------------
 // Component
 // -----------------------------
 export default function DashboardPage() {
   const router = useRouter();
 
+  // Tabs
   const [activeTab, setActiveTab] = useState<
     | "profile"
     | "sell"
@@ -276,21 +208,26 @@ export default function DashboardPage() {
     | "transactions"
   >("sell");
 
+  // Auth + profile
   const [user, setUser] = useState<any>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
 
+  // Loading + feedback
   const [initialLoading, setInitialLoading] = useState(true);
   const [savingProfile, setSavingProfile] = useState(false);
   const [bannerError, setBannerError] = useState("");
   const [bannerSuccess, setBannerSuccess] = useState("");
 
+  // Listings
   const [awaitingListings, setAwaitingListings] = useState<Listing[]>([]);
   const [queuedListings, setQueuedListings] = useState<Listing[]>([]);
   const [liveListings, setLiveListings] = useState<Listing[]>([]);
   const [allListings, setAllListings] = useState<Listing[]>([]);
 
+  // Transactions (optional)
   const [transactions, setTransactions] = useState<Transaction[]>([]);
 
+  // Sell form (camera)
   const [sellForm, setSellForm] = useState({
     item_title: "",
     gear_type: "",
@@ -307,9 +244,10 @@ export default function DashboardPage() {
     relist_until_sold: false,
   });
 
+  // Photo (dashboard sell)
   const [sellPhoto, setSellPhoto] = useState<File | null>(null);
   const [sellPhotoPreview, setSellPhotoPreview] = useState<string | null>(null);
-
+  // Fee preview (simple for now)
   const [commissionRate, setCommissionRate] = useState(0);
   const [commissionValue, setCommissionValue] = useState(0);
   const [expectedReturn, setExpectedReturn] = useState(0);
@@ -317,6 +255,7 @@ export default function DashboardPage() {
   const [sellError, setSellError] = useState("");
   const [sellSubmitting, setSellSubmitting] = useState(false);
 
+  // Password
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -324,11 +263,15 @@ export default function DashboardPage() {
   const [passwordSuccess, setPasswordSuccess] = useState("");
   const [passwordLoading, setPasswordLoading] = useState(false);
 
+  // Delete account
   const [deleteError, setDeleteError] = useState("");
   const [deleteLoading, setDeleteLoading] = useState(false);
 
   const userEmail = user?.email ?? null;
 
+  // -----------------------------
+  // Derived transaction groups
+  // -----------------------------
   const soldTransactions = useMemo(() => {
     if (!userEmail) return [];
     return transactions.filter((tx) => tx.seller_email === userEmail && isFinishedTransaction(tx));
@@ -390,15 +333,15 @@ export default function DashboardPage() {
       if (cancelled) return;
       setUser(current);
 
-      // 2) PROFILE (robust)
+      // 2) PROFILE (best effort)
       try {
-        const prof = await loadOrCreateProfileForUser(current);
-        if (!cancelled) setProfile(prof);
+        const prof = await databases.getDocument(PROFILES_DB_ID, PROFILES_COLLECTION_ID, current.$id);
+        if (!cancelled) setProfile(prof as any);
       } catch {
         if (!cancelled) setProfile(null);
       }
 
-      // 3) LISTINGS
+      // 3) LISTINGS (seller_email or sellerEmail)
       try {
         const results: Listing[] = [];
 
@@ -407,15 +350,21 @@ export default function DashboardPage() {
             Query.equal("seller_email", current.email),
           ]);
           results.push(...((r1.documents || []) as any));
-        } catch {}
+        } catch {
+          // ignore
+        }
 
+        // fallback field name used in some clones
         try {
           const r2 = await databases.listDocuments(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, [
             Query.equal("sellerEmail", current.email),
           ]);
           results.push(...((r2.documents || []) as any));
-        } catch {}
+        } catch {
+          // ignore
+        }
 
+        // de-dupe by id
         const byId = new Map<string, Listing>();
         for (const d of results) if (d?.$id && !byId.has(d.$id)) byId.set(d.$id, d);
 
@@ -432,7 +381,7 @@ export default function DashboardPage() {
         if (!cancelled) setBannerError("Failed to load your listings. Please refresh.");
       }
 
-      // 4) TRANSACTIONS (optional)
+      // 4) TRANSACTIONS (optional, non-fatal)
       try {
         const combined: Transaction[] = [];
 
@@ -441,14 +390,18 @@ export default function DashboardPage() {
             Query.equal("seller_email", current.email),
           ]);
           combined.push(...((txSeller.documents || []) as any));
-        } catch {}
+        } catch {
+          // ignore
+        }
 
         try {
           const txBuyer = await databases.listDocuments(TX_DB_ID, TX_COLLECTION_ID, [
             Query.equal("buyer_email", current.email),
           ]);
           combined.push(...((txBuyer.documents || []) as any));
-        } catch {}
+        } catch {
+          // ignore
+        }
 
         const byId = new Map<string, Transaction>();
         combined.forEach((tx) => {
@@ -457,7 +410,7 @@ export default function DashboardPage() {
 
         if (!cancelled) setTransactions(Array.from(byId.values()));
       } catch {
-        // ignore
+        // ignore (transactions might not exist yet)
       }
 
       if (!cancelled) setInitialLoading(false);
@@ -481,7 +434,9 @@ export default function DashboardPage() {
       timeout = setTimeout(async () => {
         try {
           await account.deleteSession("current");
-        } catch {}
+        } catch {
+          // ignore
+        }
         alert("Logged out due to inactivity.");
         router.push("/login");
       }, 5 * 60 * 1000);
@@ -524,8 +479,6 @@ export default function DashboardPage() {
         county: profile.county || "",
         postcode: profile.postcode || "",
         phone: profile.phone || "",
-        email: profile.email || user?.email || "",
-        userId: (profile as any).userId || user?.$id || "",
       });
       setBannerSuccess("Profile updated.");
     } catch {
@@ -582,12 +535,14 @@ export default function DashboardPage() {
   const handleLogout = async () => {
     try {
       await account.deleteSession("current");
-    } catch {}
+    } catch {
+      // ignore
+    }
     router.push("/login");
   };
 
   // -----------------------------
-  // Delete account
+  // Delete account (keeps same backend endpoint)
   // -----------------------------
   const handleDeleteAccount = async () => {
     if (!user) return;
@@ -607,7 +562,9 @@ export default function DashboardPage() {
 
     try {
       const hasActiveListing = allListings.some((l) =>
-        ["pending", "pending_approval", "queued", "approved", "live", "active"].includes((l.status || "").toLowerCase())
+        [ "pending", "pending_approval", "queued", "approved", "live", "active" ].includes(
+          (l.status || "").toLowerCase()
+        )
       );
 
       if (hasActiveListing) {
@@ -652,11 +609,12 @@ export default function DashboardPage() {
   };
 
   // -----------------------------
-  // Fee preview
+  // Fee preview (simple commission model)
   // -----------------------------
   const calculateFees = (reserve: number) => {
     let commission = 0;
 
+    // Same tiering as before (you can change later)
     if (reserve <= 4999.99) commission = 10;
     else if (reserve <= 9999.99) commission = 8;
     else if (reserve <= 24999.99) commission = 7;
@@ -674,7 +632,9 @@ export default function DashboardPage() {
   // -----------------------------
   // Sell form handlers
   // -----------------------------
-  const handleSellChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
+  const handleSellChange = (
+    e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>
+  ) => {
     const target = e.target as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
     const { name, value, type } = target;
 
@@ -698,30 +658,36 @@ export default function DashboardPage() {
   };
 
   // -----------------------------
-  // Upload photo for dashboard sell
-  // -----------------------------
-  const storage = new Storage(client);
+// Upload photo for dashboard sell
+// -----------------------------
 
-  async function uploadDashboardPhotoIfProvided(): Promise<string | null> {
-    if (!sellPhoto) return null;
+const storage = new Storage(client);
 
-    const bucketId = process.env.NEXT_PUBLIC_APPWRITE_CAMERA_IMAGES_BUCKET_ID || "";
+async function uploadDashboardPhotoIfProvided(): Promise<string | null> {
+  if (!sellPhoto) return null;
 
-    if (!bucketId) {
-      alert("Camera image bucket not configured.");
-      return null;
-    }
+  const bucketId =
+    process.env.NEXT_PUBLIC_APPWRITE_CAMERA_IMAGES_BUCKET_ID || "";
 
-    try {
-      const file = await storage.createFile(bucketId, ID.unique(), sellPhoto);
-      return file.$id;
-    } catch (err) {
-      console.error("Photo upload failed:", err);
-      alert("Failed to upload image.");
-      return null;
-    }
+  if (!bucketId) {
+    alert("Camera image bucket not configured.");
+    return null;
   }
 
+  try {
+    const file = await storage.createFile(
+      bucketId,
+      ID.unique(),
+      sellPhoto
+    );
+
+    return file.$id;
+  } catch (err) {
+    console.error("Photo upload failed:", err);
+    alert("Failed to upload image.");
+    return null;
+  }
+}
   // -----------------------------
   // Create listing via /api/listings (JWT auth)
   // -----------------------------
@@ -776,41 +742,43 @@ export default function DashboardPage() {
     setSellSubmitting(true);
 
     try {
+      // ✅ Get a JWT so the API can verify who the user is
       const jwt = await account.createJWT();
-      const token = (jwt as any)?.jwt || "";
+const token = (jwt as any)?.jwt || "";
 
-      if (!token) {
-        setSellError("Could not create auth token. Please log out and log in again.");
-        setSellSubmitting(false);
-        return;
-      }
+if (!token) {
+  setSellError("Could not create auth token. Please log out and log in again.");
+  setSellSubmitting(false);
+  return;
+}
 
-      const uploadedImageId = await uploadDashboardPhotoIfProvided();
+// ✅ ADD THIS LINE
+const uploadedImageId = await uploadDashboardPhotoIfProvided();
 
-      const res = await fetch("/api/listings", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          item_title: title,
-          gear_type: safeStr(sellForm.gear_type),
-          brand: safeStr(sellForm.brand),
-          model: safeStr(sellForm.model),
-          era: safeStr(sellForm.era),
-          condition: safeStr(sellForm.condition),
-          description: safeStr(sellForm.description),
+const res = await fetch("/api/listings", {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${token}`,
+  },
+  body: JSON.stringify({
+    item_title: title,
+    gear_type: safeStr(sellForm.gear_type),
+    brand: safeStr(sellForm.brand),
+    model: safeStr(sellForm.model),
+    era: safeStr(sellForm.era),
+    condition: safeStr(sellForm.condition),
+    description: safeStr(sellForm.description),
 
-          reserve_price: reserve,
-          starting_price: !isNaN(starting) ? starting : 0,
-          buy_now: !isNaN(buyNow) ? buyNow : 0,
+    reserve_price: reserve,
+    starting_price: !isNaN(starting) ? starting : 0,
+    buy_now: !isNaN(buyNow) ? buyNow : 0,
 
-          image_id: uploadedImageId,
+    image_id: uploadedImageId,
 
-          relist_until_sold: !!sellForm.relist_until_sold,
-        }),
-      });
+    relist_until_sold: !!sellForm.relist_until_sold,
+  }),
+});
 
       const data = await res.json().catch(() => ({} as any));
 
@@ -844,7 +812,9 @@ export default function DashboardPage() {
         setAwaitingListings(docs.filter((l) => isAwaitingStatus(l.status)));
         setQueuedListings(docs.filter((l) => isQueuedStatus(l.status)));
         setLiveListings(docs.filter((l) => isLiveStatus(l.status)));
-      } catch {}
+      } catch {
+        // ignore
+      }
 
       alert("Listing submitted! Awaiting approval.");
       setSellPhoto(null);
@@ -888,7 +858,7 @@ export default function DashboardPage() {
   }
 
   // -----------------------------
-  // UI styles (camera theme)
+  // UI styles (camera theme, no AMP yellow)
   // -----------------------------
   const accentText = "text-sky-300";
   const accentBorder = "border-sky-700/50";
@@ -907,7 +877,11 @@ export default function DashboardPage() {
           <div>
             <h1 className={`text-2xl md:text-3xl font-bold ${accentText}`}>My Dashboard</h1>
             <p className="text-sm text-neutral-300 mt-1">
-              Welcome, <span className="font-semibold">{profile?.first_name || user?.name || "User"}</span>.
+              Welcome,{" "}
+              <span className="font-semibold">
+                {profile?.first_name || user?.name || "User"}
+              </span>
+              .
             </p>
           </div>
           <button
@@ -970,8 +944,7 @@ export default function DashboardPage() {
 
             {!profile ? (
               <p className="text-neutral-300">
-                No profile found (or profile permissions prevented creation). First fix your Appwrite env vars and ensure
-                the profiles collection allows logged-in users to read/write their own profile.
+                No profile found. If you only just registered, try refreshing. If it persists, contact support.
               </p>
             ) : (
               <>
@@ -987,7 +960,9 @@ export default function DashboardPage() {
                     ["phone", "Phone"],
                   ].map(([key, label]) => (
                     <div key={key}>
-                      <label className="block text-xs font-semibold text-neutral-400 mb-1">{label}</label>
+                      <label className="block text-xs font-semibold text-neutral-400 mb-1">
+                        {label}
+                      </label>
                       <input
                         type="text"
                         name={key}
@@ -999,7 +974,9 @@ export default function DashboardPage() {
                   ))}
 
                   <div>
-                    <label className="block text-xs font-semibold text-neutral-400 mb-1">Email (login)</label>
+                    <label className="block text-xs font-semibold text-neutral-400 mb-1">
+                      Email (login)
+                    </label>
                     <input
                       type="email"
                       value={profile.email || user?.email || ""}
@@ -1034,7 +1011,9 @@ export default function DashboardPage() {
 
                   <form onSubmit={handlePasswordChange} className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div>
-                      <label className="block text-xs font-semibold text-neutral-400 mb-1">Current Password</label>
+                      <label className="block text-xs font-semibold text-neutral-400 mb-1">
+                        Current Password
+                      </label>
                       <input
                         type="password"
                         value={currentPassword}
@@ -1044,18 +1023,24 @@ export default function DashboardPage() {
                     </div>
 
                     <div>
-                      <label className="block text-xs font-semibold text-neutral-400 mb-1">New Password</label>
+                      <label className="block text-xs font-semibold text-neutral-400 mb-1">
+                        New Password
+                      </label>
                       <input
                         type="password"
                         value={newPassword}
                         onChange={(e) => setNewPassword(e.target.value)}
                         className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
                       />
-                      <p className="text-xs text-neutral-500 mt-1">Must include letters &amp; numbers, min 8 characters.</p>
+                      <p className="text-xs text-neutral-500 mt-1">
+                        Must include letters &amp; numbers, min 8 characters.
+                      </p>
                     </div>
 
                     <div>
-                      <label className="block text-xs font-semibold text-neutral-400 mb-1">Confirm New Password</label>
+                      <label className="block text-xs font-semibold text-neutral-400 mb-1">
+                        Confirm New Password
+                      </label>
                       <input
                         type="password"
                         value={confirmPassword}
@@ -1086,13 +1071,11 @@ export default function DashboardPage() {
                 {/* Delete Account */}
                 <div className="mt-10 border-t border-neutral-800 pt-6">
                   <h3 className="text-lg font-semibold mb-3 text-rose-300">Delete Account</h3>
-
                   <p className="text-xs text-neutral-400 mb-3">
                     Deleting your account will permanently remove your login and personal details from AuctionMyCamera.
                     <br />
                     <strong>You cannot delete your account if:</strong>
                   </p>
-
                   <ul className="text-xs text-neutral-400 list-disc ml-5 mb-3">
                     <li>You have a listing awaiting approval, queued, or live.</li>
                     <li>You have any transactions still in progress.</li>
@@ -1118,9 +1101,670 @@ export default function DashboardPage() {
           </div>
         )}
 
-        {/* Everything else unchanged (sell/awaiting/queued/live/sold/purchased/history/transactions) */}
-        {/* ... your remaining tab JSX is exactly the same as you posted ... */}
-        {/* To keep this message readable, I didn’t re-paste the unchanged sections again. */}
+        {/* SELL TAB */}
+        {activeTab === "sell" && (
+          <div className="space-y-6">
+            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+              <h2 className={`text-xl font-bold ${accentText}`}>Sell an Item</h2>
+              <p className="text-xs text-neutral-400">
+                Submit your listing for approval. Fees only apply if your item sells.
+              </p>
+            </div>
+
+            {sellError && (
+              <p className="bg-rose-900/30 text-rose-200 text-sm rounded-md px-3 py-2 mb-2 border border-rose-700/70">
+                {sellError}
+              </p>
+            )}
+
+            <form onSubmit={handleSellSubmit} className="space-y-5">
+              {/* Item basics */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-semibold text-neutral-400 mb-1">
+                    Item title
+                  </label>
+                  <input
+                    name="item_title"
+                    value={sellForm.item_title}
+                    onChange={handleSellChange}
+                    className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                    placeholder="e.g. Canon EOS R6 Mark II body"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-neutral-400 mb-1">
+                    Gear type
+                  </label>
+                  <select
+                    name="gear_type"
+                    value={sellForm.gear_type}
+                    onChange={handleSellChange}
+                    className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                  >
+                    <option value="">Select type</option>
+                    <option value="camera">Camera</option>
+                    <option value="lens">Lens</option>
+                    <option value="film_camera">Film camera</option>
+                    <option value="accessory">Accessory</option>
+                    <option value="other">Other</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-neutral-400 mb-1">
+                    Brand (optional)
+                  </label>
+                  <input
+                    name="brand"
+                    value={sellForm.brand}
+                    onChange={handleSellChange}
+                    className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                    placeholder="e.g. Canon"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-neutral-400 mb-1">
+                    Model (optional)
+                  </label>
+                  <input
+                    name="model"
+                    value={sellForm.model}
+                    onChange={handleSellChange}
+                    className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                    placeholder="e.g. R6 Mark II"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-neutral-400 mb-1">
+                    Era (optional)
+                  </label>
+                  <input
+                    name="era"
+                    value={sellForm.era}
+                    onChange={handleSellChange}
+                    className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                    placeholder="e.g. Modern / Vintage / 1980s"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-neutral-400 mb-1">
+                    Condition (optional)
+                  </label>
+                  <select
+                    name="condition"
+                    value={sellForm.condition}
+                    onChange={handleSellChange}
+                    className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                  >
+                    <option value="">Select condition</option>
+                    <option value="new">New</option>
+                    <option value="like_new">Like new</option>
+                    <option value="excellent">Excellent</option>
+                    <option value="good">Good</option>
+                    <option value="fair">Fair</option>
+                    <option value="spares_repairs">Spares / repairs</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Description */}
+              <div>
+                <label className="block text-xs font-semibold text-neutral-400 mb-1">
+                  Description (optional)
+                </label>
+                <textarea
+                  name="description"
+                  value={sellForm.description}
+                  onChange={handleSellChange}
+                  className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm min-h-[90px] bg-neutral-950/40 text-neutral-100 placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                  placeholder="What’s included, condition details, any marks, shutter count, lens fungus, etc."
+                />
+              </div>
+
+              {/* Photo Upload */}
+<div>
+  <label className="block text-sm font-medium text-neutral-200 mb-1">
+    Photo (optional)
+  </label>
+
+  <input
+    type="file"
+    accept="image/*"
+    onChange={(e) => {
+      const file = e.target.files?.[0] || null;
+      setSellPhoto(file);
+
+      if (file) {
+        const url = URL.createObjectURL(file);
+        setSellPhotoPreview(url);
+      } else {
+        setSellPhotoPreview(null);
+      }
+    }}
+    className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100"
+  />
+
+  {sellPhotoPreview && (
+    <div className="mt-3">
+      <img
+        src={sellPhotoPreview}
+        alt="Preview"
+        className="h-40 rounded-lg border border-neutral-700 object-cover"
+      />
+    </div>
+  )}
+</div>
+              {/* Prices */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div>
+                  <label className="block text-xs font-semibold text-neutral-400 mb-1">
+                    Reserve Price (£)
+                  </label>
+                  <input
+                    type="number"
+                    name="reserve_price"
+                    value={sellForm.reserve_price}
+                    onChange={handleSellChange}
+                    className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                    min={0}
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-neutral-400 mb-1">
+                    Starting Price (£) (optional)
+                  </label>
+                  <input
+                    type="number"
+                    name="starting_price"
+                    value={sellForm.starting_price}
+                    onChange={handleSellChange}
+                    className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                    min={0}
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-neutral-400 mb-1">
+                    Buy Now Price (£) (optional)
+                  </label>
+                  <input
+                    type="number"
+                    name="buy_now"
+                    value={sellForm.buy_now}
+                    onChange={handleSellChange}
+                    className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                    min={0}
+                  />
+                </div>
+              </div>
+
+              {/* Fee preview */}
+              <div className={`mt-4 p-4 ${accentBgSoft} border ${accentBorder} rounded-md space-y-2`}>
+                <h3 className="text-sm font-semibold text-sky-200">
+                  Fees &amp; Expected Return (based on your reserve)
+                </h3>
+
+                <p className="text-xs text-neutral-200">
+                  <strong>Commission rate:</strong> {commissionRate}% (estimate)
+                </p>
+                <p className="text-xs text-neutral-200">
+                  <strong>Estimated commission:</strong> £{formatMoney(commissionValue)}
+                </p>
+                <p className="text-xs text-neutral-200">
+                  <strong>Estimated you receive:</strong> £{formatMoney(expectedReturn)} (based on reserve)
+                </p>
+
+                <p className="text-[11px] text-neutral-400">
+                  This is a simple preview. Final commission is based on the final sale price.
+                </p>
+              </div>
+
+              {/* Checkboxes */}
+              <div className="space-y-2 text-xs text-neutral-300">
+                <label className="flex items-start gap-2">
+                  <input
+                    type="checkbox"
+                    name="owner_confirmed"
+                    checked={sellForm.owner_confirmed}
+                    onChange={handleSellChange}
+                    className="mt-1 accent-sky-500"
+                  />
+                  <span>
+                    I confirm I own this item (or have authority to sell it) and my description is accurate.
+                  </span>
+                </label>
+
+                <label className="flex items-start gap-2">
+                  <input
+                    type="checkbox"
+                    name="agreed_terms"
+                    checked={sellForm.agreed_terms}
+                    onChange={handleSellChange}
+                    className="mt-1 accent-sky-500"
+                  />
+                  <span>
+                    I agree to the{" "}
+                    <Link href="/terms" className="text-sky-300 underline" target="_blank" rel="noreferrer">
+                      Terms &amp; Conditions
+                    </Link>
+                    .
+                  </span>
+                </label>
+
+                <label className="flex items-start gap-2">
+                  <input
+                    type="checkbox"
+                    name="relist_until_sold"
+                    checked={sellForm.relist_until_sold}
+                    onChange={handleSellChange}
+                    className="mt-1 accent-sky-500"
+                  />
+                  <span>
+                    Relist automatically in the next weekly auction if it doesn’t sell.
+                    <br />
+                    <span className="text-xs text-neutral-500">
+                      You can switch this off later for new listings once we add listing edit controls.
+                    </span>
+                  </span>
+                </label>
+              </div>
+
+              <button
+                type="submit"
+                disabled={sellSubmitting}
+                className={`mt-2 ${primaryBtn} font-semibold px-6 py-2 rounded-md text-sm disabled:opacity-50`}
+              >
+                {sellSubmitting ? "Submitting…" : "Submit for approval"}
+              </button>
+            </form>
+          </div>
+        )}
+
+        {/* AWAITING TAB */}
+        {activeTab === "awaiting" && (
+          <div className="space-y-4">
+            <h2 className={`text-xl font-bold mb-2 ${accentText}`}>Awaiting Approval</h2>
+            <p className="text-sm text-neutral-300 mb-2">
+              These listings are waiting for the admin team to review.
+            </p>
+
+            {awaitingListings.length === 0 ? (
+              <p className="text-neutral-400 text-sm text-center">You have no listings awaiting approval.</p>
+            ) : (
+              <div className="grid gap-4">
+                {awaitingListings.map((l) => (
+                  <div key={l.$id} className="border border-neutral-800 rounded-xl p-4 bg-neutral-900/40 shadow-sm">
+                    <div className="flex justify-between items-center mb-2">
+                      <div>
+                        <h3 className={`text-lg font-bold ${accentText}`}>{listingTitle(l)}</h3>
+                        <p className="text-xs text-neutral-400">{listingSubtitle(l)}</p>
+                        <p className="text-xs text-neutral-500 mt-1">Status: Pending review</p>
+                      </div>
+                      <span className="px-3 py-1 rounded-md text-xs font-semibold bg-neutral-950/60 text-neutral-200 border border-neutral-800">
+                        Awaiting Approval
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-sm text-neutral-200 mt-2">
+                      <p>
+                        <strong>Reserve:</strong> £{toNum(l.reserve_price).toLocaleString("en-GB")}
+                      </p>
+                      <p>
+                        <strong>Starting:</strong> £{toNum(l.starting_price, 0).toLocaleString("en-GB")}
+                      </p>
+                      <p>
+                        <strong>Buy Now:</strong>{" "}
+                        {toNum(l.buy_now, 0) > 0 ? `£${toNum(l.buy_now).toLocaleString("en-GB")}` : "Not set"}
+                      </p>
+                    </div>
+
+                    {safeStr(l.description) && (
+                      <p className="mt-2 text-xs text-neutral-400">
+                        <strong>Description:</strong> {safeStr(l.description)}
+                      </p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* APPROVED / QUEUED TAB */}
+        {activeTab === "approvedQueued" && (
+          <div className="space-y-4">
+            <h2 className={`text-xl font-bold mb-2 ${accentText}`}>Approved / Queued</h2>
+            <p className="text-sm text-neutral-300 mb-1">
+              These listings are approved and queued for the next weekly auction.
+            </p>
+            <p className="text-xs text-neutral-400">
+              You currently have <strong>{queuedListings.length}</strong> queued.
+            </p>
+
+            {queuedListings.length === 0 ? (
+              <p className="text-neutral-400 text-sm text-center mt-4">
+                You have no approved listings waiting for the next auction.
+              </p>
+            ) : (
+              <div className="grid gap-4 mt-2">
+                {queuedListings.map((l) => (
+                  <div key={l.$id} className="border border-neutral-800 rounded-xl p-4 bg-neutral-900/40 shadow-sm">
+                    <div className="flex justify-between items-center mb-2">
+                      <div>
+                        <h3 className={`text-xl font-bold ${accentText}`}>{listingTitle(l)}</h3>
+                        <p className="text-xs text-neutral-400">{listingSubtitle(l)}</p>
+                        <p className="text-xs text-neutral-500 mt-1">Status: Approved / queued</p>
+                      </div>
+
+                      <span className="px-3 py-1 rounded-md text-xs font-semibold bg-sky-900/20 text-sky-200 border border-sky-700/40">
+                        Queued
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm text-neutral-200 mb-2">
+                      <p>
+                        <strong>Reserve:</strong> £{toNum(l.reserve_price).toLocaleString("en-GB")}
+                      </p>
+                      <p>
+                        <strong>Starting:</strong> £{toNum(l.starting_price, 0).toLocaleString("en-GB")}
+                      </p>
+                      <p>
+                        <strong>Buy Now:</strong>{" "}
+                        {toNum(l.buy_now, 0) > 0 ? `£${toNum(l.buy_now).toLocaleString("en-GB")}` : "Not set"}
+                      </p>
+                    </div>
+
+                    <div className="mt-3 text-xs text-neutral-400 space-y-1">
+                      <p>
+                        <strong>Relist setting:</strong>{" "}
+                        {l.relist_until_sold
+                          ? "This item will be relisted automatically if it does not sell."
+                          : "This item will not be automatically relisted."}
+                      </p>
+                    </div>
+
+                    <div className="mt-4">
+                      <a
+                        href={`/listing/${l.$id}`}
+                        target="_blank"
+                        className="inline-flex items-center px-4 py-2 rounded-md bg-neutral-950/60 hover:bg-neutral-950 text-neutral-100 text-sm font-semibold border border-neutral-800"
+                        rel="noreferrer"
+                      >
+                        View public listing
+                      </a>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* LIVE TAB */}
+        {activeTab === "live" && (
+          <div className="space-y-4">
+            <h2 className={`text-xl font-bold mb-2 ${accentText}`}>Live Listings</h2>
+
+            <p className="text-sm text-neutral-300 mb-4">
+              These listings are currently live in the auction.
+            </p>
+
+            {liveListings.length === 0 ? (
+              <p className="text-neutral-400 text-sm text-center">
+                You currently have no live listings.
+              </p>
+            ) : (
+              <div className="grid gap-4">
+                {liveListings.map((l) => (
+                  <div key={l.$id} className="border border-neutral-800 rounded-xl p-4 bg-neutral-900/40 shadow-sm">
+                    <div className="flex justify-between items-center mb-2">
+                      <div>
+                        <h3 className={`text-xl font-bold ${accentText}`}>{listingTitle(l)}</h3>
+                        <p className="text-xs text-neutral-400">{listingSubtitle(l)}</p>
+                        <p className="text-xs text-neutral-500 mt-1">Status: Live</p>
+                      </div>
+
+                      <span className="px-3 py-1 rounded-md text-xs font-semibold bg-emerald-900/20 text-emerald-200 border border-emerald-700/40">
+                        LIVE
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm text-neutral-200 mb-2">
+                      <p>
+                        <strong>Current bid:</strong>{" "}
+                        {typeof l.current_bid === "number"
+                          ? `£${l.current_bid.toLocaleString("en-GB")}`
+                          : "No bids yet"}
+                      </p>
+                      <p>
+                        <strong>Reserve:</strong> £{toNum(l.reserve_price).toLocaleString("en-GB")}
+                      </p>
+                      <p>
+                        <strong>Buy Now:</strong>{" "}
+                        {toNum(l.buy_now, 0) > 0 ? `£${toNum(l.buy_now).toLocaleString("en-GB")}` : "Not set"}
+                      </p>
+                    </div>
+
+                    <div className="mt-3 text-xs text-neutral-400 space-y-1">
+                      <p>
+                        <strong>Relist setting:</strong>{" "}
+                        {l.relist_until_sold
+                          ? "This item will be relisted automatically if it does not sell."
+                          : "This item will not be automatically relisted."}
+                      </p>
+                    </div>
+
+                    <div className="mt-4">
+                      <a
+                        href={`/listing/${l.$id}`}
+                        target="_blank"
+                        className="inline-flex items-center px-4 py-2 rounded-md bg-neutral-950/60 hover:bg-neutral-950 text-neutral-100 text-sm font-semibold border border-neutral-800"
+                        rel="noreferrer"
+                      >
+                        View public listing
+                      </a>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* SOLD TAB */}
+        {activeTab === "sold" && (
+          <div className="space-y-4">
+            <h2 className={`text-xl font-bold mb-2 ${accentText}`}>Sold (You as Seller)</h2>
+            <p className="text-sm text-neutral-300 mb-2">
+              Completed sales where you were the seller.
+            </p>
+
+            {soldTransactions.length === 0 ? (
+              <p className="text-neutral-400 text-sm text-center">
+                You don&apos;t have any completed sales yet.
+              </p>
+            ) : (
+              <div className="grid gap-4">
+                {soldTransactions.map((tx) => (
+                  <div key={tx.$id} className="border border-neutral-800 rounded-xl p-4 bg-neutral-900/40 shadow-sm">
+                    <div className="flex justify-between items-start mb-2">
+                      <div>
+                        <p className={`text-sm font-semibold ${accentText}`}>
+                          {tx.registration || tx.listing_id || "Sale"}
+                        </p>
+                        <p className="text-xs text-neutral-400">Buyer: {tx.buyer_email || "Unknown"}</p>
+                        <p className="text-xs text-neutral-500">Transaction ID: {tx.$id}</p>
+                      </div>
+                      <span className="px-3 py-1 rounded-md text-xs font-semibold bg-emerald-900/20 text-emerald-200 border border-emerald-700/40">
+                        COMPLETED
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-sm text-neutral-200 mt-2">
+                      <p><strong>Sale price:</strong> £{formatMoney(toNum(tx.sale_price, 0))}</p>
+                      <p>
+                        <strong>Commission:</strong> £{formatMoney(toNum(tx.commission_amount, 0))}{" "}
+                        <span className="text-xs text-neutral-400">({toNum(tx.commission_rate, 0)}%)</span>
+                      </p>
+                      <p><strong>Seller payout:</strong> £{formatMoney(toNum(tx.seller_payout, 0))}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* PURCHASED TAB */}
+        {activeTab === "purchased" && (
+          <div className="space-y-4">
+            <h2 className={`text-xl font-bold mb-2 ${accentText}`}>Purchased (You as Buyer)</h2>
+            <p className="text-sm text-neutral-300 mb-2">
+              Completed purchases where you were the buyer.
+            </p>
+
+            {purchasedTransactions.length === 0 ? (
+              <p className="text-neutral-400 text-sm text-center">
+                You haven&apos;t completed any purchases yet.
+              </p>
+            ) : (
+              <div className="grid gap-4">
+                {purchasedTransactions.map((tx) => (
+                  <div key={tx.$id} className="border border-neutral-800 rounded-xl p-4 bg-neutral-900/40 shadow-sm">
+                    <div className="flex justify-between items-start mb-2">
+                      <div>
+                        <p className={`text-sm font-semibold ${accentText}`}>
+                          {tx.registration || tx.listing_id || "Purchase"}
+                        </p>
+                        <p className="text-xs text-neutral-400">Seller: {tx.seller_email || "Unknown"}</p>
+                        <p className="text-xs text-neutral-500">Transaction ID: {tx.$id}</p>
+                      </div>
+                      <span className="px-3 py-1 rounded-md text-xs font-semibold bg-emerald-900/20 text-emerald-200 border border-emerald-700/40">
+                        COMPLETED
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm text-neutral-200 mt-2">
+                      <p><strong>Sale price:</strong> £{formatMoney(toNum(tx.sale_price, 0))}</p>
+                      <p><strong>Payment status:</strong> {tx.payment_status || "paid"}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* HISTORY TAB */}
+        {activeTab === "history" && (
+          <div className="space-y-4">
+            <h2 className={`text-xl font-bold mb-2 ${accentText}`}>History</h2>
+
+            {historyListings.length === 0 ? (
+              <p className="text-neutral-400 text-sm text-center">
+                Ended, sold, and unsold auctions will appear here.
+              </p>
+            ) : (
+              <div className="grid gap-5">
+                {historyListings.map((l) => (
+                  <div key={l.$id} className="border border-neutral-800 rounded-xl p-5 bg-neutral-900/40 shadow-sm">
+                    <div className="flex justify-between items-center mb-2">
+                      <div>
+                        <h3 className={`text-xl font-bold ${accentText}`}>{listingTitle(l)}</h3>
+                        <p className="text-xs text-neutral-400">{listingSubtitle(l)}</p>
+                      </div>
+
+                      <span className="px-3 py-1 rounded-md text-xs font-semibold bg-neutral-950/60 text-neutral-200 border border-neutral-800">
+                        {(l.status || "ENDED").toUpperCase()}
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-sm text-neutral-200">
+                      <p><strong>Reserve:</strong> £{toNum(l.reserve_price, 0).toLocaleString("en-GB")}</p>
+                      <p><strong>Highest bid:</strong> £{toNum(l.current_bid, 0).toLocaleString("en-GB")}</p>
+                      <p>
+                        <strong>Auction ended:</strong>{" "}
+                        {l.auction_end ? new Date(l.auction_end).toLocaleString("en-GB") : "—"}
+                      </p>
+                    </div>
+
+                    {/* Relist button deliberately omitted here for cameras until the relist API is added */}
+                    <p className="text-[11px] text-neutral-500 mt-3">
+                      Relist controls will be added once the camera relist endpoint is wired up.
+                    </p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* TRANSACTIONS TAB */}
+        {activeTab === "transactions" && (
+          <div className="space-y-4">
+            <h2 className={`text-xl font-bold mb-2 ${accentText}`}>Transactions</h2>
+            <p className="text-sm text-neutral-300 mb-2">
+              Active sales and purchases still in progress.
+            </p>
+
+            <div className="flex flex-wrap gap-3 text-xs text-neutral-200 mb-2">
+              <span className="px-3 py-1 rounded-full bg-neutral-950/60 border border-neutral-800">
+                As seller:{" "}
+                <strong>{activeTransactions.filter((t) => t.seller_email === userEmail).length}</strong>
+              </span>
+              <span className="px-3 py-1 rounded-full bg-neutral-950/60 border border-neutral-800">
+                As buyer:{" "}
+                <strong>{activeTransactions.filter((t) => t.buyer_email === userEmail).length}</strong>
+              </span>
+            </div>
+
+            {activeTransactions.length === 0 ? (
+              <p className="text-neutral-400 text-sm text-center">
+                You don&apos;t have any active transactions right now.
+              </p>
+            ) : (
+              <div className="grid gap-4">
+                {activeTransactions.map((tx) => {
+                  const statusLabel = tx.transaction_status || tx.payment_status || "pending";
+                  return (
+                    <div key={tx.$id} className="border border-neutral-800 rounded-xl p-4 bg-neutral-900/40 shadow-sm">
+                      <div className="flex justify-between items-start mb-2">
+                        <div>
+                          <p className={`text-sm font-semibold ${accentText}`}>
+                            {tx.registration || tx.listing_id || "Transaction"}
+                          </p>
+                          <p className="text-xs text-neutral-500">Transaction ID: {tx.$id}</p>
+                          <p className="text-xs text-neutral-500">
+                            Role: {tx.seller_email === userEmail ? "Seller" : "Buyer"}
+                          </p>
+                        </div>
+                        <span className="px-3 py-1 rounded-md text-xs font-semibold bg-neutral-950/60 text-neutral-200 border border-neutral-800">
+                          {String(statusLabel).toUpperCase()}
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-sm text-neutral-200 mt-2">
+                        <p><strong>Sale price:</strong> £{formatMoney(toNum(tx.sale_price, 0))}</p>
+                        <p><strong>Commission:</strong> £{formatMoney(toNum(tx.commission_amount, 0))}</p>
+                        <p><strong>Payout:</strong> £{formatMoney(toNum(tx.seller_payout, 0))}</p>
+                      </div>
+
+                      <p className="text-[11px] text-neutral-500 mt-3">
+                        Document uploads and delivery tracking will be added once the camera transaction flow is wired.
+                      </p>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
