@@ -4,13 +4,7 @@ export default function Head({
 }: {
   searchParams?: { [key: string]: string | string[] | undefined };
 }) {
-  // ✅ Production canonical base for AuctionMyCamera
   const PROD_SITE_URL = "https://auctionmycamera.co.uk";
-
-  function isProdEnv() {
-    if (process.env.VERCEL_ENV) return process.env.VERCEL_ENV === "production";
-    return process.env.NODE_ENV === "production";
-  }
 
   function normalizeBaseUrl(input: string) {
     const trimmed = (input || "").trim();
@@ -19,18 +13,18 @@ export default function Head({
   }
 
   function getSiteUrl() {
+    // Prefer explicit site URL when set (works for prod + preview reliably)
     const explicit = normalizeBaseUrl(process.env.NEXT_PUBLIC_SITE_URL || "");
-    const onVercel = !!process.env.VERCEL_ENV;
-    const isProd = isProdEnv();
-
-    if (isProd) return PROD_SITE_URL;
     if (explicit) return explicit;
 
+    // Vercel preview fallback
     const vercelUrl = normalizeBaseUrl(
       process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : ""
     );
-    if (onVercel && vercelUrl) return vercelUrl;
+    if (vercelUrl) return vercelUrl;
 
+    // Final fallback
+    if (process.env.NODE_ENV === "production") return PROD_SITE_URL;
     return "http://localhost:3000";
   }
 
@@ -39,8 +33,6 @@ export default function Head({
   const rawId = searchParams?.id;
   const id = Array.isArray(rawId) ? rawId[0] : rawId;
 
-  // Canonical should point at the real listing page (not the bid step)
-  // Assumes your listing route is /listing/[id]
   const canonical = id ? `${SITE_URL}/listing/${id}` : `${SITE_URL}/auctions`;
 
   return (
@@ -50,12 +42,8 @@ export default function Head({
         name="description"
         content="Place a bid on a camera or gear listing. Secure checkout and smooth post-sale handover."
       />
-
-      {/* ✅ Stop indexing bidding/checkout steps */}
       <meta name="robots" content="noindex, nofollow" />
       <meta name="googlebot" content="noindex, nofollow" />
-
-      {/* ✅ Consolidate SEO signals onto the listing page */}
       <link rel="canonical" href={canonical} />
     </>
   );

@@ -6,8 +6,6 @@ import CurrentListingsClient from "./CurrentListingsClient";
 import { Client, Databases, Query } from "node-appwrite";
 
 export const runtime = "nodejs";
-
-// ✅ Use ISR instead of force-dynamic so Google gets stable HTML
 export const revalidate = 300; // 5 minutes
 
 const PROD_SITE_URL = "https://auctionmycamera.co.uk";
@@ -28,10 +26,7 @@ function getSiteUrl() {
   const onVercel = !!process.env.VERCEL_ENV;
   const isProd = isProdEnv();
 
-  // ✅ Always use the real domain in production (canonical consistency)
   if (isProd) return PROD_SITE_URL;
-
-  // Local/dev or preview can use explicit if set
   if (explicit) return explicit;
 
   const vercelUrl = normalizeBaseUrl(
@@ -72,32 +67,35 @@ const endpoint = endpointRaw.replace(/\/+$/, "");
 const projectId = process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID!;
 const apiKey = process.env.APPWRITE_API_KEY!;
 
-// ✅ Listings DB/collection (supports new names, falls back to legacy "PLATES" envs)
-const DB_ID =
-  process.env.APPWRITE_LISTINGS_DATABASE_ID ||
+// ✅ LISTINGS ONLY — no plates fallback (prevents silent “wrong DB” bugs)
+const DB_ID = (process.env.APPWRITE_LISTINGS_DATABASE_ID ||
   process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID ||
-  process.env.APPWRITE_PLATES_DATABASE_ID ||
-  process.env.NEXT_PUBLIC_APPWRITE_PLATES_DATABASE_ID!;
+  "").trim();
 
-const COLLECTION_ID =
-  process.env.APPWRITE_LISTINGS_COLLECTION_ID ||
+const COLLECTION_ID = (process.env.APPWRITE_LISTINGS_COLLECTION_ID ||
   process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_COLLECTION_ID ||
-  process.env.APPWRITE_PLATES_COLLECTION_ID ||
-  process.env.NEXT_PUBLIC_APPWRITE_PLATES_COLLECTION_ID!;
+  "").trim();
+
+function assertEnv() {
+  if (!DB_ID || !COLLECTION_ID) {
+    throw new Error(
+      `Listings env not set. Set APPWRITE_LISTINGS_DATABASE_ID and APPWRITE_LISTINGS_COLLECTION_ID (server), ` +
+        `or NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID / NEXT_PUBLIC_APPWRITE_LISTINGS_COLLECTION_ID.\n` +
+        `Got DB_ID="${DB_ID || "(missing)"}" COLLECTION_ID="${COLLECTION_ID || "(missing)"}"`
+    );
+  }
+}
 
 function serverDb() {
-  const client = new Client()
-    .setEndpoint(endpoint)
-    .setProject(projectId)
-    .setKey(apiKey);
+  const client = new Client().setEndpoint(endpoint).setProject(projectId).setKey(apiKey);
   return new Databases(client);
 }
 
 async function fetchByStatus(status: string) {
+  assertEnv();
   const db = serverDb();
   const res = await db.listDocuments(DB_ID, COLLECTION_ID, [
     Query.equal("status", status),
-    // ✅ Stable ordering (helps keep page content consistent for crawlers)
     Query.orderDesc("$updatedAt"),
     Query.limit(200),
   ]);
@@ -108,20 +106,21 @@ function listingHref(doc: any) {
   return `/listing/${doc?.$id}`;
 }
 
-/** Prefer camera listing fields, with safe fallbacks for legacy docs */
+function capitalize(s: string) {
+  if (!s) return s;
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
 function getListingTitle(doc: any) {
   const itemTitle = String(doc?.item_title || doc?.title || "").trim();
   const brand = String(doc?.brand || "").trim();
   const model = String(doc?.model || "").trim();
 
-  // Best: item_title
   if (itemTitle) return itemTitle;
 
-  // Next: Brand + Model
   const bm = [brand, model].filter(Boolean).join(" ");
   if (bm) return bm;
 
-  // Fallback: gear_type
   const gearType = String(doc?.gear_type || doc?.type || "").trim();
   if (gearType) return `${capitalize(gearType)} listing`;
 
@@ -133,11 +132,6 @@ function getListingLabel(doc: any) {
   const era = String(doc?.era || "").trim();
   const bits = [gearType && capitalize(gearType), era && capitalize(era)].filter(Boolean);
   return bits.length ? bits.join(" • ") : "";
-}
-
-function capitalize(s: string) {
-  if (!s) return s;
-  return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
 export default async function CurrentListingsPage() {
@@ -152,8 +146,8 @@ export default async function CurrentListingsPage() {
     soon = [];
   }
 
-  // JSON-LD for crawlable auction links (kept small)
   const liveForLd = live.slice(0, 50);
+
   const jsonLdItemList = {
     "@context": "https://schema.org",
     "@type": "ItemList",
@@ -162,12 +156,7 @@ export default async function CurrentListingsPage() {
     itemListElement: liveForLd.map((doc, idx) => {
       const name = `${getListingTitle(doc)} – Camera Gear Auction`;
       const url = `${SITE_URL}${listingHref(doc)}`;
-      return {
-        "@type": "ListItem",
-        position: idx + 1,
-        url,
-        name,
-      };
+      return { "@type": "ListItem", position: idx + 1, url, name };
     }),
   };
 
@@ -175,24 +164,13 @@ export default async function CurrentListingsPage() {
     "@context": "https://schema.org",
     "@type": "BreadcrumbList",
     itemListElement: [
-      {
-        "@type": "ListItem",
-        position: 1,
-        name: "Home",
-        item: `${SITE_URL}/`,
-      },
-      {
-        "@type": "ListItem",
-        position: 2,
-        name: "Current auctions",
-        item: `${SITE_URL}/current-listings`,
-      },
+      { "@type": "ListItem", position: 1, name: "Home", item: `${SITE_URL}/` },
+      { "@type": "ListItem", position: 2, name: "Current auctions", item: `${SITE_URL}/current-listings` },
     ],
   };
 
   return (
     <>
-      {/* Structured data for SEO */}
       <Script
         id="ld-current-itemlist"
         type="application/ld+json"
@@ -204,7 +182,6 @@ export default async function CurrentListingsPage() {
         dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLdBreadcrumbs) }}
       />
 
-      {/* Small, safe server-rendered crawlable block (won’t fight your client UI) */}
       <section className="bg-black text-gray-100 px-4 pt-6">
         <div className="max-w-6xl mx-auto">
           <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
@@ -240,10 +217,7 @@ export default async function CurrentListingsPage() {
                       const label = getListingLabel(doc);
                       return (
                         <li key={doc?.$id}>
-                          <Link
-                            href={listingHref(doc)}
-                            className="text-gray-100 hover:text-amber-200 underline"
-                          >
+                          <Link href={listingHref(doc)} className="text-gray-100 hover:text-amber-200 underline">
                             {title}
                           </Link>
                           {label ? <span className="text-xs text-gray-400">{"  "}({label})</span> : null}
@@ -265,10 +239,7 @@ export default async function CurrentListingsPage() {
                       const label = getListingLabel(doc);
                       return (
                         <li key={doc?.$id}>
-                          <Link
-                            href={listingHref(doc)}
-                            className="text-gray-100 hover:text-amber-200 underline"
-                          >
+                          <Link href={listingHref(doc)} className="text-gray-100 hover:text-amber-200 underline">
                             {title}
                           </Link>
                           {label ? <span className="text-xs text-gray-400">{"  "}({label})</span> : null}
@@ -288,7 +259,6 @@ export default async function CurrentListingsPage() {
         </div>
       </section>
 
-      {/* Your existing interactive client UI */}
       <CurrentListingsClient initialLive={live} initialSoon={soon} />
     </>
   );
