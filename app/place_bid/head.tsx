@@ -4,7 +4,8 @@ export default function Head({
 }: {
   searchParams?: { [key: string]: string | string[] | undefined };
 }) {
-  const PROD_SITE_URL = "https://auctionmyplate.co.uk";
+  // ✅ Production canonical base for AuctionMyCamera
+  const PROD_SITE_URL = "https://auctionmycamera.co.uk";
 
   function isProdEnv() {
     if (process.env.VERCEL_ENV) return process.env.VERCEL_ENV === "production";
@@ -39,14 +40,15 @@ export default function Head({
   const id = Array.isArray(rawId) ? rawId[0] : rawId;
 
   // Canonical should point at the real listing page (not the bid step)
-  const canonical = id ? `${SITE_URL}/listing/${id}` : `${SITE_URL}/current-listings`;
+  // Assumes your listing route is /listing/[id]
+  const canonical = id ? `${SITE_URL}/listing/${id}` : `${SITE_URL}/auctions`;
 
   return (
     <>
-      <title>Place a bid | AuctionMyPlate</title>
+      <title>Place a bid | AuctionMyCamera</title>
       <meta
         name="description"
-        content="Place a bid on a cherished UK number plate auction. Secure checkout and DVLA transfer handled after sale."
+        content="Place a bid on a camera or gear listing. Secure checkout and smooth post-sale handover."
       />
 
       {/* ✅ Stop indexing bidding/checkout steps */}

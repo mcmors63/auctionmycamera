@@ -6,25 +6,6 @@ import { useSearchParams, useRouter } from "next/navigation";
 import { Client, Databases, Account } from "appwrite";
 import Link from "next/link";
 import Image from "next/image";
-import NumberPlate from "@/components/ui/NumberPlate";
-import DvlaPlate from "./DvlaPlate";
-
-// ----------------------------------------------------
-// Constants
-// ----------------------------------------------------
-const DVLA_FEE_GBP = 80; // £80 paperwork fee
-const VEHICLE_NOTICE_KEY_PREFIX = "amp_vehicle_warning_accepted_";
-
-// ✅ The ONLY two legacy listings where the buyer still pays £80 on top
-const LEGACY_BUYER_PAYS_IDS = new Set<string>([
-  "696ea3d0001a45280a16",
-  "697bccfd001325add473",
-]);
-
-function buyerPaysTransferFeeForListing(listingId: string | undefined | null) {
-  if (!listingId) return false;
-  return LEGACY_BUYER_PAYS_IDS.has(listingId);
-}
 
 // ----------------------------------------------------
 // Appwrite
@@ -36,15 +17,15 @@ const client = new Client()
 const db = new Databases(client);
 const account = new Account(client);
 
-// ✅ IMPORTANT: use LISTINGS if present, otherwise fall back to old PLATES env
+// ✅ Listings envs ONLY (no plates fallback)
 const LISTINGS_DB =
   process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID ||
-  process.env.NEXT_PUBLIC_APPWRITE_PLATES_DATABASE_ID ||
+  process.env.NEXT_PUBLIC_APPWRITE_PLATES_DATABASE_ID || // keep ONLY if you still have legacy envs locally
   "";
 
 const LISTINGS_COLLECTION =
   process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_COLLECTION_ID ||
-  process.env.NEXT_PUBLIC_APPWRITE_PLATES_COLLECTION_ID ||
+  process.env.NEXT_PUBLIC_APPWRITE_PLATES_COLLECTION_ID || // keep ONLY if you still have legacy envs locally
   "";
 
 // ----------------------------------------------------
@@ -53,13 +34,15 @@ const LISTINGS_COLLECTION =
 type Listing = {
   $id: string;
 
-  // camera listings may use different naming, keep both to avoid crashing
-  registration?: string; // legacy/plate UI
-  reg_number?: string | null;
-
   item_title?: string | null;
   brand?: string | null;
   model?: string | null;
+
+  gear_type?: string | null;
+  era?: string | null;
+  condition?: string | null;
+
+  image_url?: string | null;
 
   listing_id?: string;
   status?: string;
@@ -123,7 +106,6 @@ function LocalAuctionTimer({
   }, []);
 
   let targetStr: string | null = null;
-
   if (status === "queued") targetStr = start ?? null;
   else if (status === "live") targetStr = end ?? null;
 
@@ -150,6 +132,14 @@ function getBidIncrement(current: number): number {
   return 1000;
 }
 
+function pickBuyNow(listing: Listing): number | null {
+  const raw =
+    (listing.buy_now_price as number | null | undefined) ??
+    (listing.buy_now as number | null | undefined) ??
+    null;
+  return typeof raw === "number" && raw > 0 ? raw : null;
+}
+
 // ----------------------------------------------------
 // PAGE
 // ----------------------------------------------------
@@ -167,42 +157,35 @@ export default function PlaceBidPage() {
   const [submitting, setSubmitting] = useState(false);
 
   const [loggedIn, setLoggedIn] = useState(false);
-
-  // ✅ JWT used to authenticate server routes that require auth
   const [jwtToken, setJwtToken] = useState<string | null>(null);
 
   const [hasPaymentMethod, setHasPaymentMethod] = useState<boolean | null>(null);
   const [checkingPaymentMethod, setCheckingPaymentMethod] = useState(false);
   const [paymentMethodError, setPaymentMethodError] = useState<string | null>(null);
 
-  const [vehicleNoticeAccepted, setVehicleNoticeAccepted] = useState(false);
+  // simple notice (non-DVLA)
+  const [noticeAccepted, setNoticeAccepted] = useState(false);
+  const NOTICE_KEY_PREFIX = "amc_notice_accepted_";
 
-  const nextUrl = listingId ? `/place_bid?id=${encodeURIComponent(listingId)}` : "/current-listings";
+  const nextUrl = listingId ? `/place_bid?id=${encodeURIComponent(listingId)}` : "/auctions";
   const paymentMethodHref = `/payment-method?next=${encodeURIComponent(nextUrl)}`;
   const loginHref = `/login?next=${encodeURIComponent(nextUrl)}`;
 
   // ----------------------------------------------------
-  // LOGIN CHECK (Appwrite session)
+  // LOGIN CHECK
   // ----------------------------------------------------
   useEffect(() => {
     const checkLogin = async () => {
       try {
         await account.get();
         setLoggedIn(true);
-
         const jwt = await account.createJWT();
         setJwtToken(jwt.jwt);
       } catch {
         setLoggedIn(false);
         setJwtToken(null);
-
-        if (typeof window !== "undefined") {
-          window.localStorage.removeItem("amp_user_email");
-          window.localStorage.removeItem("amp_user_id");
-        }
       }
     };
-
     void checkLogin();
   }, []);
 
@@ -234,9 +217,7 @@ export default function PlaceBidPage() {
 
         setHasPaymentMethod(Boolean((data as any).hasPaymentMethod));
       } catch (err: any) {
-        console.error("has-payment-method error:", err);
         const msg = err?.message || "Could not verify your payment method.";
-
         if (msg.includes("Stripe is not configured on the server")) {
           setPaymentMethodError(null);
           setHasPaymentMethod(null);
@@ -253,42 +234,65 @@ export default function PlaceBidPage() {
   }, [loggedIn, jwtToken]);
 
   // ----------------------------------------------------
-  // LOAD LISTING  ✅ now uses LISTINGS DB/COLLECTION
+  // LOAD LISTING
   // ----------------------------------------------------
   useEffect(() => {
-    if (!listingId) {
-      setError("Missing listing ID.");
-      setLoading(false);
-      return;
-    }
+    (async () => {
+      setLoading(true);
+      setError(null);
+      setListing(null);
 
-    if (!LISTINGS_DB || !LISTINGS_COLLECTION) {
-      setError("Server is missing NEXT_PUBLIC_APPWRITE_LISTINGS_* env vars.");
-      setLoading(false);
-      return;
-    }
+      if (!listingId) {
+        setError("Missing listing ID in the URL (?id=...).");
+        setLoading(false);
+        return;
+      }
 
-    db.getDocument(LISTINGS_DB, LISTINGS_COLLECTION, listingId)
-      .then((doc) => setListing(doc as Listing))
-      .catch(() => setError("Listing not found."))
-      .finally(() => setLoading(false));
+      if (!LISTINGS_DB || !LISTINGS_COLLECTION) {
+        setError(
+          "Appwrite DB/Collection env vars are missing. Expected NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID and NEXT_PUBLIC_APPWRITE_LISTINGS_COLLECTION_ID."
+        );
+        setLoading(false);
+        return;
+      }
+
+      try {
+        const doc = await db.getDocument(LISTINGS_DB, LISTINGS_COLLECTION, listingId);
+        setListing(doc as Listing);
+      } catch (err: any) {
+        const code = err?.code;
+        const type = err?.type;
+        const message = err?.message || String(err);
+
+        if (code === 404) {
+          setError(
+            `Listing not found in Appwrite.\nTried DB="${LISTINGS_DB}" Collection="${LISTINGS_COLLECTION}" ID="${listingId}".\n(404)`
+          );
+        } else if (code === 401 || code === 403) {
+          setError(
+            `Permission/auth issue reading the listing.\nTried DB="${LISTINGS_DB}" Collection="${LISTINGS_COLLECTION}" ID="${listingId}".\n(${code}) ${type || ""} ${message || ""}`.trim()
+          );
+        } else {
+          setError(
+            `Could not load listing.\nTried DB="${LISTINGS_DB}" Collection="${LISTINGS_COLLECTION}" ID="${listingId}".\n(${code ?? "?"}) ${type || ""} ${message || ""}`.trim()
+          );
+        }
+      } finally {
+        setLoading(false);
+      }
+    })();
   }, [listingId]);
 
   // ----------------------------------------------------
-  // PER-PLATE DVLA NOTICE STATE
+  // PER-LISTING NOTICE STATE
   // ----------------------------------------------------
   useEffect(() => {
     if (typeof window === "undefined") return;
     if (!listing?.$id) return;
-
-    const key = `${VEHICLE_NOTICE_KEY_PREFIX}${listing.$id}`;
-    const stored = window.localStorage.getItem(key);
-    setVehicleNoticeAccepted(stored === "true");
+    const key = `${NOTICE_KEY_PREFIX}${listing.$id}`;
+    setNoticeAccepted(window.localStorage.getItem(key) === "true");
   }, [listing?.$id]);
 
-  // ----------------------------------------------------
-  // EARLY RETURNS
-  // ----------------------------------------------------
   if (loading)
     return (
       <div className="min-h-screen flex items-center justify-center bg-black">
@@ -298,17 +302,21 @@ export default function PlaceBidPage() {
 
   if (!listing)
     return (
-      <div className="min-h-screen flex items-center justify-center bg-black">
-        <p className="text-red-400 text-xl">Listing not found.</p>
+      <div className="min-h-screen flex items-center justify-center bg-black px-4">
+        <div className="max-w-2xl w-full">
+          <p className="text-red-400 text-xl whitespace-pre-line">{error || "Listing not found."}</p>
+          <div className="mt-6">
+            <Link href="/auctions" className="text-sm text-[#d6b45f] underline">
+              ← Back to auctions
+            </Link>
+          </div>
+        </div>
       </div>
     );
 
   // ----------------------------------------------------
   // CALCULATIONS
   // ----------------------------------------------------
-  const buyerPaysTransferFee = buyerPaysTransferFeeForListing(listing.$id);
-  const dvlaFeeChargedToBuyer = buyerPaysTransferFee ? DVLA_FEE_GBP : 0;
-
   const effectiveBaseBid =
     listing.current_bid != null ? listing.current_bid : listing.starting_price ?? 0;
 
@@ -320,12 +328,7 @@ export default function PlaceBidPage() {
   const hasReserve = typeof listing.reserve_price === "number" && listing.reserve_price > 0;
   const reserveMet = hasReserve && effectiveBaseBid >= (listing.reserve_price as number);
 
-  const rawBuyNow =
-    (listing.buy_now as number | null | undefined) ??
-    (listing.buy_now_price as number | null | undefined) ??
-    null;
-
-  const buyNowPrice = typeof rawBuyNow === "number" && rawBuyNow > 0 ? rawBuyNow : null;
+  const buyNowPrice = pickBuyNow(listing);
 
   const isLiveStatus = listing.status === "live";
   const isComingStatus = listing.status === "queued";
@@ -341,16 +344,11 @@ export default function PlaceBidPage() {
     auctionEndMs !== null && Number.isFinite(auctionEndMs) ? auctionEndMs <= Date.now() : false;
 
   const auctionEnded = auctionEndedTime || isSoldStatus;
-
   const isSoldForDisplay = isSoldStatus || (auctionEnded && reserveMet);
 
   const canBidOrBuyNow = isLiveStatus && !auctionEnded;
-  const canShowBuyNow = buyNowPrice !== null && canBidOrBuyNow && effectiveBaseBid < buyNowPrice;
-
-  let timerLabel: string;
-  if (auctionEnded) timerLabel = "AUCTION ENDED";
-  else if (isLiveStatus) timerLabel = "AUCTION ENDS IN";
-  else timerLabel = "AUCTION STARTS IN";
+  const canShowBuyNow =
+    buyNowPrice !== null && canBidOrBuyNow && effectiveBaseBid < (buyNowPrice as number);
 
   const timerStatus: TimerStatus =
     auctionEnded ? "ended" : isLiveStatus ? "live" : isComingStatus ? "queued" : "ended";
@@ -358,13 +356,12 @@ export default function PlaceBidPage() {
   const paymentBlocked =
     loggedIn && !checkingPaymentMethod && hasPaymentMethod === false && !paymentMethodError;
 
-  // ✅ Use a sensible title for cameras if present
   const title =
     (listing.item_title || "").trim() ||
     [listing.brand, listing.model].filter(Boolean).join(" ").trim() ||
-    listing.registration ||
-    listing.reg_number ||
     "Listing";
+
+  const heroImg = (listing.image_url || "").trim() || "/hero/modern-lens.jpg";
 
   // ----------------------------------------------------
   // HANDLE BID
@@ -378,7 +375,7 @@ export default function PlaceBidPage() {
       return;
     }
 
-    if (!vehicleNoticeAccepted) {
+    if (!noticeAccepted) {
       setError("Please confirm you have read the notice before placing a bid.");
       return;
     }
@@ -400,7 +397,7 @@ export default function PlaceBidPage() {
     }
 
     if (amount < minimumAllowed) {
-      setError(`Minimum bid is £${minimumAllowed.toLocaleString()}`);
+      setError(`Minimum bid is £${minimumAllowed.toLocaleString("en-GB")}`);
       return;
     }
 
@@ -457,7 +454,7 @@ export default function PlaceBidPage() {
       return;
     }
 
-    if (!vehicleNoticeAccepted) {
+    if (!noticeAccepted) {
       setError("Please confirm you have read the notice before using Buy Now.");
       return;
     }
@@ -477,19 +474,13 @@ export default function PlaceBidPage() {
       return;
     }
 
-    const confirmMessage = buyerPaysTransferFee
-      ? `Are you sure you want to use Buy Now for £${buyNowPrice.toLocaleString()}?\n\nAn £${DVLA_FEE_GBP.toFixed(
-          2
-        )} fee will be added.\nThis will end the auction immediately and commit you to the purchase.`
-      : `Are you sure you want to use Buy Now for £${buyNowPrice.toLocaleString()}?\n\nNo additional £80 fee will be added at checkout.\nThis will end the auction immediately and commit you to the purchase.`;
-
-    if (!window.confirm(confirmMessage)) return;
+    if (!window.confirm(`Use Buy Now for £${buyNowPrice.toLocaleString("en-GB")}?\n\nThis ends the auction immediately.`))
+      return;
 
     try {
       setSubmitting(true);
 
-      const totalToCharge = buyNowPrice + dvlaFeeChargedToBuyer;
-      const amountInPence = Math.round(totalToCharge * 100);
+      const amountInPence = Math.round(buyNowPrice * 100);
 
       const stripeRes = await fetch("/api/stripe/charge-off-session", {
         method: "POST",
@@ -499,13 +490,10 @@ export default function PlaceBidPage() {
         },
         body: JSON.stringify({
           amountInPence,
-          description: buyerPaysTransferFee
-            ? `Buy Now - ${title} (incl. £${DVLA_FEE_GBP} fee)`
-            : `Buy Now - ${title}`,
+          description: `Buy Now - ${title}`,
           metadata: {
             listingId: listing.$id,
             type: "buy_now",
-            buyerPaysTransferFee: buyerPaysTransferFee ? "true" : "false",
           },
         }),
       });
@@ -529,7 +517,7 @@ export default function PlaceBidPage() {
         body: JSON.stringify({
           listingId: listing.$id,
           paymentIntentId,
-          totalCharged: totalToCharge,
+          totalCharged: buyNowPrice,
         }),
       });
 
@@ -540,8 +528,7 @@ export default function PlaceBidPage() {
 
       setSuccess("Buy Now successful. Your card has been charged. We’ll contact you with next steps.");
     } catch (err: any) {
-      console.error("Buy Now error:", err);
-      setError(err.message || "Buy Now failed.");
+      setError(err?.message || "Buy Now failed.");
     } finally {
       setSubmitting(false);
     }
@@ -553,73 +540,41 @@ export default function PlaceBidPage() {
   return (
     <div className="min-h-screen bg-black text-gray-100 py-8 px-4">
       <div className="max-w-4xl mx-auto mb-4">
-        <Link href="/current-listings" className="text-sm text-[#FFD500] underline hover:text-yellow-300">
-          ← Back to listings
+        <Link href="/auctions" className="text-sm text-[#d6b45f] underline hover:opacity-90">
+          ← Back to auctions
         </Link>
       </div>
 
       <div className="max-w-4xl mx-auto mb-6">
-        <div className="relative w-full max-w-3xl mx-auto rounded-xl overflow-hidden shadow-lg bg-black">
-          <Image
-            src="/car-rear.jpg"
-            alt={title}
-            width={1600}
-            height={1067}
-            className="w-full h-auto block"
-            priority
-          />
-
-          {/* still using your existing plate overlay for now */}
-          <div className="absolute left-1/2 -translate-x-1/2" style={{ bottom: "29%" }}>
-            <div style={{ transform: "scale(0.42)", transformOrigin: "center bottom" }}>
-              <NumberPlate reg={title} size="large" variant="rear" showBlueBand />
-            </div>
+        <div className="relative w-full max-w-3xl mx-auto rounded-xl overflow-hidden shadow-lg bg-black border border-white/10">
+          <Image src={heroImg} alt={title} width={1600} height={900} className="w-full h-[280px] object-cover" priority />
+          <div className="absolute inset-0 bg-black/35" />
+          <div className="absolute left-0 bottom-0 p-5">
+            <p className="text-xs text-white/70">Listing ID: {displayId}</p>
+            <h1 className="mt-1 text-xl sm:text-2xl font-extrabold text-white">{title}</h1>
           </div>
-        </div>
-
-        <div className="mt-3 flex justify-between text-sm text-gray-300">
-          <span>Listing ID: {displayId}</span>
         </div>
       </div>
 
-      <div className="max-w-4xl mx-auto bg-[#111111] rounded-2xl border border-yellow-700 shadow-lg p-6 sm:p-8 space-y-8">
-        <div className="mb-4 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex-1 space-y-1">
-            <h1 className="text-xl sm:text-2xl font-bold text-[#FFD500]">{title}</h1>
-            <p className="text-xs text-gray-400">Auction ID: {listing?.listing_id || listing?.$id}</p>
-          </div>
-
-          <div className="w-full sm:w-72 flex justify-end">
-            <DvlaPlate registration={title} size="large" variant="rear" />
-          </div>
-        </div>
-
+      <div className="max-w-4xl mx-auto bg-[#111111] rounded-2xl border border-white/10 shadow-lg p-6 sm:p-8 space-y-8">
         <div className="flex justify-end gap-2">
-          {isSoldForDisplay && (
-            <span className="px-4 py-1 bg-red-700 text-white rounded-full font-bold text-sm">SOLD</span>
-          )}
-
+          {isSoldForDisplay && <span className="px-4 py-1 bg-red-700 text-white rounded-full font-bold text-sm">SOLD</span>}
           {!isSoldForDisplay && canBidOrBuyNow && (
-            <span className="px-4 py-1 bg-[#FFD500] border border-black rounded-full font-bold text-sm text-black">
+            <span className="px-4 py-1 bg-[#d6b45f] border border-black rounded-full font-bold text-sm text-black">
               LIVE
             </span>
           )}
-
           {!isSoldForDisplay && isComingStatus && !auctionEnded && (
             <span className="px-4 py-1 bg-gray-700 text-gray-100 rounded-full font-bold text-sm">Queued</span>
           )}
-
           {!isSoldForDisplay && auctionEnded && (
             <span className="px-4 py-1 bg-gray-600 text-gray-100 rounded-full font-bold text-sm">ENDED</span>
           )}
         </div>
 
         <div>
-          <p className="text-xs text-gray-400 uppercase">Listing ID</p>
-          <p className="font-bold text-lg text-gray-100">{displayId}</p>
-
-          <h2 className={`text-4xl font-extrabold mt-4 ${isSoldForDisplay ? "text-red-400" : "text-green-400"}`}>
-            £{effectiveBaseBid.toLocaleString()}
+          <h2 className={`text-4xl font-extrabold ${isSoldForDisplay ? "text-red-400" : "text-green-400"}`}>
+            £{effectiveBaseBid.toLocaleString("en-GB")}
           </h2>
           <p className="text-gray-300">{isSoldForDisplay ? "Winning bid" : "Current Bid"}</p>
 
@@ -629,52 +584,43 @@ export default function PlaceBidPage() {
 
           {reserveMet && <p className="mt-2 font-bold text-green-400">Reserve Met</p>}
 
-          {canShowBuyNow && (
-            <p className="mt-2 text-sm font-semibold text-blue-300">
-              Buy Now available: £{buyNowPrice!.toLocaleString()}
+          {canShowBuyNow && buyNowPrice !== null && (
+            <p className="mt-2 text-sm font-semibold text-emerald-300">
+              Buy Now available: £{buyNowPrice.toLocaleString("en-GB")}
             </p>
           )}
         </div>
 
         <div>
-          <p className="text-xs text-gray-400 uppercase">{
-            auctionEnded ? "AUCTION ENDED" : isLiveStatus ? "AUCTION ENDS IN" : "AUCTION STARTS IN"
-          }</p>
-          <div className="inline-block mt-1 px-3 py-2 bg-black border border-yellow-600 rounded-lg shadow-sm font-semibold text-[#FFD500]">
+          <p className="text-xs text-gray-400 uppercase">
+            {auctionEnded ? "AUCTION ENDED" : isLiveStatus ? "AUCTION ENDS IN" : "AUCTION STARTS IN"}
+          </p>
+          <div className="inline-block mt-1 px-3 py-2 bg-black border border-white/10 rounded-lg shadow-sm font-semibold text-[#d6b45f]">
             <LocalAuctionTimer start={auctionStart} end={auctionEnd} status={timerStatus} />
           </div>
         </div>
 
-        <div className="bg-[#181818] border border-gray-700 rounded-xl p-6 shadow-sm space-y-4">
-          <div className="mt-3 border border-yellow-500 bg-yellow-50 rounded-lg p-3 text-sm text-yellow-900">
+        <div className="bg-[#181818] border border-white/10 rounded-xl p-6 shadow-sm space-y-4">
+          <div className="border border-white/10 bg-white/5 rounded-lg p-3 text-sm text-white/85">
             <p className="font-semibold">Important notice</p>
-            <p className="mt-1">
-              Please check the listing details carefully before bidding. All bids are binding.
-            </p>
+            <p className="mt-1">Please check the listing details carefully before bidding. All bids are binding.</p>
 
-            {loggedIn && !vehicleNoticeAccepted && (
-              <label className="mt-2 flex items-center gap-2 text-xs">
+            {loggedIn && (
+              <label className="mt-3 flex items-center gap-2 text-xs">
                 <input
                   type="checkbox"
-                  checked={vehicleNoticeAccepted}
+                  checked={noticeAccepted}
                   onChange={(e) => {
                     const checked = e.target.checked;
-                    setVehicleNoticeAccepted(checked);
-
+                    setNoticeAccepted(checked);
                     if (typeof window !== "undefined" && listing?.$id) {
-                      const key = `${VEHICLE_NOTICE_KEY_PREFIX}${listing.$id}`;
+                      const key = `${NOTICE_KEY_PREFIX}${listing.$id}`;
                       window.localStorage.setItem(key, checked ? "true" : "false");
                     }
                   }}
                 />
-                <span className="text-gray-900">I understand and accept this notice.</span>
+                <span className="text-white/85">I understand and accept this notice.</span>
               </label>
-            )}
-
-            {loggedIn && vehicleNoticeAccepted && (
-              <p className="mt-2 text-xs text-green-700 font-semibold">
-                Notice accepted for this listing on this device.
-              </p>
             )}
           </div>
 
@@ -683,9 +629,7 @@ export default function PlaceBidPage() {
               {checkingPaymentMethod && <p className="text-xs text-gray-400">Checking your saved payment method…</p>}
 
               {paymentMethodError && (
-                <p className="bg-red-900 text-red-100 border border-red-500 p-2 rounded text-xs">
-                  {paymentMethodError}
-                </p>
+                <p className="bg-red-900 text-red-100 border border-red-500 p-2 rounded text-xs">{paymentMethodError}</p>
               )}
 
               {hasPaymentMethod === false && !checkingPaymentMethod && !paymentMethodError && (
@@ -701,8 +645,8 @@ export default function PlaceBidPage() {
           )}
 
           {!loggedIn ? (
-            <div className="mt-4 border border-yellow-600 bg-black rounded-lg p-4 space-y-3">
-              <p className="font-semibold text-[#FFD500]">Log in to bid</p>
+            <div className="mt-4 border border-white/10 bg-black rounded-lg p-4 space-y-3">
+              <p className="font-semibold text-[#d6b45f]">Log in to bid</p>
               <p className="text-sm text-gray-200">You need an account to place bids and use Buy Now.</p>
               <div className="flex flex-wrap gap-3 mt-2">
                 <Link href={loginHref} className="px-5 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold text-sm">
@@ -722,11 +666,11 @@ export default function PlaceBidPage() {
             </div>
           ) : (
             <>
-              {error && <p className="bg-red-950 text-red-100 border border-red-700 p-3 rounded">{error}</p>}
+              {error && <p className="bg-red-950 text-red-100 border border-red-700 p-3 rounded whitespace-pre-line">{error}</p>}
               {success && <p className="bg-green-950 text-green-100 border border-green-700 p-3 rounded">{success}</p>}
 
               <p className="text-sm text-gray-200">
-                Minimum bid: <strong>£{minimumAllowed.toLocaleString()}</strong>
+                Minimum bid: <strong>£{minimumAllowed.toLocaleString("en-GB")}</strong>
               </p>
 
               <input
@@ -734,8 +678,8 @@ export default function PlaceBidPage() {
                 value={bidAmount}
                 onChange={(e) => setBidAmount(e.target.value)}
                 min={minimumAllowed}
-                placeholder={`£${minimumAllowed.toLocaleString()}`}
-                className="w-full border border-yellow-600 rounded-lg p-3 text-lg text-center bg-black text-gray-100"
+                placeholder={`£${minimumAllowed.toLocaleString("en-GB")}`}
+                className="w-full border border-white/10 rounded-lg p-3 text-lg text-center bg-black text-gray-100"
               />
 
               <div className="flex flex-col sm:flex-row gap-3 mt-2">
@@ -761,7 +705,7 @@ export default function PlaceBidPage() {
                     : "Auction Not Live"}
                 </button>
 
-                {canShowBuyNow && (
+                {canShowBuyNow && buyNowPrice !== null && (
                   <button
                     onClick={() => {
                       if (paymentBlocked) {
@@ -773,7 +717,7 @@ export default function PlaceBidPage() {
                     disabled={!canBidOrBuyNow || submitting || checkingPaymentMethod}
                     className={`flex-1 rounded-lg py-3 text-lg font-semibold ${
                       canBidOrBuyNow && !checkingPaymentMethod
-                        ? "bg-green-600 hover:bg-green-700 text-white"
+                        ? "bg-emerald-600 hover:bg-emerald-700 text-white"
                         : "bg-gray-600 text-gray-300 cursor-not-allowed"
                     }`}
                   >
@@ -782,9 +726,7 @@ export default function PlaceBidPage() {
                         ? "Processing Buy Now…"
                         : checkingPaymentMethod
                         ? "Checking Payment…"
-                        : buyerPaysTransferFee
-                        ? `Buy Now £${buyNowPrice!.toLocaleString()} + £${DVLA_FEE_GBP}`
-                        : `Buy Now £${buyNowPrice!.toLocaleString()}`
+                        : `Buy Now £${buyNowPrice.toLocaleString("en-GB")}`
                       : "Buy Now Unavailable"}
                   </button>
                 )}
@@ -802,15 +744,15 @@ export default function PlaceBidPage() {
 
       <div className="max-w-4xl mx-auto mt-6 mb-10 space-y-6">
         <div>
-          <h3 className="text-lg font-bold mb-2 text-[#FFD500]">Description</h3>
-          <div className="border border-gray-700 rounded-lg p-4 bg-[#111111] text-sm text-gray-200 whitespace-pre-line">
+          <h3 className="text-lg font-bold mb-2 text-[#d6b45f]">Description</h3>
+          <div className="border border-white/10 rounded-lg p-4 bg-[#111111] text-sm text-gray-200 whitespace-pre-line">
             {listing.description || "No description has been added yet."}
           </div>
         </div>
 
         <div>
-          <h3 className="text-base font-bold mb-2 text-[#FFD500]">History &amp; interesting facts</h3>
-          <div className="border border-gray-700 rounded-lg p-3 bg-[#111111] text-sm text-gray-200 whitespace-pre-line">
+          <h3 className="text-base font-bold mb-2 text-[#d6b45f]">History &amp; interesting facts</h3>
+          <div className="border border-white/10 rounded-lg p-3 bg-[#111111] text-sm text-gray-200 whitespace-pre-line">
             {listing.interesting_fact || "No extra details have been added yet."}
           </div>
         </div>
