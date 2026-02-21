@@ -29,30 +29,30 @@ export const metadata: Metadata = {
 
 export default function CookiesPage() {
   return (
-    <main className="min-h-screen bg-slate-950 py-10 px-4 text-slate-100">
-      <div className="max-w-4xl mx-auto bg-slate-900/40 rounded-2xl shadow-md border border-white/10 p-8">
-        <h1 className="text-3xl md:text-4xl font-extrabold text-sky-300 mb-4">
+    <div className="min-h-screen bg-background text-foreground py-10 px-4">
+      <div className="max-w-4xl mx-auto rounded-3xl border border-border bg-card shadow-sm p-8">
+        <h1 className="text-3xl md:text-4xl font-extrabold mb-4">
           Cookie Policy
         </h1>
 
-        <p className="text-sm text-slate-400 mb-6">
-          Effective Date: <strong>February 2026</strong>
+        <p className="text-sm text-muted-foreground mb-6">
+          Effective Date: <strong className="text-foreground">February 2026</strong>
         </p>
 
-        <p className="text-sm text-slate-200 mb-4">
+        <p className="text-sm text-muted-foreground mb-4">
           This Cookie Policy explains how{" "}
-          <span className="font-semibold">AuctionMyCamera.co.uk</span> (
+          <span className="font-semibold text-foreground">AuctionMyCamera.co.uk</span> (
           &quot;we&quot;, &quot;us&quot;, &quot;our&quot;) uses cookies and similar
           technologies when you visit or use our website.
         </p>
 
-        <p className="text-sm text-slate-200 mb-6">
+        <p className="text-sm text-muted-foreground mb-6">
           This Policy should be read alongside our{" "}
-          <Link href="/privacy" className="text-sky-300 font-semibold underline">
+          <Link href="/privacy" className="underline font-semibold text-primary hover:opacity-80">
             Privacy Policy
           </Link>{" "}
           and{" "}
-          <Link href="/terms" className="text-sky-300 font-semibold underline">
+          <Link href="/terms" className="underline font-semibold text-primary hover:opacity-80">
             Terms &amp; Conditions
           </Link>
           . It is intended to help you understand what we do in order to comply
@@ -60,10 +60,10 @@ export default function CookiesPage() {
           Regulations (PECR).
         </p>
 
-        <div className="space-y-6 text-sm text-slate-200 leading-relaxed">
+        <div className="space-y-6 text-sm text-muted-foreground leading-relaxed">
           {/* 1. What cookies are */}
           <section>
-            <h2 className="text-lg font-semibold mb-2 text-sky-300">
+            <h2 className="text-lg font-semibold mb-2 text-foreground">
               1. What Are Cookies?
             </h2>
             <p>
@@ -74,7 +74,7 @@ export default function CookiesPage() {
             </p>
             <p className="mt-2">
               We may also use similar technologies (for example{" "}
-              <strong>local storage</strong>) to keep you logged in, remember
+              <strong className="text-foreground">local storage</strong>) to keep you logged in, remember
               basic settings (such as cookie consent choices), and support core
               marketplace features while you use AuctionMyCamera.
             </p>
@@ -82,24 +82,24 @@ export default function CookiesPage() {
 
           {/* 2. How we use cookies */}
           <section>
-            <h2 className="text-lg font-semibold mb-2 text-sky-300">
+            <h2 className="text-lg font-semibold mb-2 text-foreground">
               2. How We Use Cookies
             </h2>
             <p>We use cookies and similar technologies for the following:</p>
             <ul className="list-disc ml-5 mt-2 space-y-1">
               <li>
-                <strong>Essential cookies (strictly necessary):</strong> required
+                <strong className="text-foreground">Essential cookies (strictly necessary):</strong> required
                 for the site to function. These support login/security, secure
                 forms, session integrity, and core features such as bidding and
                 checkout. Without these, the website will not work correctly.
               </li>
               <li>
-                <strong>Preference cookies:</strong> remember basic choices (for
+                <strong className="text-foreground">Preference cookies:</strong> remember basic choices (for
                 example, cookie consent or interface preferences) to make repeat
                 visits easier.
               </li>
               <li>
-                <strong>Analytics / performance cookies:</strong> help us
+                <strong className="text-foreground">Analytics / performance cookies:</strong> help us
                 understand how visitors use the site so we can improve layout,
                 performance and content (for example, which pages are most
                 visited, or whether a feature is working properly).
@@ -113,26 +113,26 @@ export default function CookiesPage() {
 
           {/* 3. Types we use */}
           <section>
-            <h2 className="text-lg font-semibold mb-2 text-sky-300">
+            <h2 className="text-lg font-semibold mb-2 text-foreground">
               3. Types of Cookies We May Use
             </h2>
             <ul className="list-disc ml-5 mt-2 space-y-1">
               <li>
-                <strong>Session cookies:</strong> temporary cookies that are
+                <strong className="text-foreground">Session cookies:</strong> temporary cookies that are
                 deleted when you close your browser. These are often used for
                 login and security.
               </li>
               <li>
-                <strong>Persistent cookies:</strong> remain on your device for a
+                <strong className="text-foreground">Persistent cookies:</strong> remain on your device for a
                 set period or until you delete them (for example, remembering
                 that you&apos;ve already seen the cookie banner).
               </li>
               <li>
-                <strong>First-party cookies:</strong> set by AuctionMyCamera.co.uk
+                <strong className="text-foreground">First-party cookies:</strong> set by AuctionMyCamera.co.uk
                 and used only by our website.
               </li>
               <li>
-                <strong>Third-party cookies:</strong> set by external services
+                <strong className="text-foreground">Third-party cookies:</strong> set by external services
                 such as analytics providers or payment providers.
               </li>
             </ul>
@@ -140,7 +140,7 @@ export default function CookiesPage() {
 
           {/* 4. Examples */}
           <section>
-            <h2 className="text-lg font-semibold mb-2 text-sky-300">
+            <h2 className="text-lg font-semibold mb-2 text-foreground">
               4. Examples of Cookies &amp; Similar Technologies
             </h2>
             <p>Examples include (this is not a complete list):</p>
@@ -160,7 +160,7 @@ export default function CookiesPage() {
               </li>
               <li>
                 Cookies or similar technologies set by{" "}
-                <strong>payment providers (such as Stripe)</strong> to help
+                <strong className="text-foreground">payment providers (such as Stripe)</strong> to help
                 prevent fraud and complete secure card payments.
               </li>
             </ul>
@@ -168,12 +168,12 @@ export default function CookiesPage() {
 
           {/* 5. Consent & managing cookies */}
           <section>
-            <h2 className="text-lg font-semibold mb-2 text-sky-300">
+            <h2 className="text-lg font-semibold mb-2 text-foreground">
               5. Consent &amp; Managing Your Cookies
             </h2>
             <p>
               When you first visit AuctionMyCamera, you&apos;ll see a{" "}
-              <strong>cookie banner</strong>. Essential cookies are used because
+              <strong className="text-foreground">cookie banner</strong>. Essential cookies are used because
               they are necessary for the website to function. Where required by
               law, we ask for your consent before setting non-essential cookies
               (such as optional analytics cookies).
@@ -192,7 +192,7 @@ export default function CookiesPage() {
             </ul>
             <p className="mt-2">
               Please note that if you block or delete{" "}
-              <strong>essential cookies</strong>, some parts of the website may
+              <strong className="text-foreground">essential cookies</strong>, some parts of the website may
               not work properly (for example, you may not be able to stay logged
               in, place bids, or complete purchases).
             </p>
@@ -200,7 +200,7 @@ export default function CookiesPage() {
 
           {/* 6. Third-party cookies & Stripe / analytics */}
           <section>
-            <h2 className="text-lg font-semibold mb-2 text-sky-300">
+            <h2 className="text-lg font-semibold mb-2 text-foreground">
               6. Third-Party Cookies &amp; Services
             </h2>
             <p>
@@ -209,12 +209,12 @@ export default function CookiesPage() {
             </p>
             <ul className="list-disc ml-5 mt-2 space-y-1">
               <li>
-                <strong>Payment providers:</strong> such as <strong>Stripe</strong>,
+                <strong className="text-foreground">Payment providers:</strong> such as <strong className="text-foreground">Stripe</strong>,
                 which may use cookies or similar technologies to help prevent fraud,
                 support secure card payments, and complete transactions.
               </li>
               <li>
-                <strong>Analytics providers:</strong> tools that help us understand
+                <strong className="text-foreground">Analytics providers:</strong> tools that help us understand
                 site usage and performance (for example, how many visitors we
                 receive and which pages they view), where enabled.
               </li>
@@ -229,7 +229,7 @@ export default function CookiesPage() {
 
           {/* 7. Changes */}
           <section>
-            <h2 className="text-lg font-semibold mb-2 text-sky-300">
+            <h2 className="text-lg font-semibold mb-2 text-foreground">
               7. Changes to This Cookie Policy
             </h2>
             <p>
@@ -242,23 +242,23 @@ export default function CookiesPage() {
 
           {/* 8. Contact */}
           <section>
-            <h2 className="text-lg font-semibold mb-2 text-sky-300">
+            <h2 className="text-lg font-semibold mb-2 text-foreground">
               8. Contact Us
             </h2>
             <p>
               If you have questions about this Cookie Policy or how we use
               cookies and similar technologies, you can contact us at{" "}
-              <strong>support@auctionmycamera.co.uk</strong>.
+              <strong className="text-foreground">support@auctionmycamera.co.uk</strong>.
             </p>
           </section>
         </div>
 
         <div className="mt-8 text-sm">
-          <Link href="/" className="text-sky-300 underline">
+          <Link href="/" className="underline text-primary hover:opacity-80">
             &larr; Back to home
           </Link>
         </div>
       </div>
-    </main>
+    </div>
   );
 }

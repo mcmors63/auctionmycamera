@@ -29,41 +29,41 @@ export const metadata: Metadata = {
 
 export default function PrivacyPage() {
   return (
-    <main className="min-h-screen bg-slate-950 py-10 px-4 text-slate-100">
-      <div className="max-w-4xl mx-auto bg-slate-900/40 rounded-2xl shadow-md border border-white/10 p-8">
-        <h1 className="text-3xl md:text-4xl font-extrabold text-sky-300 mb-4">
+    <div className="min-h-screen bg-background text-foreground py-10 px-4">
+      <div className="max-w-4xl mx-auto rounded-3xl border border-border bg-card shadow-sm p-8">
+        <h1 className="text-3xl md:text-4xl font-extrabold mb-4">
           Privacy Policy
         </h1>
 
-        <p className="text-sm text-slate-400 mb-6">
-          Effective Date: <strong>February 2026</strong>
+        <p className="text-sm text-muted-foreground mb-6">
+          Effective Date: <strong className="text-foreground">February 2026</strong>
         </p>
 
-        <p className="text-sm text-slate-200 mb-4">
+        <p className="text-sm text-muted-foreground mb-4">
           This Privacy Policy explains how{" "}
-          <span className="font-semibold">AuctionMyCamera.co.uk</span> (
+          <span className="font-semibold text-foreground">AuctionMyCamera.co.uk</span> (
           &quot;we&quot;, &quot;us&quot;, &quot;our&quot;) collects, uses, stores and
           protects your personal data when you use our website, register for an
           account, list photographic equipment, place bids, and complete
           transactions.
         </p>
 
-        <p className="text-sm text-slate-200 mb-6">
+        <p className="text-sm text-muted-foreground mb-6">
           This Policy should be read together with our{" "}
-          <Link href="/cookies" className="text-sky-300 underline font-semibold">
+          <Link href="/cookies" className="underline font-semibold text-primary hover:opacity-80">
             Cookie Policy
           </Link>{" "}
           and{" "}
-          <Link href="/terms" className="text-sky-300 underline font-semibold">
+          <Link href="/terms" className="underline font-semibold text-primary hover:opacity-80">
             Terms &amp; Conditions
           </Link>
           .
         </p>
 
-        <div className="space-y-6 text-sm text-slate-200 leading-relaxed">
+        <div className="space-y-6 text-sm text-muted-foreground leading-relaxed">
           {/* 1. Who we are */}
           <section>
-            <h2 className="text-lg font-semibold mb-2 text-sky-300">
+            <h2 className="text-lg font-semibold mb-2 text-foreground">
               1. Who We Are &amp; Contact Details
             </h2>
             <p>
@@ -75,8 +75,8 @@ export default function PrivacyPage() {
             </p>
             <p className="mt-2">
               For the purposes of the UK GDPR and EU GDPR,{" "}
-              <strong>AuctionMyCamera.co.uk</strong> is the{" "}
-              <strong>data controller</strong> for the personal data we collect
+              <strong className="text-foreground">AuctionMyCamera.co.uk</strong> is the{" "}
+              <strong className="text-foreground">data controller</strong> for the personal data we collect
               about you via this website.
             </p>
             <p className="mt-2">
@@ -84,62 +84,62 @@ export default function PrivacyPage() {
               data is handled, you can contact us at:
             </p>
             <p className="mt-1">
-              <strong>support@auctionmycamera.co.uk</strong>
+              <strong className="text-foreground">support@auctionmycamera.co.uk</strong>
             </p>
           </section>
 
           {/* 2. Data we collect */}
           <section>
-            <h2 className="text-lg font-semibold mb-2 text-sky-300">
+            <h2 className="text-lg font-semibold mb-2 text-foreground">
               2. Data We Collect
             </h2>
             <p>We may collect and process the following types of data:</p>
             <ul className="list-disc ml-5 mt-2 space-y-1">
               <li>
-                <strong>Account information:</strong> name, email address,
+                <strong className="text-foreground">Account information:</strong> name, email address,
                 password (encrypted), phone number, and postal address.
               </li>
               <li>
-                <strong>Listing information:</strong> item title/category,
+                <strong className="text-foreground">Listing information:</strong> item title/category,
                 description, condition details, included accessories, images,
                 pricing/reserve information (where applicable), and auction
                 details such as start/end times.
               </li>
               <li>
-                <strong>Transaction-related information:</strong> winning bids,
+                <strong className="text-foreground">Transaction-related information:</strong> winning bids,
                 sale amounts, fee/commission breakdowns, refunds, disputes, and
                 payout-related data (for sellers).
               </li>
               <li>
-                <strong>Delivery and fulfilment information:</strong> delivery
+                <strong className="text-foreground">Delivery and fulfilment information:</strong> delivery
                 address, dispatch proof, tracking numbers (where provided),
                 courier details (where provided), delivery/receipt confirmation
                 timestamps, and messages related to fulfilment.
               </li>
               <li>
-                <strong>Payments data (limited):</strong>{" "}
-                <strong>
+                <strong className="text-foreground">Payments data (limited):</strong>{" "}
+                <strong className="text-foreground">
                   we do not store full card numbers or CVV codes on our servers
                 </strong>
                 . Card payments are processed securely by our payment provider,
-                currently <strong>Stripe</strong>. We may receive limited
+                currently <strong className="text-foreground">Stripe</strong>. We may receive limited
                 payment method information (e.g. last four digits, brand, expiry
                 month/year) and payment status so we can operate the platform,
                 prevent fraud, and manage transactions (including holding funds
                 until receipt confirmation where the platform flow requires it).
               </li>
               <li>
-                <strong>Usage data:</strong> pages visited, links clicked, time
+                <strong className="text-foreground">Usage data:</strong> pages visited, links clicked, time
                 on site, device type, browser type, approximate location (based
                 on IP address) and basic analytics/cookie data.
               </li>
               <li>
-                <strong>Communication data:</strong> messages and notifications
+                <strong className="text-foreground">Communication data:</strong> messages and notifications
                 we send to you (e.g. bid updates, sale notifications, delivery
                 reminders) and your replies.
               </li>
               <li>
-                <strong>Support and verification data:</strong> information you
+                <strong className="text-foreground">Support and verification data:</strong> information you
                 provide when contacting support or where we request information
                 to protect users or investigate suspected fraud (for example,
                 evidence relating to non-delivery, misdescription, or suspected
@@ -150,7 +150,7 @@ export default function PrivacyPage() {
 
           {/* 3. How we use your data */}
           <section>
-            <h2 className="text-lg font-semibold mb-2 text-sky-300">
+            <h2 className="text-lg font-semibold mb-2 text-foreground">
               3. How We Use Your Data
             </h2>
             <p>We use your personal data for the following purposes:</p>
@@ -191,7 +191,7 @@ export default function PrivacyPage() {
 
           {/* 4. Legal bases */}
           <section>
-            <h2 className="text-lg font-semibold mb-2 text-sky-300">
+            <h2 className="text-lg font-semibold mb-2 text-foreground">
               4. Legal Basis for Processing
             </h2>
             <p>
@@ -200,24 +200,24 @@ export default function PrivacyPage() {
             </p>
             <ul className="list-disc ml-5 mt-2 space-y-1">
               <li>
-                <strong>Contract:</strong> to provide the services you register
+                <strong className="text-foreground">Contract:</strong> to provide the services you register
                 for (e.g. running auctions, managing your listings, and
                 completing transactions).
               </li>
               <li>
-                <strong>Legitimate interests:</strong> to keep the platform
+                <strong className="text-foreground">Legitimate interests:</strong> to keep the platform
                 secure, prevent fraud, improve our services, and send certain
                 service-related communications.
               </li>
               <li>
-                <strong>Legal obligation:</strong> to comply with applicable
+                <strong className="text-foreground">Legal obligation:</strong> to comply with applicable
                 laws, regulations or court orders (for example, accounting and
                 tax rules).
               </li>
               <li>
-                <strong>Consent:</strong> where required for non-essential
+                <strong className="text-foreground">Consent:</strong> where required for non-essential
                 cookies and analytics. You can manage these via our{" "}
-                <Link href="/cookies" className="text-sky-300 underline">
+                <Link href="/cookies" className="underline text-primary hover:opacity-80">
                   Cookie Policy
                 </Link>
                 .
@@ -227,14 +227,14 @@ export default function PrivacyPage() {
 
           {/* 5. Payments & Stripe */}
           <section>
-            <h2 className="text-lg font-semibold mb-2 text-sky-300">
+            <h2 className="text-lg font-semibold mb-2 text-foreground">
               5. Payments &amp; Stripe
             </h2>
             <p>
-              We use <strong>Stripe</strong> to process card payments securely.
+              We use <strong className="text-foreground">Stripe</strong> to process card payments securely.
               When you add a card or when we take payment for a winning bid, your
               payment details are handled directly by Stripe and are{" "}
-              <strong>not stored in full on our servers</strong>.
+              <strong className="text-foreground">not stored in full on our servers</strong>.
             </p>
             <p className="mt-2">
               We receive limited information from Stripe (for example, the last
@@ -243,7 +243,7 @@ export default function PrivacyPage() {
               transaction flows, and manage refunds/payouts.
             </p>
             <p className="mt-2">
-              Stripe acts as a <strong>data processor</strong> for us when it
+              Stripe acts as a <strong className="text-foreground">data processor</strong> for us when it
               processes payments on our behalf. Stripe may process data in
               countries outside the UK/EEA. For details on how Stripe handles
               your data, please see{" "}
@@ -251,7 +251,7 @@ export default function PrivacyPage() {
                 href="https://stripe.com/privacy"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-sky-300 underline"
+                className="underline text-primary hover:opacity-80"
               >
                 Stripe&apos;s Privacy Policy
               </a>
@@ -261,7 +261,7 @@ export default function PrivacyPage() {
 
           {/* 6. Cookies */}
           <section>
-            <h2 className="text-lg font-semibold mb-2 text-sky-300">
+            <h2 className="text-lg font-semibold mb-2 text-foreground">
               6. Cookies &amp; Similar Technologies
             </h2>
             <p>
@@ -272,14 +272,14 @@ export default function PrivacyPage() {
             </p>
             <p className="mt-2">
               Where required, we rely on your{" "}
-              <strong>consent for non-essential cookies</strong>. You can manage
+              <strong className="text-foreground">consent for non-essential cookies</strong>. You can manage
               your cookie preferences through the cookie banner on the site and
               in your browser settings.
             </p>
             <p className="mt-2">
               For full details of the cookies we use and how to control them,
               please see our{" "}
-              <Link href="/cookies" className="text-sky-300 underline">
+              <Link href="/cookies" className="underline text-primary hover:opacity-80">
                 Cookie Policy
               </Link>
               .
@@ -288,31 +288,31 @@ export default function PrivacyPage() {
 
           {/* 7. Who we share with */}
           <section>
-            <h2 className="text-lg font-semibold mb-2 text-sky-300">
+            <h2 className="text-lg font-semibold mb-2 text-foreground">
               7. Who We Share Your Data With
             </h2>
             <p>
-              We do <strong>not</strong> sell your personal data. We may share
+              We do <strong className="text-foreground">not</strong> sell your personal data. We may share
               limited data with:
             </p>
             <ul className="list-disc ml-5 mt-2 space-y-1">
               <li>
-                <strong>Service providers / processors:</strong> for example,
+                <strong className="text-foreground">Service providers / processors:</strong> for example,
                 hosting and infrastructure providers, database/backend services,
                 email providers, analytics providers (where enabled), and payment
                 providers (such as Stripe).
               </li>
               <li>
-                <strong>Professional advisers:</strong> such as accountants,
+                <strong className="text-foreground">Professional advisers:</strong> such as accountants,
                 lawyers or auditors where necessary.
               </li>
               <li>
-                <strong>Law enforcement or authorities:</strong> where required
+                <strong className="text-foreground">Law enforcement or authorities:</strong> where required
                 by law or to help prevent fraud, crime or abuse of our
                 platform.
               </li>
               <li>
-                <strong>Other users:</strong> where necessary to complete a sale
+                <strong className="text-foreground">Other users:</strong> where necessary to complete a sale
                 or resolve a dispute (for example, sharing delivery details with
                 the seller so they can dispatch, or sharing limited transaction
                 details between buyer and seller where appropriate).
@@ -322,7 +322,7 @@ export default function PrivacyPage() {
 
           {/* 8. International transfers */}
           <section>
-            <h2 className="text-lg font-semibold mb-2 text-sky-300">
+            <h2 className="text-lg font-semibold mb-2 text-foreground">
               8. International Data Transfers
             </h2>
             <p>
@@ -336,7 +336,7 @@ export default function PrivacyPage() {
 
           {/* 9. Data retention */}
           <section>
-            <h2 className="text-lg font-semibold mb-2 text-sky-300">
+            <h2 className="text-lg font-semibold mb-2 text-foreground">
               9. How Long We Keep Your Data
             </h2>
             <p>We keep your data for as long as reasonably necessary to:</p>
@@ -357,7 +357,7 @@ export default function PrivacyPage() {
 
           {/* 10. Security */}
           <section>
-            <h2 className="text-lg font-semibold mb-2 text-sky-300">
+            <h2 className="text-lg font-semibold mb-2 text-foreground">
               10. How We Protect Your Data
             </h2>
             <p>
@@ -373,7 +373,7 @@ export default function PrivacyPage() {
 
           {/* 11. Your rights */}
           <section>
-            <h2 className="text-lg font-semibold mb-2 text-sky-300">
+            <h2 className="text-lg font-semibold mb-2 text-foreground">
               11. Your Rights
             </h2>
             <p>Under UK GDPR/EU GDPR, you may have the right to:</p>
@@ -392,19 +392,19 @@ export default function PrivacyPage() {
             </ul>
             <p className="mt-2">
               To exercise these rights, contact{" "}
-              <strong>support@auctionmycamera.co.uk</strong>. We may need to
+              <strong className="text-foreground">support@auctionmycamera.co.uk</strong>. We may need to
               verify your identity before responding.
             </p>
             <p className="mt-2">
               You also have the right to lodge a complaint with your local data
               protection authority. In the UK, this is the{" "}
-              <strong>Information Commissioner&apos;s Office (ICO)</strong>.
+              <strong className="text-foreground">Information Commissioner&apos;s Office (ICO)</strong>.
             </p>
           </section>
 
           {/* 12. Changes */}
           <section>
-            <h2 className="text-lg font-semibold mb-2 text-sky-300">
+            <h2 className="text-lg font-semibold mb-2 text-foreground">
               12. Changes to This Policy
             </h2>
             <p>
@@ -417,7 +417,7 @@ export default function PrivacyPage() {
 
           {/* Disclaimer */}
           <section>
-            <p className="text-xs text-slate-400 mt-4 italic">
+            <p className="text-xs text-muted-foreground mt-4 italic">
               This Privacy Policy is provided for general information and should
               not be taken as formal legal advice. If you need specific legal
               guidance on GDPR compliance, consult a qualified legal
@@ -427,11 +427,11 @@ export default function PrivacyPage() {
         </div>
 
         <div className="mt-8 text-sm">
-          <Link href="/" className="text-sky-300 underline">
+          <Link href="/" className="underline text-primary hover:opacity-80">
             &larr; Back to home
           </Link>
         </div>
       </div>
-    </main>
+    </div>
   );
 }

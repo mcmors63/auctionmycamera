@@ -42,11 +42,19 @@ type Props = {
 
 type Tab = "live" | "soon";
 
-const ACCENT = "#d6b45f";
-const BG = "#0b0c10";
-
 function normalizeText(input: string) {
   return (input || "").toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+function cap(s: string) {
+  if (!s) return s;
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+function niceEnum(s?: string | null) {
+  const v = String(s || "").trim();
+  if (!v) return "";
+  return cap(v.replace(/_/g, " "));
 }
 
 function getListingTitle(l: ListingLike) {
@@ -62,7 +70,7 @@ function getListingTitle(l: ListingLike) {
   if (legacy) return legacy;
 
   const gearType = String(l?.gear_type || "").trim();
-  if (gearType) return gearType;
+  if (gearType) return `${niceEnum(gearType)} listing`;
 
   return "Camera gear listing";
 }
@@ -95,14 +103,9 @@ function priceForSort(l: ListingLike) {
 
 function timeForEndingSort(l: ListingLike, tab: Tab) {
   if (tab === "live") {
-    return Date.parse(
-      l.auction_end ?? l.end_time ?? l.auction_start ?? l.start_time ?? l.$createdAt ?? ""
-    );
+    return Date.parse(l.auction_end ?? l.end_time ?? l.auction_start ?? l.start_time ?? l.$createdAt ?? "");
   }
-
-  return Date.parse(
-    l.auction_start ?? l.start_time ?? l.auction_end ?? l.end_time ?? l.$createdAt ?? ""
-  );
+  return Date.parse(l.auction_start ?? l.start_time ?? l.auction_end ?? l.end_time ?? l.$createdAt ?? "");
 }
 
 export default function CurrentListingsClient({ initialLive, initialSoon }: Props) {
@@ -121,9 +124,7 @@ export default function CurrentListingsClient({ initialLive, initialSoon }: Prop
     let results = [...(source || [])].filter((l) => l && typeof l === "object" && l.$id);
 
     const q = normalizeText(search);
-    if (q) {
-      results = results.filter((l) => getSearchHaystack(l).includes(q));
-    }
+    if (q) results = results.filter((l) => getSearchHaystack(l).includes(q));
 
     if (sort === "ending") {
       results.sort((a, b) => {
@@ -141,13 +142,8 @@ export default function CurrentListingsClient({ initialLive, initialSoon }: Prop
       results.sort((a, b) => getListingTitle(a).localeCompare(getListingTitle(b)));
     }
 
-    if (sort === "priceLow") {
-      results.sort((a, b) => priceForSort(a) - priceForSort(b));
-    }
-
-    if (sort === "priceHigh") {
-      results.sort((a, b) => priceForSort(b) - priceForSort(a));
-    }
+    if (sort === "priceLow") results.sort((a, b) => priceForSort(a) - priceForSort(b));
+    if (sort === "priceHigh") results.sort((a, b) => priceForSort(b) - priceForSort(a));
 
     return results;
   }, [source, search, sort, tab]);
@@ -173,31 +169,27 @@ export default function CurrentListingsClient({ initialLive, initialSoon }: Prop
         : "Try the Live tab, or come back later once new listings are approved and queued."
       : "Try a different search, clear filters, or switch tabs.";
 
-  const accentLinkStyle = { color: ACCENT };
-
   return (
-    <main className="min-h-screen" style={{ backgroundColor: BG, color: "#e8e8e8" }}>
+    <main className="min-h-screen bg-background text-foreground">
       {/* Header */}
-      <section className="border-b" style={{ borderColor: "rgba(255,255,255,0.10)" }}>
+      <section className="border-b border-border">
         <div className="max-w-6xl mx-auto px-6 py-10">
-          <h1 className="text-3xl sm:text-4xl font-extrabold tracking-tight text-white">
-            Current auctions
-          </h1>
+          <h1 className="text-3xl sm:text-4xl font-extrabold tracking-tight">Current auctions</h1>
 
-          <p className="mt-2 text-sm sm:text-base text-white/70 max-w-2xl">
+          <p className="mt-2 text-sm sm:text-base text-muted-foreground max-w-2xl">
             Browse live camera, lens and photography gear auctions — plus what’s coming next.
           </p>
 
           {/* Helpful internal links */}
-          <div className="mt-3 flex flex-wrap gap-x-4 gap-y-2 text-sm text-white/70">
-            <span className="text-white/50">New here?</span>
-            <Link href="/how-it-works" className="underline" style={accentLinkStyle}>
+          <div className="mt-3 flex flex-wrap gap-x-4 gap-y-2 text-sm">
+            <span className="text-muted-foreground">New here?</span>
+            <Link href="/how-it-works" className="text-primary underline hover:opacity-80">
               How it works
             </Link>
-            <Link href="/fees" className="underline" style={accentLinkStyle}>
+            <Link href="/fees" className="text-primary underline hover:opacity-80">
               Fees
             </Link>
-            <Link href="/sell" className="underline" style={accentLinkStyle}>
+            <Link href="/sell" className="text-primary underline hover:opacity-80">
               Sell your gear
             </Link>
           </div>
@@ -213,16 +205,10 @@ export default function CurrentListingsClient({ initialLive, initialSoon }: Prop
           </div>
 
           {/* Filters */}
-          <div
-            className="mt-6 rounded-2xl border p-4 sm:p-5"
-            style={{
-              borderColor: "rgba(255,255,255,0.10)",
-              backgroundColor: "rgba(255,255,255,0.03)",
-            }}
-          >
+          <div className="mt-6 rounded-2xl border border-border bg-card p-4 sm:p-5">
             <div className="grid md:grid-cols-3 gap-4">
               <div className="md:col-span-2">
-                <label className="block text-[11px] font-semibold tracking-wide text-white/60 uppercase mb-2">
+                <label className="block text-[11px] font-semibold tracking-wide text-muted-foreground uppercase mb-2">
                   Search by title / brand / model
                 </label>
                 <input
@@ -230,20 +216,18 @@ export default function CurrentListingsClient({ initialLive, initialSoon }: Prop
                   placeholder='e.g. "Canon 5D", "Leica M6", "EF 24-70", "tripod"'
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
-                  className="w-full px-4 py-2.5 rounded-xl bg-black/40 border text-sm text-white placeholder-white/40 focus:outline-none"
-                  style={{ borderColor: "rgba(255,255,255,0.14)" }}
+                  className="w-full px-4 py-2.5 rounded-xl bg-background border border-border text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
                 />
               </div>
 
               <div>
-                <label className="block text-[11px] font-semibold tracking-wide text-white/60 uppercase mb-2">
+                <label className="block text-[11px] font-semibold tracking-wide text-muted-foreground uppercase mb-2">
                   Sort
                 </label>
                 <select
                   value={sort}
                   onChange={(e) => setSort(e.target.value)}
-                  className="w-full px-4 py-2.5 rounded-xl bg-black/40 border text-sm text-white focus:outline-none"
-                  style={{ borderColor: "rgba(255,255,255,0.14)" }}
+                  className="w-full px-4 py-2.5 rounded-xl bg-background border border-border text-sm focus:outline-none focus:ring-2 focus:ring-ring"
                 >
                   <option value="ending">{tab === "live" ? "Ending soon" : "Starting soon"}</option>
                   <option value="newest">Newest</option>
@@ -255,9 +239,9 @@ export default function CurrentListingsClient({ initialLive, initialSoon }: Prop
             </div>
 
             <div className="mt-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-              <p className="text-[12px] text-white/60 explain">
-                Showing <span className="text-white/80 font-semibold">{filtered.length}</span> of{" "}
-                <span className="text-white/80 font-semibold">{baseCount}</span> in this tab.
+              <p className="text-[12px] text-muted-foreground">
+                Showing <span className="text-foreground font-semibold">{filtered.length}</span> of{" "}
+                <span className="text-foreground font-semibold">{baseCount}</span> in this tab.
               </p>
 
               {hasActiveFilters ? (
@@ -266,12 +250,7 @@ export default function CurrentListingsClient({ initialLive, initialSoon }: Prop
                     setSearch("");
                     setSort("ending");
                   }}
-                  className="px-4 py-2 rounded-xl text-sm font-semibold border transition w-full sm:w-auto"
-                  style={{
-                    borderColor: "rgba(255,255,255,0.14)",
-                    backgroundColor: "rgba(255,255,255,0.03)",
-                    color: "rgba(255,255,255,0.85)",
-                  }}
+                  className="px-4 py-2 rounded-xl text-sm font-semibold border border-border bg-background hover:bg-accent transition w-full sm:w-auto"
                 >
                   Clear filters
                 </button>
@@ -279,17 +258,11 @@ export default function CurrentListingsClient({ initialLive, initialSoon }: Prop
             </div>
 
             {/* Notice */}
-            <div
-              className="mt-4 rounded-2xl border px-4 py-3"
-              style={{
-                borderColor: "rgba(255,255,255,0.10)",
-                backgroundColor: "rgba(255,255,255,0.02)",
-              }}
-            >
-              <p className="text-[12px] text-white/70 leading-relaxed">
+            <div className="mt-4 rounded-2xl border border-border bg-background px-4 py-3">
+              <p className="text-[12px] text-muted-foreground leading-relaxed">
                 Condition matters: sellers should describe cosmetic wear, faults, fungus/haze, shutter count (if known), and
                 what’s included. Buyers should review the description carefully before bidding.{" "}
-                <Link href="/faq" className="underline" style={accentLinkStyle}>
+                <Link href="/faq" className="text-primary underline hover:opacity-80">
                   Read FAQ
                 </Link>
                 .
@@ -302,43 +275,26 @@ export default function CurrentListingsClient({ initialLive, initialSoon }: Prop
       {/* Grid */}
       <section className="max-w-6xl mx-auto px-6 py-10">
         {filtered.length === 0 ? (
-          <div
-            className="rounded-3xl border p-10 text-center"
-            style={{
-              borderColor: "rgba(255,255,255,0.10)",
-              backgroundColor: "rgba(255,255,255,0.03)",
-            }}
-          >
-            <p className="text-white font-semibold">{emptyTitle}</p>
-            <p className="mt-2 text-sm text-white/65">{emptyBody}</p>
+          <div className="rounded-3xl border border-border bg-card p-10 text-center">
+            <p className="font-semibold">{emptyTitle}</p>
+            <p className="mt-2 text-sm text-muted-foreground">{emptyBody}</p>
 
             <div className="mt-6 flex flex-wrap justify-center gap-3">
               <Link
                 href="/current-listings"
-                className="px-5 py-2.5 rounded-xl text-sm font-semibold border transition"
-                style={{
-                  borderColor: "rgba(255,255,255,0.14)",
-                  backgroundColor: "rgba(255,255,255,0.03)",
-                  color: "#ffffff",
-                }}
+                className="px-5 py-2.5 rounded-xl text-sm font-semibold border border-border bg-background hover:bg-accent transition"
               >
                 Refresh listings
               </Link>
               <Link
                 href="/sell"
-                className="px-5 py-2.5 rounded-xl text-sm font-semibold transition"
-                style={{ backgroundColor: ACCENT, color: "#0b0c10" }}
+                className="px-5 py-2.5 rounded-xl text-sm font-semibold bg-primary text-primary-foreground hover:opacity-90 transition"
               >
                 Sell camera gear
               </Link>
               <Link
                 href="/how-it-works"
-                className="px-5 py-2.5 rounded-xl text-sm font-semibold border transition"
-                style={{
-                  borderColor: "rgba(255,255,255,0.14)",
-                  backgroundColor: "rgba(255,255,255,0.03)",
-                  color: "#ffffff",
-                }}
+                className="px-5 py-2.5 rounded-xl text-sm font-semibold border border-border bg-background hover:bg-accent transition"
               >
                 How it works
               </Link>
@@ -368,12 +324,10 @@ function TabButton({
   return (
     <button
       onClick={onClick}
-      className="px-4 py-2 rounded-full text-sm font-semibold border transition"
-      style={{
-        borderColor: active ? "rgba(214,180,95,0.55)" : "rgba(255,255,255,0.14)",
-        backgroundColor: active ? "rgba(214,180,95,0.12)" : "rgba(255,255,255,0.03)",
-        color: active ? "#ffffff" : "rgba(255,255,255,0.75)",
-      }}
+      className={[
+        "px-4 py-2 rounded-full text-sm font-semibold border transition",
+        active ? "border-primary/40 bg-primary/10 text-foreground" : "border-border bg-card text-muted-foreground",
+      ].join(" ")}
     >
       {label}
     </button>

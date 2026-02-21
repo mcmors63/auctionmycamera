@@ -11,7 +11,6 @@ export const runtime = "nodejs";
 export const revalidate = 300; // 5 minutes
 
 const PROD_SITE_URL = "https://auctionmycamera.co.uk";
-const ACCENT = "#d6b45f";
 
 function isProdEnv() {
   if (process.env.VERCEL_ENV) return process.env.VERCEL_ENV === "production";
@@ -32,7 +31,6 @@ function getSiteUrl() {
   // ✅ Always use the real domain in production (canonical consistency)
   if (isProd) return PROD_SITE_URL;
 
-  // Local/dev or preview can use explicit if set
   if (explicit) return explicit;
 
   const vercelUrl = normalizeBaseUrl(
@@ -67,34 +65,25 @@ export const metadata: Metadata = {
   robots: { index: true, follow: true },
 };
 
+// ----------------------------------------------------
 // Appwrite (server/admin)
+// ----------------------------------------------------
 const endpointRaw = process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT!;
 const endpoint = endpointRaw.replace(/\/+$/, "");
 const projectId = process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID!;
 const apiKey = process.env.APPWRITE_API_KEY!;
 
-// ✅ LISTINGS ONLY — no plates fallback (prevents silent “wrong DB” bugs)
-const DB_ID = (
+// ✅ IMPORTANT: Only use LISTINGS envs (no PLATES fallback).
+// If these are missing, we'd rather fail loudly than silently query the wrong database.
+const DB_ID =
   process.env.APPWRITE_LISTINGS_DATABASE_ID ||
   process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID ||
-  ""
-).trim();
+  "";
 
-const COLLECTION_ID = (
+const COLLECTION_ID =
   process.env.APPWRITE_LISTINGS_COLLECTION_ID ||
   process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_COLLECTION_ID ||
-  ""
-).trim();
-
-function assertEnv() {
-  if (!DB_ID || !COLLECTION_ID) {
-    throw new Error(
-      `Listings env not set. Set APPWRITE_LISTINGS_DATABASE_ID and APPWRITE_LISTINGS_COLLECTION_ID (server), ` +
-        `or NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID / NEXT_PUBLIC_APPWRITE_LISTINGS_COLLECTION_ID.\n` +
-        `Got DB_ID="${DB_ID || "(missing)"}" COLLECTION_ID="${COLLECTION_ID || "(missing)"}"`
-    );
-  }
-}
+  "";
 
 function serverDb() {
   const client = new Client().setEndpoint(endpoint).setProject(projectId).setKey(apiKey);
@@ -102,11 +91,15 @@ function serverDb() {
 }
 
 async function fetchByStatus(status: string) {
-  assertEnv();
+  if (!DB_ID || !COLLECTION_ID) {
+    throw new Error(
+      "Missing Appwrite LISTINGS env vars. Set APPWRITE_LISTINGS_DATABASE_ID + APPWRITE_LISTINGS_COLLECTION_ID (or NEXT_PUBLIC equivalents)."
+    );
+  }
+
   const db = serverDb();
   const res = await db.listDocuments(DB_ID, COLLECTION_ID, [
     Query.equal("status", status),
-    // ✅ Stable ordering (helps keep page content consistent for crawlers)
     Query.orderDesc("$updatedAt"),
     Query.limit(200),
   ]);
@@ -115,6 +108,11 @@ async function fetchByStatus(status: string) {
 
 function listingHref(doc: any) {
   return `/listing/${doc?.$id}`;
+}
+
+function capitalize(s: string) {
+  if (!s) return s;
+  return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
 /** Prefer camera listing fields, with safe fallbacks for legacy docs */
@@ -139,11 +137,6 @@ function getListingLabel(doc: any) {
   const era = String(doc?.era || "").trim();
   const bits = [gearType && capitalize(gearType), era && capitalize(era)].filter(Boolean);
   return bits.length ? bits.join(" • ") : "";
-}
-
-function capitalize(s: string) {
-  if (!s) return s;
-  return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
 export default async function CurrentListingsPage() {
@@ -181,23 +174,10 @@ export default async function CurrentListingsPage() {
     "@context": "https://schema.org",
     "@type": "BreadcrumbList",
     itemListElement: [
-      {
-        "@type": "ListItem",
-        position: 1,
-        name: "Home",
-        item: `${SITE_URL}/`,
-      },
-      {
-        "@type": "ListItem",
-        position: 2,
-        name: "Current auctions",
-        item: `${SITE_URL}/current-listings`,
-      },
+      { "@type": "ListItem", position: 1, name: "Home", item: `${SITE_URL}/` },
+      { "@type": "ListItem", position: 2, name: "Current auctions", item: `${SITE_URL}/current-listings` },
     ],
   };
-
-  const accentLinkClass = "underline";
-  const accentLinkStyle = { color: ACCENT };
 
   return (
     <>
@@ -213,37 +193,35 @@ export default async function CurrentListingsPage() {
         dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLdBreadcrumbs) }}
       />
 
-      {/* Small, safe server-rendered crawlable block */}
-      <section className="bg-black text-gray-100 px-4 pt-6">
+      {/* Crawlable block (uses SAME theme tokens as homepage) */}
+      <section className="bg-background text-foreground px-4 pt-6">
         <div className="max-w-6xl mx-auto">
           <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
-            <span className="text-gray-400">Useful:</span>
-            <Link href="/sell" className={accentLinkClass} style={accentLinkStyle}>
+            <span className="text-muted-foreground">Useful:</span>
+            <Link href="/sell" className="text-primary underline hover:opacity-80">
               Sell your gear
             </Link>
-            <Link href="/how-it-works" className={accentLinkClass} style={accentLinkStyle}>
+            <Link href="/how-it-works" className="text-primary underline hover:opacity-80">
               How it works
             </Link>
-            <Link href="/fees" className={accentLinkClass} style={accentLinkStyle}>
+            <Link href="/fees" className="text-primary underline hover:opacity-80">
               Fees
             </Link>
-            <Link href="/faq" className={accentLinkClass} style={accentLinkStyle}>
+            <Link href="/faq" className="text-primary underline hover:opacity-80">
               FAQ
             </Link>
           </div>
 
-          <details className="mt-4 rounded-2xl border border-white/10 bg-white/5 p-4">
-            <summary className="cursor-pointer font-semibold text-white">
+          <details className="mt-4 rounded-2xl border border-border bg-card p-4">
+            <summary className="cursor-pointer font-semibold">
               Crawlable auction links (Live: {live.length} • Coming next: {soon.length})
             </summary>
 
             <div className="mt-4 grid md:grid-cols-2 gap-6">
               <div>
-                <h2 className="text-sm font-bold mb-2" style={{ color: ACCENT }}>
-                  Live auctions
-                </h2>
+                <h2 className="text-sm font-bold text-primary mb-2">Live auctions</h2>
                 {live.length === 0 ? (
-                  <p className="text-sm text-gray-300">No live auctions right now.</p>
+                  <p className="text-sm text-muted-foreground">No live auctions right now.</p>
                 ) : (
                   <ul className="space-y-2 text-sm">
                     {live.slice(0, 40).map((doc) => {
@@ -251,10 +229,12 @@ export default async function CurrentListingsPage() {
                       const label = getListingLabel(doc);
                       return (
                         <li key={doc?.$id}>
-                          <Link href={listingHref(doc)} className="text-gray-100 underline" style={{ color: "#e8e8e8" }}>
+                          <Link href={listingHref(doc)} className="underline hover:opacity-80">
                             {title}
                           </Link>
-                          {label ? <span className="text-xs text-gray-400">{"  "}({label})</span> : null}
+                          {label ? (
+                            <span className="text-xs text-muted-foreground">{"  "}({label})</span>
+                          ) : null}
                         </li>
                       );
                     })}
@@ -263,11 +243,9 @@ export default async function CurrentListingsPage() {
               </div>
 
               <div>
-                <h2 className="text-sm font-bold mb-2" style={{ color: ACCENT }}>
-                  Coming next
-                </h2>
+                <h2 className="text-sm font-bold text-primary mb-2">Coming next</h2>
                 {soon.length === 0 ? (
-                  <p className="text-sm text-gray-300">Nothing queued right now.</p>
+                  <p className="text-sm text-muted-foreground">Nothing queued right now.</p>
                 ) : (
                   <ul className="space-y-2 text-sm">
                     {soon.slice(0, 40).map((doc) => {
@@ -275,10 +253,12 @@ export default async function CurrentListingsPage() {
                       const label = getListingLabel(doc);
                       return (
                         <li key={doc?.$id}>
-                          <Link href={listingHref(doc)} className="text-gray-100 underline" style={{ color: "#e8e8e8" }}>
+                          <Link href={listingHref(doc)} className="underline hover:opacity-80">
                             {title}
                           </Link>
-                          {label ? <span className="text-xs text-gray-400">{"  "}({label})</span> : null}
+                          {label ? (
+                            <span className="text-xs text-muted-foreground">{"  "}({label})</span>
+                          ) : null}
                         </li>
                       );
                     })}
@@ -287,15 +267,26 @@ export default async function CurrentListingsPage() {
               </div>
             </div>
 
-            <p className="mt-4 text-xs text-gray-400">
+            <p className="mt-4 text-xs text-muted-foreground">
               Tip: this block helps crawlers discover listings even if scripts are slow. Your full interactive UI is just
               below.
             </p>
+
+            {!DB_ID || !COLLECTION_ID ? (
+              <div className="mt-4 rounded-xl border border-destructive/30 bg-destructive/10 p-3 text-xs">
+                <p className="font-semibold">Config issue</p>
+                <p className="mt-1">
+                  Missing Appwrite LISTINGS env vars. Set{" "}
+                  <code className="font-mono">APPWRITE_LISTINGS_DATABASE_ID</code> and{" "}
+                  <code className="font-mono">APPWRITE_LISTINGS_COLLECTION_ID</code>.
+                </p>
+              </div>
+            ) : null}
           </details>
         </div>
       </section>
 
-      {/* Your existing interactive client UI */}
+      {/* Interactive client UI */}
       <CurrentListingsClient initialLive={live} initialSoon={soon} />
     </>
   );

@@ -113,7 +113,7 @@ export default function HomePage() {
   };
 
   return (
-    <main className="min-h-screen bg-background text-foreground">
+    <div className="min-h-screen bg-background text-foreground">
       {/* Structured data (SEO) */}
       <Script
         id="ld-org"
@@ -148,24 +148,18 @@ export default function HomePage() {
             priority
             sizes="100vw"
             className="object-cover"
-            // 🔧 More visible image
             style={{ opacity: 0.42 }}
           />
 
-          {/* 🔧 Softer vertical fade (doesn’t wash out the whole photo) */}
           <div className="absolute inset-0 bg-gradient-to-b from-background/0 via-background/30 to-background/90" />
-
-          {/* 🔧 Stronger wash behind left-side text, lighter on the right so image shows */}
           <div className="absolute inset-0 bg-gradient-to-r from-background/85 via-background/35 to-transparent" />
 
-          {/* Accent glow (keep subtle) */}
           <div className="absolute -top-28 -left-28 h-80 w-80 rounded-full bg-primary/10 blur-3xl" />
           <div className="absolute -top-36 right-[-10rem] h-[28rem] w-[28rem] rounded-full bg-primary/8 blur-3xl" />
         </div>
 
         <div className="relative mx-auto max-w-6xl px-6 py-16 sm:py-18 lg:py-22">
           <div className="grid lg:grid-cols-12 gap-10 items-start">
-            {/* LEFT */}
             <div className="lg:col-span-7">
               <div className="inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-semibold tracking-wide border border-border bg-card">
                 <span className="text-primary">Weekly auctions</span>
@@ -196,7 +190,10 @@ export default function HomePage() {
                   how it works
                 </Link>{" "}
                 and{" "}
-                <Link href="/fees" className="text-foreground underline hover:opacity-80">
+                <Link
+                  href="/fees"
+                  className="text-foreground underline hover:opacity-80"
+                >
                   fees
                 </Link>
                 .
@@ -248,7 +245,6 @@ export default function HomePage() {
               </p>
             </div>
 
-            {/* RIGHT */}
             <div className="lg:col-span-5 space-y-4">
               <div className="rounded-3xl p-6 sm:p-7 border border-border bg-card shadow-sm">
                 <p className="text-[11px] font-semibold tracking-[0.22em] text-muted-foreground uppercase">
@@ -320,7 +316,11 @@ export default function HomePage() {
                   />
                   <InfoRow
                     label="If it doesn’t sell"
-                    value={<span className="text-muted-foreground">Optional free auto-relist.</span>}
+                    value={
+                      <span className="text-muted-foreground">
+                        Optional free auto-relist.
+                      </span>
+                    }
                   />
                 </div>
 
@@ -358,12 +358,10 @@ export default function HomePage() {
         </div>
       </section>
 
-      {/* Rotating banner section */}
       <section className="border-b border-border">
         <HomeBannerCarousel />
       </section>
 
-      {/* HOW IT WORKS (with antique background texture) */}
       <section className="relative border-b border-border bg-background overflow-hidden">
         <div className="absolute inset-0">
           <Image
@@ -373,11 +371,9 @@ export default function HomePage() {
             fill
             sizes="100vw"
             className="object-cover"
-            // 🔧 More visible image
             style={{ opacity: 0.30 }}
           />
 
-          {/* 🔧 Less aggressive wash so antique photo shows */}
           <div className="absolute inset-0 bg-background/40" />
           <div className="absolute inset-0 bg-gradient-to-r from-background/70 via-background/40 to-transparent" />
         </div>
@@ -422,7 +418,6 @@ export default function HomePage() {
         </div>
       </section>
 
-      {/* TRUST / POSITIONING */}
       <section className="py-16 px-6">
         <div className="max-w-4xl mx-auto rounded-3xl p-8 sm:p-10 border border-border bg-card shadow-sm text-center">
           <h2 className="text-3xl font-bold">A calmer, safer way to trade camera gear</h2>
@@ -463,7 +458,6 @@ export default function HomePage() {
         </div>
       </section>
 
-      {/* FAQ (on-page) */}
       <section className="border-t border-border bg-background">
         <div className="max-w-4xl mx-auto px-6 py-16">
           <h2 className="text-3xl font-bold text-center">Quick answers</h2>
@@ -504,7 +498,7 @@ export default function HomePage() {
       </section>
 
       <div className="h-10" />
-    </main>
+    </div>
   );
 }
 

@@ -11,13 +11,13 @@ type BannerItem = {
 
 const BANNERS: BannerItem[] = [
   {
-    title: "Free to list. Pay only when your plate sells.",
+    title: "Free to list. Pay only when your item sells.",
     subtitle:
       "No listing fees, no subscriptions — just a success fee when the auction completes.",
     tag: "SELL WITH CLARITY",
   },
   {
-    title: "Secure card payments via Stripe.",
+    title: "Secure payments via Stripe.",
     subtitle:
       "We never store card details. Payments are encrypted and processed by Stripe.",
     tag: "SECURE PAYMENTS",
@@ -25,14 +25,14 @@ const BANNERS: BannerItem[] = [
   {
     title: "Weekly auctions, run on a fixed schedule.",
     subtitle:
-      "Auctions run Monday 01:00 to Sunday 23:00 — so buyers know when to bid and sellers know when it ends.",
+      "Auctions run Monday 01:00 to Sunday 23:00 (UK time) — buyers know when to bid and sellers know when it ends.",
     tag: "WEEKLY AUCTIONS",
   },
   {
-    title: "Transfer handled on your behalf after sale.",
+    title: "Straightforward handover after sale.",
     subtitle:
-      "Once a plate sells, we manage the DVLA-style transfer process and keep both sides updated.",
-    tag: "TRANSFER HANDLED",
+      "Seller confirms dispatch/collection details, buyer confirms receipt — we keep both sides updated until complete.",
+    tag: "AFTER SALE",
   },
 ];
 
@@ -47,7 +47,10 @@ export default function HomeBannerCarousel() {
 
   const intervalRef = useRef<number | null>(null);
 
-  const canAutoPlay = useMemo(() => count > 1 && !paused && !reduceMotion, [count, paused, reduceMotion]);
+  const canAutoPlay = useMemo(
+    () => count > 1 && !paused && !reduceMotion,
+    [count, paused, reduceMotion]
+  );
 
   const goTo = (i: number) => {
     if (count <= 0) return;
@@ -82,14 +85,14 @@ export default function HomeBannerCarousel() {
   }, []);
 
   return (
-    <section className="bg-black border-t border-b border-gold/25">
+    <section className="bg-background border-t border-b border-border">
       <div className="max-w-6xl mx-auto px-6 py-7 flex flex-col md:flex-row items-start md:items-center gap-6">
         {/* Left label / badge */}
         <div className="w-full md:w-1/3">
-          <span className="inline-flex items-center gap-2 rounded-full border border-gold/60 bg-black/70 px-3 py-1 text-[10px] sm:text-xs font-semibold tracking-[0.25em] text-gold uppercase">
-            <span className="text-gold">●</span> Key details
+          <span className="inline-flex items-center gap-2 rounded-full border border-border bg-card px-3 py-1 text-[10px] sm:text-xs font-semibold tracking-[0.25em] text-primary uppercase">
+            <span className="text-primary">●</span> Key details
           </span>
-          <p className="mt-2 text-xs sm:text-sm text-gray-300 max-w-xs leading-relaxed">
+          <p className="mt-2 text-xs sm:text-sm text-muted-foreground max-w-xs leading-relaxed">
             The essentials — clear, factual, and consistent with how the platform works.
           </p>
         </div>
@@ -97,14 +100,14 @@ export default function HomeBannerCarousel() {
         {/* Right rotating content */}
         <div className="w-full md:w-2/3">
           <div
-            className="relative overflow-hidden rounded-2xl bg-black/80 border border-gold/35 px-4 sm:px-6 py-4 sm:py-5 shadow-2xl"
+            className="relative overflow-hidden rounded-2xl bg-card border border-border px-4 sm:px-6 py-4 sm:py-5 shadow-sm"
             onMouseEnter={() => setPaused(true)}
             onMouseLeave={() => setPaused(false)}
             onFocusCapture={() => setPaused(true)}
             onBlurCapture={() => setPaused(false)}
           >
             {/* subtle top glow */}
-            <div className="pointer-events-none absolute inset-0 bg-gradient-to-br from-gold/10 via-transparent to-transparent" />
+            <div className="pointer-events-none absolute inset-0 bg-gradient-to-br from-primary/10 via-transparent to-transparent" />
 
             {/* Controls */}
             <div className="absolute top-3 right-3 flex items-center gap-2">
@@ -112,7 +115,7 @@ export default function HomeBannerCarousel() {
                 type="button"
                 onClick={prev}
                 aria-label="Previous banner"
-                className="rounded-lg border border-white/10 bg-black/40 px-2.5 py-1.5 text-white/80 hover:text-white hover:bg-white/10 transition"
+                className="rounded-lg border border-border bg-background/60 px-2.5 py-1.5 text-foreground/80 hover:text-foreground hover:bg-accent transition"
               >
                 ‹
               </button>
@@ -120,7 +123,7 @@ export default function HomeBannerCarousel() {
                 type="button"
                 onClick={next}
                 aria-label="Next banner"
-                className="rounded-lg border border-white/10 bg-black/40 px-2.5 py-1.5 text-white/80 hover:text-white hover:bg-white/10 transition"
+                className="rounded-lg border border-border bg-background/60 px-2.5 py-1.5 text-foreground/80 hover:text-foreground hover:bg-accent transition"
               >
                 ›
               </button>
@@ -136,13 +139,13 @@ export default function HomeBannerCarousel() {
                   exit={reduceMotion ? { opacity: 1 } : { opacity: 0, y: -8 }}
                   transition={{ duration: 0.28, ease: "easeOut" }}
                 >
-                  <p className="text-[11px] sm:text-xs font-semibold text-gold tracking-[0.25em] uppercase mb-2">
+                  <p className="text-[11px] sm:text-xs font-semibold text-primary tracking-[0.25em] uppercase mb-2">
                     {current.tag}
                   </p>
-                  <h3 className="text-base sm:text-lg md:text-xl font-bold text-white mb-1">
+                  <h3 className="text-base sm:text-lg md:text-xl font-bold text-foreground mb-1">
                     {current.title}
                   </h3>
-                  <p className="text-xs sm:text-sm text-gray-200 leading-relaxed">
+                  <p className="text-xs sm:text-sm text-muted-foreground leading-relaxed">
                     {current.subtitle}
                   </p>
                 </motion.div>
@@ -163,7 +166,7 @@ export default function HomeBannerCarousel() {
                       aria-current={active ? "true" : "false"}
                       className={[
                         "h-2 rounded-full transition-all",
-                        active ? "w-6 bg-gold" : "w-2 bg-gray-600 hover:bg-gray-500",
+                        active ? "w-6 bg-primary" : "w-2 bg-border hover:bg-muted-foreground/40",
                       ].join(" ")}
                     />
                   );
@@ -171,7 +174,7 @@ export default function HomeBannerCarousel() {
               </div>
 
               {/* tiny status */}
-              <p className="text-[10px] sm:text-xs text-gray-400">
+              <p className="text-[10px] sm:text-xs text-muted-foreground">
                 {index + 1}/{count}
                 {paused ? " • paused" : ""}
               </p>
@@ -181,10 +184,10 @@ export default function HomeBannerCarousel() {
             {!reduceMotion && count > 1 && !paused && (
               <motion.div
                 key={`bar-${index}`}
-                className="mt-3 h-1 w-full rounded-full bg-white/10 overflow-hidden"
+                className="mt-3 h-1 w-full rounded-full bg-border/60 overflow-hidden"
               >
                 <motion.div
-                  className="h-full bg-gold"
+                  className="h-full bg-primary"
                   initial={{ width: "0%" }}
                   animate={{ width: "100%" }}
                   transition={{ duration: 6.5, ease: "linear" }}

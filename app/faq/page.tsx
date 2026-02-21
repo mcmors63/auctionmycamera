@@ -238,7 +238,6 @@ const CATEGORY_ORDER = [
 ];
 
 export default function FaqPage() {
-  // SEO: FAQ schema (good for search features when eligible)
   const jsonLd = {
     "@context": "https://schema.org",
     "@type": "FAQPage",
@@ -252,30 +251,29 @@ export default function FaqPage() {
   const categories = CATEGORY_ORDER.filter((c) => FAQS.some((f) => f.category === c));
 
   return (
-    <main className="min-h-screen bg-slate-950 py-10 px-4 text-slate-100">
-      <div className="max-w-4xl mx-auto bg-slate-900/40 rounded-2xl shadow-lg border border-white/10 p-6 md:p-8 space-y-8">
-        <script
-          type="application/ld+json"
-          dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
-        />
+    <div className="min-h-screen bg-background text-foreground py-10 px-4">
+      <div className="max-w-4xl mx-auto rounded-3xl border border-border bg-card shadow-sm p-6 md:p-8 space-y-8">
+        <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }} />
 
         <header className="space-y-2">
-          <h1 className="text-3xl md:text-4xl font-extrabold text-sky-300">
-            Frequently Asked Questions
+          <h1 className="text-3xl md:text-4xl font-extrabold">
+            Frequently Asked <span className="text-gold">Questions</span>
           </h1>
-          <p className="text-slate-300 text-sm md:text-base">
+          <p className="text-muted-foreground text-sm md:text-base">
             Longer, clearer answers — because “trust me bro” isn’t a policy.
           </p>
         </header>
 
         {/* Jump links */}
-        <nav className="rounded-xl border border-white/10 bg-black/30 p-4">
-          <p className="text-xs font-semibold tracking-wide text-slate-300 mb-2">
-            Jump to:
-          </p>
+        <nav className="rounded-2xl border border-border bg-background p-5">
+          <p className="text-[11px] font-semibold tracking-wide text-muted-foreground uppercase mb-2">Jump to</p>
           <div className="flex flex-wrap gap-x-4 gap-y-2 text-sm">
             {categories.map((c) => (
-              <a key={c} href={`#${slugify(c)}`} className="underline text-sky-300 hover:text-sky-200">
+              <a
+                key={c}
+                href={`#${slugify(c)}`}
+                className="underline text-primary hover:opacity-80"
+              >
                 {c}
               </a>
             ))}
@@ -284,57 +282,47 @@ export default function FaqPage() {
 
         {/* FAQ groups */}
         {categories.map((cat) => (
-          <section key={cat} id={slugify(cat)} className="space-y-3">
-            <h2 className="text-xl md:text-2xl font-bold text-sky-300">
-              {cat}
-            </h2>
+          <section key={cat} id={slugify(cat)} className="space-y-3 scroll-mt-24">
+            <h2 className="text-xl md:text-2xl font-bold">{cat}</h2>
 
             <div className="space-y-3">
               {FAQS.filter((f) => f.category === cat).map((f) => (
-                <details
-                  key={f.id}
-                  id={f.id}
-                  className="rounded-xl border border-white/10 bg-black/30 p-4"
-                >
-                  <summary className="cursor-pointer select-none font-semibold text-slate-100">
-                    {f.q}
-                  </summary>
-                  <p className="mt-3 text-sm leading-relaxed text-slate-300">
-                    {f.a}
-                  </p>
+                <details key={f.id} id={f.id} className="rounded-2xl border border-border bg-background p-5">
+                  <summary className="cursor-pointer select-none font-semibold">{f.q}</summary>
+                  <p className="mt-3 text-sm leading-relaxed text-muted-foreground">{f.a}</p>
                 </details>
               ))}
             </div>
           </section>
         ))}
 
-        <div className="rounded-xl border border-white/10 bg-black/30 p-4 text-xs text-slate-400">
+        <div className="rounded-2xl border border-border bg-background p-5 text-xs text-muted-foreground">
           <p>
-            <strong className="text-sky-300">Brand note:</strong> AuctionMyCamera is an independent marketplace and is not
-            affiliated with or endorsed by any camera manufacturer. Brand names are used only to describe items listed
-            by sellers.
+            <span className="text-foreground font-semibold">Brand note:</span> AuctionMyCamera is an independent
+            marketplace and is not affiliated with or endorsed by any camera manufacturer. Brand names are used only to
+            describe items listed by sellers.
           </p>
         </div>
 
-        <div className="border-t border-white/10 pt-6 flex flex-wrap gap-x-4 gap-y-2 text-sm text-slate-300">
-          <Link href="/how-it-works" className="underline text-sky-300">
+        <div className="border-t border-border pt-6 flex flex-wrap gap-x-4 gap-y-2 text-sm text-muted-foreground">
+          <Link href="/how-it-works" className="underline text-primary hover:opacity-80">
             How it works
           </Link>
-          <span className="text-white/20">·</span>
-          <Link href="/fees" className="underline text-sky-300">
+          <span className="text-muted-foreground/40">·</span>
+          <Link href="/fees" className="underline text-primary hover:opacity-80">
             Fees
           </Link>
-          <span className="text-white/20">·</span>
-          <Link href="/terms" className="underline text-sky-300">
+          <span className="text-muted-foreground/40">·</span>
+          <Link href="/terms" className="underline text-primary hover:opacity-80">
             Terms
           </Link>
-          <span className="text-white/20">·</span>
-          <Link href="/contact" className="underline text-sky-300">
+          <span className="text-muted-foreground/40">·</span>
+          <Link href="/contact" className="underline text-primary hover:opacity-80">
             Contact
           </Link>
         </div>
       </div>
-    </main>
+    </div>
   );
 }
 
