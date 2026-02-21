@@ -56,6 +56,7 @@ const PROFILES_COLLECTION_ID =
 
 function getProfilesDbOrNull() {
   if (!endpoint || !projectId || !apiKey || !PROFILES_DB_ID || !PROFILES_COLLECTION_ID) return null;
+
   const c = new Client().setEndpoint(endpoint).setProject(projectId).setKey(apiKey);
   return { databases: new Databases(c) };
 }
@@ -172,42 +173,26 @@ function getTransporter() {
 
 // -----------------------------
 // Auth helpers (JWT required)
-// Accepts either:
-// - Authorization: Bearer <jwt>   (your frontend)
-// - X-Appwrite-JWT: <jwt>         (common Appwrite style)
 // -----------------------------
-function getJwtFromReq(req: Request) {
+function getBearer(req: Request) {
   const auth = req.headers.get("authorization") || "";
   const m = auth.match(/^Bearer\s+(.+)$/i);
-  const bearer = m?.[1]?.trim() || "";
-  if (bearer) return bearer;
-
-  const xJwt = (req.headers.get("x-appwrite-jwt") || "").trim();
-  if (xJwt) return xJwt;
-
-  return "";
+  return m?.[1]?.trim() || "";
 }
 
 async function requireAuthedUser(req: Request) {
-  const jwt = getJwtFromReq(req);
-
+  const jwt = getBearer(req);
   if (!jwt) {
     return {
       ok: false as const,
-      res: NextResponse.json(
-        { error: "Not authenticated.", code: "missing_jwt" },
-        { status: 401 }
-      ),
+      res: NextResponse.json({ error: "Not authenticated." }, { status: 401 }),
     };
   }
 
   if (!endpoint || !projectId) {
     return {
       ok: false as const,
-      res: NextResponse.json(
-        { error: "Server missing Appwrite config.", code: "server_missing_appwrite" },
-        { status: 500 }
-      ),
+      res: NextResponse.json({ error: "Server missing Appwrite config." }, { status: 500 }),
     };
   }
 
@@ -216,22 +201,11 @@ async function requireAuthedUser(req: Request) {
     const account = new Account(sessionClient);
     const user = await account.get();
     return { ok: true as const, user };
-  } catch (e: any) {
-    // Safe breadcrumbs (no secrets):
-    console.warn("[place-bid] auth failed:", {
-      message: e?.message,
-      code: e?.code,
-      type: e?.type,
-      endpointSet: Boolean(endpoint),
-      projectIdSet: Boolean(projectId),
-    });
-
+  } catch (e) {
+    console.warn("[place-bid] auth failed:", e);
     return {
       ok: false as const,
-      res: NextResponse.json(
-        { error: "Not authenticated.", code: "auth_failed" },
-        { status: 401 }
-      ),
+      res: NextResponse.json({ error: "Not authenticated." }, { status: 401 }),
     };
   }
 }
@@ -262,7 +236,7 @@ async function sendBidEmails(options: { listing: Listing; bidAmount: number; bid
   const transporter = getTransporter();
   if (!transporter) return;
 
-  const reg = listing.registration || "your item";
+  const reg = listing.registration || "your number plate";
   const amountLabel = `£${bidAmount.toLocaleString("en-GB", {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
@@ -302,13 +276,13 @@ async function sendBidEmails(options: { listing: Listing; bidAmount: number; bid
     await transporter.sendMail({
       from: EMAIL_FROM,
       to: sellerEmail,
-      subject: `New bid on your listing ${reg}`,
+      subject: `New bid on your number plate ${reg}`,
       text: [
-        `A new bid has been placed on your listing ${reg}.`,
+        `A new bid has been placed on your number plate ${reg}.`,
         "",
         `Bid amount: ${amountLabel}`,
         "",
-        `Log in to view the current bids and auction status.`,
+        `You can log in to AuctionMyPlate to see the current bids and auction status.`,
       ].join("\n"),
     });
   } catch (err) {
@@ -333,7 +307,7 @@ function getBidIncrement(current: number): number {
 // -----------------------------
 // POST /api/place-bid
 // Body: { listingId, amount }
-// Auth: Authorization: Bearer <Appwrite JWT>  OR  X-Appwrite-JWT: <jwt>
+// Auth: Authorization: Bearer <Appwrite JWT>
 // -----------------------------
 export async function POST(req: Request) {
   try {
@@ -353,14 +327,17 @@ export async function POST(req: Request) {
     const bidderId = (auth.user as any)?.$id as string | undefined;
 
     if (!bidderEmail || !bidderId) {
-      return NextResponse.json({ error: "Not authenticated.", code: "no_user" }, { status: 401 });
+      return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
     }
 
     // ✅ REQUIRE A SAVED CARD BEFORE BIDDING
     const pm = await hasSavedCardForEmail(bidderEmail);
     if (!pm.has) {
       return NextResponse.json(
-        { error: "You must add a card before you can bid.", code: "no_payment_method" },
+        {
+          error: "You must add a card before you can bid.",
+          code: "no_payment_method",
+        },
         { status: 403 }
       );
     }
@@ -373,19 +350,25 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Missing listingId or amount." }, { status: 400 });
     }
 
-    const bidAmount = typeof amountRaw === "string" ? parseFloat(amountRaw) : Number(amountRaw);
+    const bidAmount =
+      typeof amountRaw === "string" ? parseFloat(amountRaw) : Number(amountRaw);
+
     if (!Number.isFinite(bidAmount) || bidAmount <= 0) {
       return NextResponse.json({ error: "Invalid bid amount." }, { status: 400 });
     }
 
+    // -----------------------------
     // Load listing
+    // -----------------------------
     const listing = (await databases.getDocument(DB_ID, PLATES_COLLECTION, listingId)) as unknown as Listing;
 
     if (!listing || (listing.status || "").toLowerCase() !== "live") {
       return NextResponse.json({ error: "Auction is not live." }, { status: 400 });
     }
 
+    // -----------------------------
     // Soft close
+    // -----------------------------
     const now = new Date();
     const nowMs = now.getTime();
     const auctionEnd = listing.auction_end ?? listing.end_time ?? null;
@@ -413,7 +396,9 @@ export async function POST(req: Request) {
       }
     }
 
+    // -----------------------------
     // Minimum allowed bid
+    // -----------------------------
     const effectiveBaseBid =
       listing.current_bid != null ? Number(listing.current_bid) : Number(listing.starting_price ?? 0);
 
@@ -427,7 +412,9 @@ export async function POST(req: Request) {
       );
     }
 
+    // -----------------------------
     // Create bid history doc (non-fatal if fails)
+    // -----------------------------
     let bidDoc: any = null;
 
     if (BIDS_COLLECTION) {
@@ -444,7 +431,9 @@ export async function POST(req: Request) {
       }
     }
 
+    // -----------------------------
     // Update listing
+    // -----------------------------
     const newBidsCount = typeof listing.bids === "number" ? listing.bids + 1 : 1;
 
     const updatePayload: Record<string, any> = {
@@ -456,7 +445,9 @@ export async function POST(req: Request) {
       last_bid_time: now.toISOString(),
     };
 
-    if (newAuctionEnd) updatePayload.auction_end = newAuctionEnd;
+    if (newAuctionEnd) {
+      updatePayload.auction_end = newAuctionEnd;
+    }
 
     const updatedListing = await databases.updateDocument(DB_ID, PLATES_COLLECTION, listing.$id, updatePayload);
 
