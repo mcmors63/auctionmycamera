@@ -15,12 +15,17 @@ const projectId =
   process.env.APPWRITE_PROJECT_ID || process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID || "";
 const apiKey = process.env.APPWRITE_API_KEY || "";
 
+// ✅ IMPORTANT: use LISTINGS if present, otherwise fall back to old PLATES env
 const DB_ID =
+  process.env.APPWRITE_LISTINGS_DATABASE_ID ||
+  process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID ||
   process.env.APPWRITE_PLATES_DATABASE_ID ||
   process.env.NEXT_PUBLIC_APPWRITE_PLATES_DATABASE_ID ||
   "";
 
-const PLATES_COLLECTION =
+const LISTINGS_COLLECTION =
+  process.env.APPWRITE_LISTINGS_COLLECTION_ID ||
+  process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_COLLECTION_ID ||
   process.env.APPWRITE_PLATES_COLLECTION_ID ||
   process.env.NEXT_PUBLIC_APPWRITE_PLATES_COLLECTION_ID ||
   "";
@@ -71,7 +76,6 @@ async function findProfileByEmail(aw: Databases, email: string) {
 
 async function hasSavedCardForEmail(email: string): Promise<{ has: boolean; customerId?: string | null }> {
   if (!stripe) {
-    // If Stripe isn't configured, safest is to BLOCK bidding (otherwise you'd accept bids you can't charge later)
     return { has: false, customerId: null };
   }
 
@@ -79,7 +83,6 @@ async function hasSavedCardForEmail(email: string): Promise<{ has: boolean; cust
   let profile: any | null = null;
   let stripeCustomerId: string | null = null;
 
-  // 1) Try cached stripe_customer_id
   if (aw) {
     try {
       profile = await findProfileByEmail(aw.databases, email);
@@ -94,7 +97,6 @@ async function hasSavedCardForEmail(email: string): Promise<{ has: boolean; cust
     return pm.data.length > 0;
   };
 
-  // 2) Validate cached customer
   if (stripeCustomerId) {
     try {
       const ok = await hasCard(stripeCustomerId);
@@ -104,13 +106,11 @@ async function hasSavedCardForEmail(email: string): Promise<{ has: boolean; cust
     }
   }
 
-  // 3) Fallback: find customers by email
   const customers = await stripe.customers.list({ email, limit: 10 });
   for (const c of customers.data) {
     try {
       const ok = await hasCard(c.id);
       if (ok) {
-        // Sync back to profile if we can
         if (aw && profile?.$id && profile.stripe_customer_id !== c.id) {
           try {
             await aw.databases.updateDocument(PROFILES_DB_ID, PROFILES_COLLECTION_ID, profile.$id, {
@@ -131,7 +131,7 @@ async function hasSavedCardForEmail(email: string): Promise<{ has: boolean; cust
 }
 
 // -----------------------------
-// Email setup (re-uses global SMTP env)
+// Email setup
 // -----------------------------
 const SMTP_HOST = process.env.SMTP_HOST || "";
 const SMTP_PORT = Number(process.env.SMTP_PORT || "587");
@@ -145,7 +145,6 @@ const EMAIL_FROM =
   process.env.CONTACT_FROM_EMAIL ||
   "";
 
-// lazy-created transporter so we don't create it on every request
 let mailTransporter: nodemailer.Transporter | null = null;
 
 function getTransporter() {
@@ -216,7 +215,12 @@ async function requireAuthedUser(req: Request) {
 type Listing = {
   $id: string;
   status?: string;
+
+  item_title?: string | null;
+  brand?: string | null;
+  model?: string | null;
   registration?: string;
+
   current_bid?: number | null;
   starting_price?: number | null;
   bids?: number | null;
@@ -236,7 +240,12 @@ async function sendBidEmails(options: { listing: Listing; bidAmount: number; bid
   const transporter = getTransporter();
   if (!transporter) return;
 
-  const reg = listing.registration || "your number plate";
+  const title =
+    (listing.item_title || "").trim() ||
+    [listing.brand, listing.model].filter(Boolean).join(" ").trim() ||
+    listing.registration ||
+    "your listing";
+
   const amountLabel = `£${bidAmount.toLocaleString("en-GB", {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
@@ -249,14 +258,13 @@ async function sendBidEmails(options: { listing: Listing; bidAmount: number; bid
     listing.ownerEmail ||
     null;
 
-  // Bidder confirmation
   try {
     await transporter.sendMail({
       from: EMAIL_FROM,
       to: bidderEmail,
-      subject: `Bid placed on ${reg}: ${amountLabel}`,
+      subject: `Bid placed on ${title}: ${amountLabel}`,
       text: [
-        `Thank you for your bid on ${reg}.`,
+        `Thank you for your bid on ${title}.`,
         "",
         `Bid amount: ${amountLabel}`,
         "",
@@ -271,18 +279,17 @@ async function sendBidEmails(options: { listing: Listing; bidAmount: number; bid
 
   if (!sellerEmail) return;
 
-  // Seller notification
   try {
     await transporter.sendMail({
       from: EMAIL_FROM,
       to: sellerEmail,
-      subject: `New bid on your number plate ${reg}`,
+      subject: `New bid on your listing: ${title}`,
       text: [
-        `A new bid has been placed on your number plate ${reg}.`,
+        `A new bid has been placed on: ${title}.`,
         "",
         `Bid amount: ${amountLabel}`,
         "",
-        `You can log in to AuctionMyPlate to see the current bids and auction status.`,
+        `Log in to view the current bids and auction status.`,
       ].join("\n"),
     });
   } catch (err) {
@@ -311,15 +318,13 @@ function getBidIncrement(current: number): number {
 // -----------------------------
 export async function POST(req: Request) {
   try {
-    // Server sanity
-    if (!databases || !DB_ID || !PLATES_COLLECTION) {
+    if (!databases || !DB_ID || !LISTINGS_COLLECTION) {
       return NextResponse.json(
         { error: "Server configuration missing (Appwrite DB/collections)." },
         { status: 500 }
       );
     }
 
-    // Require logged-in user
     const auth = await requireAuthedUser(req);
     if (!auth.ok) return auth.res;
 
@@ -330,7 +335,6 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
     }
 
-    // ✅ REQUIRE A SAVED CARD BEFORE BIDDING
     const pm = await hasSavedCardForEmail(bidderEmail);
     if (!pm.has) {
       return NextResponse.json(
@@ -350,25 +354,20 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Missing listingId or amount." }, { status: 400 });
     }
 
-    const bidAmount =
-      typeof amountRaw === "string" ? parseFloat(amountRaw) : Number(amountRaw);
+    const bidAmount = typeof amountRaw === "string" ? parseFloat(amountRaw) : Number(amountRaw);
 
     if (!Number.isFinite(bidAmount) || bidAmount <= 0) {
       return NextResponse.json({ error: "Invalid bid amount." }, { status: 400 });
     }
 
-    // -----------------------------
     // Load listing
-    // -----------------------------
-    const listing = (await databases.getDocument(DB_ID, PLATES_COLLECTION, listingId)) as unknown as Listing;
+    const listing = (await databases.getDocument(DB_ID, LISTINGS_COLLECTION, listingId)) as unknown as Listing;
 
     if (!listing || (listing.status || "").toLowerCase() !== "live") {
       return NextResponse.json({ error: "Auction is not live." }, { status: 400 });
     }
 
-    // -----------------------------
     // Soft close
-    // -----------------------------
     const now = new Date();
     const nowMs = now.getTime();
     const auctionEnd = listing.auction_end ?? listing.end_time ?? null;
@@ -396,9 +395,7 @@ export async function POST(req: Request) {
       }
     }
 
-    // -----------------------------
     // Minimum allowed bid
-    // -----------------------------
     const effectiveBaseBid =
       listing.current_bid != null ? Number(listing.current_bid) : Number(listing.starting_price ?? 0);
 
@@ -412,9 +409,7 @@ export async function POST(req: Request) {
       );
     }
 
-    // -----------------------------
     // Create bid history doc (non-fatal if fails)
-    // -----------------------------
     let bidDoc: any = null;
 
     if (BIDS_COLLECTION) {
@@ -431,9 +426,7 @@ export async function POST(req: Request) {
       }
     }
 
-    // -----------------------------
     // Update listing
-    // -----------------------------
     const newBidsCount = typeof listing.bids === "number" ? listing.bids + 1 : 1;
 
     const updatePayload: Record<string, any> = {
@@ -449,7 +442,7 @@ export async function POST(req: Request) {
       updatePayload.auction_end = newAuctionEnd;
     }
 
-    const updatedListing = await databases.updateDocument(DB_ID, PLATES_COLLECTION, listing.$id, updatePayload);
+    const updatedListing = await databases.updateDocument(DB_ID, LISTINGS_COLLECTION, listing.$id, updatePayload);
 
     // Emails (non-fatal)
     try {

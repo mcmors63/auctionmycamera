@@ -36,17 +36,34 @@ const client = new Client()
 const db = new Databases(client);
 const account = new Account(client);
 
-const PLATES_DB = process.env.NEXT_PUBLIC_APPWRITE_PLATES_DATABASE_ID!;
-const PLATES_COLLECTION = process.env.NEXT_PUBLIC_APPWRITE_PLATES_COLLECTION_ID!;
+// ✅ IMPORTANT: use LISTINGS if present, otherwise fall back to old PLATES env
+const LISTINGS_DB =
+  process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID ||
+  process.env.NEXT_PUBLIC_APPWRITE_PLATES_DATABASE_ID ||
+  "";
+
+const LISTINGS_COLLECTION =
+  process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_COLLECTION_ID ||
+  process.env.NEXT_PUBLIC_APPWRITE_PLATES_COLLECTION_ID ||
+  "";
 
 // ----------------------------------------------------
 // TYPES
 // ----------------------------------------------------
 type Listing = {
   $id: string;
-  registration?: string;
+
+  // camera listings may use different naming, keep both to avoid crashing
+  registration?: string; // legacy/plate UI
+  reg_number?: string | null;
+
+  item_title?: string | null;
+  brand?: string | null;
+  model?: string | null;
+
   listing_id?: string;
   status?: string;
+
   current_bid?: number | null;
   starting_price?: number | null;
   bids?: number | null;
@@ -173,14 +190,12 @@ export default function PlaceBidPage() {
         await account.get();
         setLoggedIn(true);
 
-        // Create a short-lived JWT for server routes that must be authenticated
         const jwt = await account.createJWT();
         setJwtToken(jwt.jwt);
       } catch {
         setLoggedIn(false);
         setJwtToken(null);
 
-        // Clear stale keys if you had them before
         if (typeof window !== "undefined") {
           window.localStorage.removeItem("amp_user_email");
           window.localStorage.removeItem("amp_user_id");
@@ -215,14 +230,13 @@ export default function PlaceBidPage() {
         });
 
         const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(data.error || "Could not verify your payment method.");
+        if (!res.ok) throw new Error((data as any).error || "Could not verify your payment method.");
 
         setHasPaymentMethod(Boolean((data as any).hasPaymentMethod));
       } catch (err: any) {
         console.error("has-payment-method error:", err);
         const msg = err?.message || "Could not verify your payment method.";
 
-        // If Stripe isn't configured, don't hard-block UI here (but server will still enforce on bid).
         if (msg.includes("Stripe is not configured on the server")) {
           setPaymentMethodError(null);
           setHasPaymentMethod(null);
@@ -239,7 +253,7 @@ export default function PlaceBidPage() {
   }, [loggedIn, jwtToken]);
 
   // ----------------------------------------------------
-  // LOAD LISTING
+  // LOAD LISTING  ✅ now uses LISTINGS DB/COLLECTION
   // ----------------------------------------------------
   useEffect(() => {
     if (!listingId) {
@@ -248,7 +262,13 @@ export default function PlaceBidPage() {
       return;
     }
 
-    db.getDocument(PLATES_DB, PLATES_COLLECTION, listingId)
+    if (!LISTINGS_DB || !LISTINGS_COLLECTION) {
+      setError("Server is missing NEXT_PUBLIC_APPWRITE_LISTINGS_* env vars.");
+      setLoading(false);
+      return;
+    }
+
+    db.getDocument(LISTINGS_DB, LISTINGS_COLLECTION, listingId)
       .then((doc) => setListing(doc as Listing))
       .catch(() => setError("Listing not found."))
       .finally(() => setLoading(false));
@@ -311,7 +331,7 @@ export default function PlaceBidPage() {
   const isComingStatus = listing.status === "queued";
   const isSoldStatus = listing.status === "sold";
 
-  const displayId = listing.listing_id || `AMP-${listing.$id.slice(-6).toUpperCase()}`;
+  const displayId = listing.listing_id || `AMC-${listing.$id.slice(-6).toUpperCase()}`;
 
   const auctionStart = listing.auction_start ?? listing.start_time ?? null;
   const auctionEnd = listing.auction_end ?? listing.end_time ?? null;
@@ -325,7 +345,6 @@ export default function PlaceBidPage() {
   const isSoldForDisplay = isSoldStatus || (auctionEnded && reserveMet);
 
   const canBidOrBuyNow = isLiveStatus && !auctionEnded;
-
   const canShowBuyNow = buyNowPrice !== null && canBidOrBuyNow && effectiveBaseBid < buyNowPrice;
 
   let timerLabel: string;
@@ -339,6 +358,14 @@ export default function PlaceBidPage() {
   const paymentBlocked =
     loggedIn && !checkingPaymentMethod && hasPaymentMethod === false && !paymentMethodError;
 
+  // ✅ Use a sensible title for cameras if present
+  const title =
+    (listing.item_title || "").trim() ||
+    [listing.brand, listing.model].filter(Boolean).join(" ").trim() ||
+    listing.registration ||
+    listing.reg_number ||
+    "Listing";
+
   // ----------------------------------------------------
   // HANDLE BID
   // ----------------------------------------------------
@@ -347,13 +374,12 @@ export default function PlaceBidPage() {
     setSuccess(null);
 
     if (!loggedIn || !jwtToken) {
-      // UX: push them to login and return them here
       router.push(loginHref);
       return;
     }
 
     if (!vehicleNoticeAccepted) {
-      setError("Please confirm you have read the DVLA notice before placing a bid.");
+      setError("Please confirm you have read the notice before placing a bid.");
       return;
     }
 
@@ -396,7 +422,6 @@ export default function PlaceBidPage() {
       const data = await res.json().catch(() => ({} as any));
 
       if (!res.ok) {
-        // Clean UX routing for the two main auth/gate cases:
         if (res.status === 401) {
           router.push(loginHref);
           return;
@@ -421,7 +446,7 @@ export default function PlaceBidPage() {
   };
 
   // ----------------------------------------------------
-  // HANDLE BUY NOW (left as-is, already uses jwtToken + redirects if paymentBlocked)
+  // HANDLE BUY NOW
   // ----------------------------------------------------
   const handleBuyNow = async () => {
     setError(null);
@@ -433,7 +458,7 @@ export default function PlaceBidPage() {
     }
 
     if (!vehicleNoticeAccepted) {
-      setError("Please confirm you have read the DVLA notice before using Buy Now.");
+      setError("Please confirm you have read the notice before using Buy Now.");
       return;
     }
 
@@ -452,13 +477,11 @@ export default function PlaceBidPage() {
       return;
     }
 
-    const regLabel = listing.registration || displayId;
-
     const confirmMessage = buyerPaysTransferFee
-      ? `Are you sure you want to use Buy Now and purchase ${regLabel} for £${buyNowPrice.toLocaleString()}?\n\nAn £${DVLA_FEE_GBP.toFixed(
+      ? `Are you sure you want to use Buy Now for £${buyNowPrice.toLocaleString()}?\n\nAn £${DVLA_FEE_GBP.toFixed(
           2
-        )} DVLA paperwork fee will be added.\nThis will end the auction immediately and commit you to the purchase.`
-      : `Are you sure you want to use Buy Now and purchase ${regLabel} for £${buyNowPrice.toLocaleString()}?\n\nNo additional DVLA paperwork fee will be added at checkout (transfer handling is covered seller-side).\nThis will end the auction immediately and commit you to the purchase.`;
+        )} fee will be added.\nThis will end the auction immediately and commit you to the purchase.`
+      : `Are you sure you want to use Buy Now for £${buyNowPrice.toLocaleString()}?\n\nNo additional £80 fee will be added at checkout.\nThis will end the auction immediately and commit you to the purchase.`;
 
     if (!window.confirm(confirmMessage)) return;
 
@@ -477,8 +500,8 @@ export default function PlaceBidPage() {
         body: JSON.stringify({
           amountInPence,
           description: buyerPaysTransferFee
-            ? `Buy Now - ${regLabel} (incl. £${DVLA_FEE_GBP} DVLA fee)`
-            : `Buy Now - ${regLabel} (DVLA transfer handled seller-side)`,
+            ? `Buy Now - ${title} (incl. £${DVLA_FEE_GBP} fee)`
+            : `Buy Now - ${title}`,
           metadata: {
             listingId: listing.$id,
             type: "buy_now",
@@ -515,9 +538,7 @@ export default function PlaceBidPage() {
 
       if (data.updatedListing) setListing(data.updatedListing);
 
-      setSuccess(
-        "Buy Now successful. Your card has been charged and this listing is now sold. We’ll contact you to complete the transfer."
-      );
+      setSuccess("Buy Now successful. Your card has been charged. We’ll contact you with next steps.");
     } catch (err: any) {
       console.error("Buy Now error:", err);
       setError(err.message || "Buy Now failed.");
@@ -532,10 +553,7 @@ export default function PlaceBidPage() {
   return (
     <div className="min-h-screen bg-black text-gray-100 py-8 px-4">
       <div className="max-w-4xl mx-auto mb-4">
-        <Link
-          href="/current-listings"
-          className="text-sm text-[#FFD500] underline hover:text-yellow-300"
-        >
+        <Link href="/current-listings" className="text-sm text-[#FFD500] underline hover:text-yellow-300">
           ← Back to listings
         </Link>
       </div>
@@ -544,16 +562,17 @@ export default function PlaceBidPage() {
         <div className="relative w-full max-w-3xl mx-auto rounded-xl overflow-hidden shadow-lg bg-black">
           <Image
             src="/car-rear.jpg"
-            alt={`Rear of car with registration ${listing.registration || ""}`}
+            alt={title}
             width={1600}
             height={1067}
             className="w-full h-auto block"
             priority
           />
 
+          {/* still using your existing plate overlay for now */}
           <div className="absolute left-1/2 -translate-x-1/2" style={{ bottom: "29%" }}>
             <div style={{ transform: "scale(0.42)", transformOrigin: "center bottom" }}>
-              <NumberPlate reg={listing.registration || ""} size="large" variant="rear" showBlueBand />
+              <NumberPlate reg={title} size="large" variant="rear" showBlueBand />
             </div>
           </div>
         </div>
@@ -566,14 +585,12 @@ export default function PlaceBidPage() {
       <div className="max-w-4xl mx-auto bg-[#111111] rounded-2xl border border-yellow-700 shadow-lg p-6 sm:p-8 space-y-8">
         <div className="mb-4 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex-1 space-y-1">
-            <h1 className="text-xl sm:text-2xl font-bold text-[#FFD500]">
-              {listing?.registration || "Registration"}
-            </h1>
+            <h1 className="text-xl sm:text-2xl font-bold text-[#FFD500]">{title}</h1>
             <p className="text-xs text-gray-400">Auction ID: {listing?.listing_id || listing?.$id}</p>
           </div>
 
           <div className="w-full sm:w-72 flex justify-end">
-            <DvlaPlate registration={listing?.registration || ""} size="large" variant="rear" />
+            <DvlaPlate registration={title} size="large" variant="rear" />
           </div>
         </div>
 
@@ -620,36 +637,19 @@ export default function PlaceBidPage() {
         </div>
 
         <div>
-          <p className="text-xs text-gray-400 uppercase">{timerLabel}</p>
+          <p className="text-xs text-gray-400 uppercase">{
+            auctionEnded ? "AUCTION ENDED" : isLiveStatus ? "AUCTION ENDS IN" : "AUCTION STARTS IN"
+          }</p>
           <div className="inline-block mt-1 px-3 py-2 bg-black border border-yellow-600 rounded-lg shadow-sm font-semibold text-[#FFD500]">
             <LocalAuctionTimer start={auctionStart} end={auctionEnd} status={timerStatus} />
           </div>
         </div>
 
         <div className="bg-[#181818] border border-gray-700 rounded-xl p-6 shadow-sm space-y-4">
-          {buyerPaysTransferFee ? (
-            <p className="text-sm text-gray-200">
-              This listing is in the legacy format: an additional <strong>£80.00</strong> DVLA paperwork fee will be added
-              to the winning bid / Buy Now price for transfer handling.
-            </p>
-          ) : (
-            <div className="space-y-2">
-              <p className="text-sm text-gray-200">
-                Transfer handling is included seller-side for this listing — there is <strong>no additional £80 fee</strong> added
-                at checkout for the buyer.
-              </p>
-              <p className="text-xs text-gray-400">
-                Two plates listed earlier remain on the legacy “buyer pays £80” format. This listing is not one of them.
-              </p>
-            </div>
-          )}
-
           <div className="mt-3 border border-yellow-500 bg-yellow-50 rounded-lg p-3 text-sm text-yellow-900">
             <p className="font-semibold">Important notice</p>
             <p className="mt-1">
-              Please be advised that this plate must go onto a vehicle which is <strong>taxed</strong> and holds a{" "}
-              <strong>current MOT (if required)</strong>. Once the plate is transferred onto a vehicle, the registered keeper
-              will become the legal owner and can then request a retention certificate.
+              Please check the listing details carefully before bidding. All bids are binding.
             </p>
 
             {loggedIn && !vehicleNoticeAccepted && (
@@ -673,7 +673,7 @@ export default function PlaceBidPage() {
 
             {loggedIn && vehicleNoticeAccepted && (
               <p className="mt-2 text-xs text-green-700 font-semibold">
-                Notice accepted for this plate. You won&apos;t be asked again when bidding on this plate from this device.
+                Notice accepted for this listing on this device.
               </p>
             )}
           </div>
