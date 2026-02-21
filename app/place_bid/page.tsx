@@ -150,10 +150,8 @@ export default function PlaceBidPage() {
   const [submitting, setSubmitting] = useState(false);
 
   const [loggedIn, setLoggedIn] = useState(false);
-  const [userEmail, setUserEmail] = useState<string | null>(null);
-  const [userId, setUserId] = useState<string | null>(null);
 
-  // ✅ JWT used to authenticate YOUR Stripe API routes
+  // ✅ JWT used to authenticate server routes that require auth
   const [jwtToken, setJwtToken] = useState<string | null>(null);
 
   const [hasPaymentMethod, setHasPaymentMethod] = useState<boolean | null>(null);
@@ -162,28 +160,27 @@ export default function PlaceBidPage() {
 
   const [vehicleNoticeAccepted, setVehicleNoticeAccepted] = useState(false);
 
+  const nextUrl = listingId ? `/place_bid?id=${encodeURIComponent(listingId)}` : "/current-listings";
+  const paymentMethodHref = `/payment-method?next=${encodeURIComponent(nextUrl)}`;
+  const loginHref = `/login?next=${encodeURIComponent(nextUrl)}`;
+
   // ----------------------------------------------------
-  // LOGIN CHECK (ONLY Appwrite session — NO localStorage “fake login”)
+  // LOGIN CHECK (Appwrite session)
   // ----------------------------------------------------
   useEffect(() => {
     const checkLogin = async () => {
       try {
-        const current = await account.get();
-
+        await account.get();
         setLoggedIn(true);
-        setUserEmail(current.email);
-        setUserId(current.$id);
 
         // Create a short-lived JWT for server routes that must be authenticated
         const jwt = await account.createJWT();
         setJwtToken(jwt.jwt);
       } catch {
         setLoggedIn(false);
-        setUserEmail(null);
-        setUserId(null);
         setJwtToken(null);
 
-        // Also clear stale keys if you had them before
+        // Clear stale keys if you had them before
         if (typeof window !== "undefined") {
           window.localStorage.removeItem("amp_user_email");
           window.localStorage.removeItem("amp_user_id");
@@ -220,11 +217,12 @@ export default function PlaceBidPage() {
         const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data.error || "Could not verify your payment method.");
 
-        setHasPaymentMethod(Boolean(data.hasPaymentMethod));
+        setHasPaymentMethod(Boolean((data as any).hasPaymentMethod));
       } catch (err: any) {
         console.error("has-payment-method error:", err);
         const msg = err?.message || "Could not verify your payment method.";
 
+        // If Stripe isn't configured, don't hard-block UI here (but server will still enforce on bid).
         if (msg.includes("Stripe is not configured on the server")) {
           setPaymentMethodError(null);
           setHasPaymentMethod(null);
@@ -341,9 +339,6 @@ export default function PlaceBidPage() {
   const paymentBlocked =
     loggedIn && !checkingPaymentMethod && hasPaymentMethod === false && !paymentMethodError;
 
-  const nextUrl = `/place_bid?id=${listing.$id}`;
-  const paymentMethodHref = `/payment-method?next=${encodeURIComponent(nextUrl)}`;
-
   // ----------------------------------------------------
   // HANDLE BID
   // ----------------------------------------------------
@@ -351,8 +346,9 @@ export default function PlaceBidPage() {
     setError(null);
     setSuccess(null);
 
-    if (!loggedIn || !userEmail) {
-      setError("You must be logged in to place a bid.");
+    if (!loggedIn || !jwtToken) {
+      // UX: push them to login and return them here
+      router.push(loginHref);
       return;
     }
 
@@ -362,7 +358,7 @@ export default function PlaceBidPage() {
     }
 
     if (paymentBlocked) {
-      setError("You must add a payment method before placing a bid.");
+      router.push(paymentMethodHref);
       return;
     }
 
@@ -372,7 +368,7 @@ export default function PlaceBidPage() {
     }
 
     const amount = parseFloat(bidAmount);
-    if (isNaN(amount)) {
+    if (!Number.isFinite(amount)) {
       setError("Enter a valid number.");
       return;
     }
@@ -387,40 +383,52 @@ export default function PlaceBidPage() {
 
       const res = await fetch("/api/place-bid", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${jwtToken}`,
+        },
         body: JSON.stringify({
           listingId: listing.$id,
           amount,
-          userEmail,
-          userId,
         }),
       });
 
-      const data = await res.json().catch(() => ({}));
+      const data = await res.json().catch(() => ({} as any));
+
       if (!res.ok) {
-        if (data.requiresPaymentMethod) setHasPaymentMethod(false);
-        throw new Error(data.error || "Failed to place bid.");
+        // Clean UX routing for the two main auth/gate cases:
+        if (res.status === 401) {
+          router.push(loginHref);
+          return;
+        }
+
+        if (res.status === 403 && data?.code === "no_payment_method") {
+          router.push(paymentMethodHref);
+          return;
+        }
+
+        throw new Error(data?.error || "Failed to place bid.");
       }
 
       if (data.updatedListing) setListing(data.updatedListing);
       setSuccess("Bid placed successfully!");
       setBidAmount("");
     } catch (err: any) {
-      setError(err.message || "Failed to place bid.");
+      setError(err?.message || "Failed to place bid.");
     } finally {
       setSubmitting(false);
     }
   };
 
   // ----------------------------------------------------
-  // HANDLE BUY NOW (AUTH REQUIRED FOR STRIPE + BUY-NOW ROUTE)
+  // HANDLE BUY NOW (left as-is, already uses jwtToken + redirects if paymentBlocked)
   // ----------------------------------------------------
   const handleBuyNow = async () => {
     setError(null);
     setSuccess(null);
 
-    if (!loggedIn || !userEmail || !jwtToken) {
-      setError("You must be logged in to use Buy Now.");
+    if (!loggedIn || !jwtToken) {
+      router.push(loginHref);
       return;
     }
 
@@ -430,7 +438,7 @@ export default function PlaceBidPage() {
     }
 
     if (paymentBlocked) {
-      setError("You must add a payment method before using Buy Now.");
+      router.push(paymentMethodHref);
       return;
     }
 
@@ -508,7 +516,7 @@ export default function PlaceBidPage() {
       if (data.updatedListing) setListing(data.updatedListing);
 
       setSuccess(
-        "Buy Now successful. Your card has been charged and this plate is now sold. We’ll contact you to complete DVLA transfer."
+        "Buy Now successful. Your card has been charged and this listing is now sold. We’ll contact you to complete the transfer."
       );
     } catch (err: any) {
       console.error("Buy Now error:", err);
@@ -622,13 +630,13 @@ export default function PlaceBidPage() {
           {buyerPaysTransferFee ? (
             <p className="text-sm text-gray-200">
               This listing is in the legacy format: an additional <strong>£80.00</strong> DVLA paperwork fee will be added
-              to the winning bid / Buy Now price for transfer handling (AuctionMyPlate.co.uk has no affiliation with DVLA).
+              to the winning bid / Buy Now price for transfer handling.
             </p>
           ) : (
             <div className="space-y-2">
               <p className="text-sm text-gray-200">
                 Transfer handling is included seller-side for this listing — there is <strong>no additional £80 fee</strong> added
-                at checkout for the buyer (AuctionMyPlate.co.uk has no affiliation with DVLA).
+                at checkout for the buyer.
               </p>
               <p className="text-xs text-gray-400">
                 Two plates listed earlier remain on the legacy “buyer pays £80” format. This listing is not one of them.
@@ -695,9 +703,9 @@ export default function PlaceBidPage() {
           {!loggedIn ? (
             <div className="mt-4 border border-yellow-600 bg-black rounded-lg p-4 space-y-3">
               <p className="font-semibold text-[#FFD500]">Log in to bid</p>
-              <p className="text-sm text-gray-200">You need an AuctionMyPlate account to place bids and use Buy Now.</p>
+              <p className="text-sm text-gray-200">You need an account to place bids and use Buy Now.</p>
               <div className="flex flex-wrap gap-3 mt-2">
-                <Link href="/login" className="px-5 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold text-sm">
+                <Link href={loginHref} className="px-5 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold text-sm">
                   Login
                 </Link>
                 <Link href="/register" className="px-5 py-2 rounded-lg border border-blue-400 text-blue-200 hover:bg-blue-950 font-semibold text-sm">
@@ -708,7 +716,7 @@ export default function PlaceBidPage() {
           ) : auctionEnded ? (
             <div className="mt-4 border border-red-700 bg-red-950 rounded-lg p-4 space-y-2">
               <p className="font-semibold text-red-100">
-                {isSoldForDisplay ? "This plate has been sold." : "Auction has already ended."}
+                {isSoldForDisplay ? "This listing has been sold." : "Auction has already ended."}
               </p>
               <p className="text-sm text-red-200">No further bids or Buy Now purchases can be made on this listing.</p>
             </div>
@@ -764,7 +772,9 @@ export default function PlaceBidPage() {
                     }}
                     disabled={!canBidOrBuyNow || submitting || checkingPaymentMethod}
                     className={`flex-1 rounded-lg py-3 text-lg font-semibold ${
-                      canBidOrBuyNow && !checkingPaymentMethod ? "bg-green-600 hover:bg-green-700 text-white" : "bg-gray-600 text-gray-300 cursor-not-allowed"
+                      canBidOrBuyNow && !checkingPaymentMethod
+                        ? "bg-green-600 hover:bg-green-700 text-white"
+                        : "bg-gray-600 text-gray-300 cursor-not-allowed"
                     }`}
                   >
                     {canBidOrBuyNow
@@ -799,9 +809,9 @@ export default function PlaceBidPage() {
         </div>
 
         <div>
-          <h3 className="text-base font-bold mb-2 text-[#FFD500]">Plate history &amp; interesting facts</h3>
+          <h3 className="text-base font-bold mb-2 text-[#FFD500]">History &amp; interesting facts</h3>
           <div className="border border-gray-700 rounded-lg p-3 bg-[#111111] text-sm text-gray-200 whitespace-pre-line">
-            {listing.interesting_fact || "No extra history or interesting facts have been added yet."}
+            {listing.interesting_fact || "No extra details have been added yet."}
           </div>
         </div>
       </div>

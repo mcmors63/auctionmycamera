@@ -1,12 +1,7 @@
 // app/api/stripe/has-payment-method/route.ts
 import { NextResponse } from "next/server";
 import Stripe from "stripe";
-import {
-  Client as AppwriteClient,
-  Databases,
-  Query,
-  Account,
-} from "node-appwrite";
+import { Client as AppwriteClient, Databases, Query, Account } from "node-appwrite";
 
 export const runtime = "nodejs";
 
@@ -14,37 +9,43 @@ export const runtime = "nodejs";
 // STRIPE
 // -----------------------------
 const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY || "";
-if (!STRIPE_SECRET_KEY) {
-  console.warn("[has-payment-method] STRIPE_SECRET_KEY is not set.");
-}
+if (!STRIPE_SECRET_KEY) console.warn("[has-payment-method] STRIPE_SECRET_KEY is not set.");
 const stripe = STRIPE_SECRET_KEY ? new Stripe(STRIPE_SECRET_KEY) : null;
 
 // -----------------------------
 // APPWRITE (profiles) - OPTIONAL
 // -----------------------------
-const APPWRITE_ENDPOINT =
-  process.env.APPWRITE_ENDPOINT || process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT || "";
+function normalizeAppwriteEndpoint(raw: string) {
+  const x = (raw || "").trim().replace(/\/+$/, "");
+  if (!x) return "";
+  // Appwrite endpoints must include /v1
+  if (x.endsWith("/v1")) return x;
+  return `${x}/v1`;
+}
+
+// Prefer NEXT_PUBLIC (because that’s what the browser is definitely using),
+// but allow server vars if they’re correct.
+const APPWRITE_ENDPOINT = normalizeAppwriteEndpoint(
+  process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT || process.env.APPWRITE_ENDPOINT || ""
+);
+
 const APPWRITE_PROJECT =
-  process.env.APPWRITE_PROJECT_ID || process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID || "";
+  (process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID || process.env.APPWRITE_PROJECT_ID || "").trim();
+
 const APPWRITE_API_KEY = process.env.APPWRITE_API_KEY || "";
 
 const PROFILES_DB_ID =
   process.env.APPWRITE_PROFILES_DATABASE_ID ||
   process.env.NEXT_PUBLIC_APPWRITE_PROFILES_DATABASE_ID ||
   "";
+
 const PROFILES_COLLECTION_ID =
   process.env.APPWRITE_PROFILES_COLLECTION_ID ||
   process.env.NEXT_PUBLIC_APPWRITE_PROFILES_COLLECTION_ID ||
   "";
 
 function getAppwriteOrNull() {
-  if (
-    !APPWRITE_ENDPOINT ||
-    !APPWRITE_PROJECT ||
-    !APPWRITE_API_KEY ||
-    !PROFILES_DB_ID ||
-    !PROFILES_COLLECTION_ID
-  ) {
+  if (!APPWRITE_ENDPOINT || !APPWRITE_PROJECT || !APPWRITE_API_KEY || !PROFILES_DB_ID || !PROFILES_COLLECTION_ID) {
     return null;
   }
 
@@ -65,13 +66,19 @@ function getBearer(req: Request) {
 async function requireAuthedUser(req: Request) {
   const jwt = getBearer(req);
   if (!jwt) {
-    return { ok: false as const, res: NextResponse.json({ ok: false, error: "Not authenticated." }, { status: 401 }) };
+    return {
+      ok: false as const,
+      res: NextResponse.json({ ok: false, error: "Not authenticated." }, { status: 401 }),
+    };
   }
 
   if (!APPWRITE_ENDPOINT || !APPWRITE_PROJECT) {
     return {
       ok: false as const,
-      res: NextResponse.json({ ok: false, error: "Server missing Appwrite config." }, { status: 500 }),
+      res: NextResponse.json(
+        { ok: false, error: "Server missing Appwrite config." },
+        { status: 500 }
+      ),
     };
   }
 
@@ -83,10 +90,14 @@ async function requireAuthedUser(req: Request) {
 
     const acc = new Account(c);
     const user = await acc.get();
+
     return { ok: true as const, user };
   } catch (e) {
     console.warn("[has-payment-method] auth failed:", e);
-    return { ok: false as const, res: NextResponse.json({ ok: false, error: "Not authenticated." }, { status: 401 }) };
+    return {
+      ok: false as const,
+      res: NextResponse.json({ ok: false, error: "Not authenticated." }, { status: 401 }),
+    };
   }
 }
 
@@ -97,11 +108,7 @@ export async function POST(req: Request) {
   try {
     if (!stripe) {
       return NextResponse.json(
-        {
-          ok: false,
-          error: "Stripe is not configured on the server.",
-          hasPaymentMethod: false,
-        },
+        { ok: false, error: "Stripe is not configured on the server.", hasPaymentMethod: false },
         { status: 500 }
       );
     }
@@ -119,7 +126,7 @@ export async function POST(req: Request) {
 
     const stripeClient = stripe;
 
-    // Optional profile lookup (for cached stripe_customer_id)
+    // Optional profile lookup (cached stripe_customer_id)
     const aw = getAppwriteOrNull();
     let profile: any = null;
     let stripeCustomerId: string | null = null;
@@ -129,7 +136,7 @@ export async function POST(req: Request) {
         const profRes = await aw.databases.listDocuments(
           PROFILES_DB_ID,
           PROFILES_COLLECTION_ID,
-          [Query.equal("email", userEmail)]
+          [Query.equal("email", userEmail), Query.limit(1)]
         );
         profile = (profRes.documents[0] as any) || null;
         stripeCustomerId = profile?.stripe_customer_id || null;
@@ -150,7 +157,7 @@ export async function POST(req: Request) {
     let customerIdUsed: string | null = null;
     let hasPaymentMethod = false;
 
-    // 1) If profile has stored customer ID, try that first
+    // 1) Try cached customer id first
     if (stripeCustomerId) {
       try {
         hasPaymentMethod = await hasCard(stripeCustomerId);
@@ -160,12 +167,9 @@ export async function POST(req: Request) {
       }
     }
 
-    // 2) Fallback: search Stripe customers by email
+    // 2) Fallback: search customers by email
     if (!hasPaymentMethod) {
-      const customers = await stripeClient.customers.list({
-        email: userEmail,
-        limit: 10,
-      });
+      const customers = await stripeClient.customers.list({ email: userEmail, limit: 10 });
 
       for (const c of customers.data) {
         try {
@@ -177,12 +181,9 @@ export async function POST(req: Request) {
             // Sync into profile if possible
             if (aw && profile?.$id && profile.stripe_customer_id !== c.id) {
               try {
-                await aw.databases.updateDocument(
-                  PROFILES_DB_ID,
-                  PROFILES_COLLECTION_ID,
-                  profile.$id,
-                  { stripe_customer_id: c.id }
-                );
+                await aw.databases.updateDocument(PROFILES_DB_ID, PROFILES_COLLECTION_ID, profile.$id, {
+                  stripe_customer_id: c.id,
+                });
               } catch (syncErr) {
                 console.warn("[has-payment-method] failed to sync customer id:", syncErr);
               }
@@ -195,18 +196,11 @@ export async function POST(req: Request) {
       }
     }
 
-    return NextResponse.json(
-      { ok: true, hasPaymentMethod, customerId: customerIdUsed },
-      { status: 200 }
-    );
+    return NextResponse.json({ ok: true, hasPaymentMethod, customerId: customerIdUsed }, { status: 200 });
   } catch (err: any) {
     console.error("[has-payment-method] error:", err);
     return NextResponse.json(
-      {
-        ok: false,
-        error: err?.message || "Could not verify payment method.",
-        hasPaymentMethod: false,
-      },
+      { ok: false, error: err?.message || "Could not verify payment method.", hasPaymentMethod: false },
       { status: 500 }
     );
   }

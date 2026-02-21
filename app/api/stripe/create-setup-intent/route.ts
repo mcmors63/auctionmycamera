@@ -15,14 +15,10 @@ export const runtime = "nodejs";
 // -----------------------------
 const stripeSecretKey = process.env.STRIPE_SECRET_KEY || "";
 if (!stripeSecretKey) {
-  console.warn(
-    "[create-setup-intent] STRIPE_SECRET_KEY is not set. This route will fail."
-  );
+  console.warn("[create-setup-intent] STRIPE_SECRET_KEY is not set. This route will fail.");
 }
 
-const stripe = stripeSecretKey
-  ? new Stripe(stripeSecretKey, { apiVersion: "2025-11-17.clover" as any })
-  : null;
+const stripe = stripeSecretKey ? new Stripe(stripeSecretKey) : null;
 
 // -----------------------------
 // Appwrite (auth + optional profile cache)
