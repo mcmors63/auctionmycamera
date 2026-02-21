@@ -5,7 +5,6 @@ import nodemailer from "nodemailer";
 import Stripe from "stripe";
 
 export const runtime = "nodejs";
-export const dynamic = "force-dynamic";
 
 // -----------------------------
 // Appwrite setup (SERVER-SAFE env)
@@ -16,39 +15,22 @@ const projectId =
   process.env.APPWRITE_PROJECT_ID || process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID || "";
 const apiKey = process.env.APPWRITE_API_KEY || "";
 
-// Listings DB/collection (camera-first, legacy fallback)
 const DB_ID =
-  process.env.APPWRITE_LISTINGS_DATABASE_ID ||
-  process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID ||
   process.env.APPWRITE_PLATES_DATABASE_ID ||
   process.env.NEXT_PUBLIC_APPWRITE_PLATES_DATABASE_ID ||
   "";
 
-const LISTINGS_COLLECTION =
-  process.env.APPWRITE_LISTINGS_COLLECTION_ID ||
-  process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_COLLECTION_ID ||
+const PLATES_COLLECTION =
   process.env.APPWRITE_PLATES_COLLECTION_ID ||
   process.env.NEXT_PUBLIC_APPWRITE_PLATES_COLLECTION_ID ||
   "";
 
-// Bids collection
 const BIDS_COLLECTION =
   process.env.APPWRITE_BIDS_COLLECTION_ID ||
   process.env.NEXT_PUBLIC_APPWRITE_BIDS_COLLECTION_ID ||
   "bids";
 
-// Profiles DB/collection (for Stripe gating)
-const PROFILES_DB_ID =
-  process.env.APPWRITE_PROFILES_DATABASE_ID ||
-  process.env.NEXT_PUBLIC_APPWRITE_PROFILES_DATABASE_ID ||
-  "";
-
-const PROFILES_COLLECTION_ID =
-  process.env.APPWRITE_PROFILES_COLLECTION_ID ||
-  process.env.NEXT_PUBLIC_APPWRITE_PROFILES_COLLECTION_ID ||
-  "";
-
-// Admin client for DB reads/writes
+// Admin client for database reads/writes
 const adminClient =
   endpoint && projectId && apiKey
     ? new Client().setEndpoint(endpoint).setProject(projectId).setKey(apiKey)
@@ -57,12 +39,96 @@ const adminClient =
 const databases = adminClient ? new Databases(adminClient) : null;
 
 // -----------------------------
-// Stripe (server-side)
+// Stripe (server)
 // -----------------------------
-const stripeSecretKey = process.env.STRIPE_SECRET_KEY || "";
-const stripe = stripeSecretKey
-  ? new Stripe(stripeSecretKey, { apiVersion: "2025-11-17.clover" as any })
-  : null;
+const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY || "";
+const stripe = STRIPE_SECRET_KEY ? new Stripe(STRIPE_SECRET_KEY) : null;
+
+// Optional profiles cache (to store stripe_customer_id)
+const PROFILES_DB_ID =
+  process.env.APPWRITE_PROFILES_DATABASE_ID ||
+  process.env.NEXT_PUBLIC_APPWRITE_PROFILES_DATABASE_ID ||
+  "";
+const PROFILES_COLLECTION_ID =
+  process.env.APPWRITE_PROFILES_COLLECTION_ID ||
+  process.env.NEXT_PUBLIC_APPWRITE_PROFILES_COLLECTION_ID ||
+  "";
+
+function getProfilesDbOrNull() {
+  if (!endpoint || !projectId || !apiKey || !PROFILES_DB_ID || !PROFILES_COLLECTION_ID) return null;
+
+  const c = new Client().setEndpoint(endpoint).setProject(projectId).setKey(apiKey);
+  return { databases: new Databases(c) };
+}
+
+async function findProfileByEmail(aw: Databases, email: string) {
+  const res = await aw.listDocuments(PROFILES_DB_ID, PROFILES_COLLECTION_ID, [
+    Query.equal("email", email),
+    Query.limit(1),
+  ]);
+  return (res.documents[0] as any) || null;
+}
+
+async function hasSavedCardForEmail(email: string): Promise<{ has: boolean; customerId?: string | null }> {
+  if (!stripe) {
+    // If Stripe isn't configured, safest is to BLOCK bidding (otherwise you'd accept bids you can't charge later)
+    return { has: false, customerId: null };
+  }
+
+  const aw = getProfilesDbOrNull();
+  let profile: any | null = null;
+  let stripeCustomerId: string | null = null;
+
+  // 1) Try cached stripe_customer_id
+  if (aw) {
+    try {
+      profile = await findProfileByEmail(aw.databases, email);
+      stripeCustomerId = profile?.stripe_customer_id || null;
+    } catch (e) {
+      console.warn("[place-bid] profile lookup skipped:", e);
+    }
+  }
+
+  const hasCard = async (customerId: string) => {
+    const pm = await stripe.paymentMethods.list({ customer: customerId, type: "card", limit: 1 });
+    return pm.data.length > 0;
+  };
+
+  // 2) Validate cached customer
+  if (stripeCustomerId) {
+    try {
+      const ok = await hasCard(stripeCustomerId);
+      if (ok) return { has: true, customerId: stripeCustomerId };
+    } catch (e) {
+      console.warn("[place-bid] cached customer card check failed:", stripeCustomerId, e);
+    }
+  }
+
+  // 3) Fallback: find customers by email
+  const customers = await stripe.customers.list({ email, limit: 10 });
+  for (const c of customers.data) {
+    try {
+      const ok = await hasCard(c.id);
+      if (ok) {
+        // Sync back to profile if we can
+        if (aw && profile?.$id && profile.stripe_customer_id !== c.id) {
+          try {
+            await aw.databases.updateDocument(PROFILES_DB_ID, PROFILES_COLLECTION_ID, profile.$id, {
+              stripe_customer_id: c.id,
+            });
+          } catch (syncErr) {
+            console.warn("[place-bid] failed to sync stripe_customer_id:", syncErr);
+          }
+        }
+        return { has: true, customerId: c.id };
+      }
+    } catch (e) {
+      console.warn("[place-bid] customer card check failed:", c.id, e);
+    }
+  }
+
+  return { has: false, customerId: null };
+}
 
 // -----------------------------
 // Email setup (re-uses global SMTP env)
@@ -150,12 +216,7 @@ async function requireAuthedUser(req: Request) {
 type Listing = {
   $id: string;
   status?: string;
-  registration?: string; // legacy plates field (harmless if absent)
-  item_title?: string;
-  title?: string;
-  brand?: string;
-  model?: string;
-
+  registration?: string;
   current_bid?: number | null;
   starting_price?: number | null;
   bids?: number | null;
@@ -166,152 +227,16 @@ type Listing = {
   start_time?: string | null;
   end_time?: string | null;
 
-  // seller email fields vary; we probe in sendBidEmails
   [key: string]: any;
 };
 
-function getListingName(l: Listing) {
-  const t = String(l.item_title || l.title || "").trim();
-  if (t) return t;
-  const bm = [l.brand, l.model].filter(Boolean).join(" ").trim();
-  if (bm) return bm;
-  const reg = String(l.registration || "").trim();
-  if (reg) return reg;
-  return "your item";
-}
-
-// -----------------------------
-// Schema-tolerant update (profiles cache)
-// -----------------------------
-async function updateDocSchemaTolerant(
-  db: Databases,
-  dbId: string,
-  colId: string,
-  docId: string,
-  payload: Record<string, any>
-) {
-  const data: Record<string, any> = { ...payload };
-
-  for (let i = 0; i < 12; i++) {
-    try {
-      return await db.updateDocument(dbId, colId, docId, data);
-    } catch (err: any) {
-      const msg = String(err?.message || "");
-      const m = msg.match(/Unknown attribute:\s*([A-Za-z0-9_]+)/i);
-      if (m?.[1]) {
-        delete data[m[1]];
-        continue;
-      }
-      throw err;
-    }
-  }
-
-  // If schema is extremely minimal, just stop silently.
-  return null;
-}
-
-// -----------------------------
-// Stripe gating: require saved card
-// -----------------------------
-async function requireCardOnFileOr403(opts: { email: string }) {
-  const { email } = opts;
-
-  // If Stripe isn’t configured, don’t brick bidding silently — but do fail loudly.
-  if (!stripe) {
-    return {
-      ok: false as const,
-      res: NextResponse.json(
-        { error: "Stripe is not configured on the server." },
-        { status: 500 }
-      ),
-    };
-  }
-
-  // Profiles must be configured to do the customer lookup reliably.
-  if (!databases || !PROFILES_DB_ID || !PROFILES_COLLECTION_ID) {
-    return {
-      ok: false as const,
-      res: NextResponse.json(
-        {
-          error:
-            "Profiles database is not configured on the server (cannot verify payment method).",
-        },
-        { status: 500 }
-      ),
-    };
-  }
-
-  // Find profile by email
-  const profRes = await databases.listDocuments(PROFILES_DB_ID, PROFILES_COLLECTION_ID, [
-    Query.equal("email", email),
-    Query.limit(1),
-  ]);
-  const profile: any = profRes.documents?.[0] || null;
-
-  const stripeCustomerId = String(profile?.stripe_customer_id || "").trim();
-
-  if (!stripeCustomerId) {
-    return {
-      ok: false as const,
-      res: NextResponse.json(
-        {
-          error: "Please add a card before you can bid.",
-          code: "card_required",
-        },
-        { status: 403 }
-      ),
-    };
-  }
-
-  // Check Stripe for at least 1 card
-  const pms = await stripe.paymentMethods.list({
-    customer: stripeCustomerId,
-    type: "card",
-    limit: 1,
-  });
-
-  const hasCard = Array.isArray(pms.data) && pms.data.length > 0;
-
-  if (!hasCard) {
-    return {
-      ok: false as const,
-      res: NextResponse.json(
-        {
-          error: "Please add a card before you can bid.",
-          code: "card_required",
-        },
-        { status: 403 }
-      ),
-    };
-  }
-
-  // Optional: cache in profile if your schema supports it (safe, schema-tolerant)
-  try {
-    const pmId = pms.data[0]?.id || null;
-    if (profile?.$id) {
-      await updateDocSchemaTolerant(databases, PROFILES_DB_ID, PROFILES_COLLECTION_ID, profile.$id, {
-        stripe_has_card: true,
-        stripe_default_payment_method_id: pmId,
-      });
-    }
-  } catch (e) {
-    // Don’t block bidding on cache failure
-    console.warn("[place-bid] profile cache update skipped:", e);
-  }
-
-  return { ok: true as const, profile };
-}
-
-// -----------------------------
-// Emails
-// -----------------------------
 async function sendBidEmails(options: { listing: Listing; bidAmount: number; bidderEmail: string }) {
   const { listing, bidAmount, bidderEmail } = options;
 
   const transporter = getTransporter();
   if (!transporter) return;
 
-  const itemName = getListingName(listing);
+  const reg = listing.registration || "your number plate";
   const amountLabel = `£${bidAmount.toLocaleString("en-GB", {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
@@ -329,9 +254,9 @@ async function sendBidEmails(options: { listing: Listing; bidAmount: number; bid
     await transporter.sendMail({
       from: EMAIL_FROM,
       to: bidderEmail,
-      subject: `Bid placed: ${itemName} (${amountLabel})`,
+      subject: `Bid placed on ${reg}: ${amountLabel}`,
       text: [
-        `Thank you for your bid on ${itemName}.`,
+        `Thank you for your bid on ${reg}.`,
         "",
         `Bid amount: ${amountLabel}`,
         "",
@@ -351,13 +276,13 @@ async function sendBidEmails(options: { listing: Listing; bidAmount: number; bid
     await transporter.sendMail({
       from: EMAIL_FROM,
       to: sellerEmail,
-      subject: `New bid on your listing: ${itemName}`,
+      subject: `New bid on your number plate ${reg}`,
       text: [
-        `A new bid has been placed on your listing: ${itemName}.`,
+        `A new bid has been placed on your number plate ${reg}.`,
         "",
         `Bid amount: ${amountLabel}`,
         "",
-        `Log in to AuctionMyCamera to view the auction status.`,
+        `You can log in to AuctionMyPlate to see the current bids and auction status.`,
       ].join("\n"),
     });
   } catch (err) {
@@ -387,7 +312,7 @@ function getBidIncrement(current: number): number {
 export async function POST(req: Request) {
   try {
     // Server sanity
-    if (!databases || !DB_ID || !LISTINGS_COLLECTION) {
+    if (!databases || !DB_ID || !PLATES_COLLECTION) {
       return NextResponse.json(
         { error: "Server configuration missing (Appwrite DB/collections)." },
         { status: 500 }
@@ -405,9 +330,17 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
     }
 
-    // ✅ Stripe gating (card required)
-    const gate = await requireCardOnFileOr403({ email: bidderEmail });
-    if (!gate.ok) return gate.res;
+    // ✅ REQUIRE A SAVED CARD BEFORE BIDDING
+    const pm = await hasSavedCardForEmail(bidderEmail);
+    if (!pm.has) {
+      return NextResponse.json(
+        {
+          error: "You must add a card before you can bid.",
+          code: "no_payment_method",
+        },
+        { status: 403 }
+      );
+    }
 
     const body = await req.json().catch(() => ({} as any));
     const listingId = body?.listingId as string | undefined;
@@ -424,14 +357,18 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Invalid bid amount." }, { status: 400 });
     }
 
+    // -----------------------------
     // Load listing
-    const listing = (await databases.getDocument(DB_ID, LISTINGS_COLLECTION, listingId)) as unknown as Listing;
+    // -----------------------------
+    const listing = (await databases.getDocument(DB_ID, PLATES_COLLECTION, listingId)) as unknown as Listing;
 
     if (!listing || (listing.status || "").toLowerCase() !== "live") {
       return NextResponse.json({ error: "Auction is not live." }, { status: 400 });
     }
 
-    // Soft close safety check
+    // -----------------------------
+    // Soft close
+    // -----------------------------
     const now = new Date();
     const nowMs = now.getTime();
     const auctionEnd = listing.auction_end ?? listing.end_time ?? null;
@@ -440,7 +377,6 @@ export async function POST(req: Request) {
 
     if (auctionEnd) {
       const endMs = Date.parse(auctionEnd);
-
       if (Number.isFinite(endMs)) {
         if (endMs <= nowMs) {
           return NextResponse.json({ error: "Auction has already ended." }, { status: 400 });
@@ -460,11 +396,11 @@ export async function POST(req: Request) {
       }
     }
 
-    // Minimum bid
+    // -----------------------------
+    // Minimum allowed bid
+    // -----------------------------
     const effectiveBaseBid =
-      listing.current_bid != null
-        ? Number(listing.current_bid)
-        : Number(listing.starting_price ?? 0);
+      listing.current_bid != null ? Number(listing.current_bid) : Number(listing.starting_price ?? 0);
 
     const increment = getBidIncrement(effectiveBaseBid);
     const minimumAllowed = effectiveBaseBid + increment;
@@ -476,7 +412,9 @@ export async function POST(req: Request) {
       );
     }
 
-    // Bid history doc (non-fatal)
+    // -----------------------------
+    // Create bid history doc (non-fatal if fails)
+    // -----------------------------
     let bidDoc: any = null;
 
     if (BIDS_COLLECTION) {
@@ -493,7 +431,9 @@ export async function POST(req: Request) {
       }
     }
 
+    // -----------------------------
     // Update listing
+    // -----------------------------
     const newBidsCount = typeof listing.bids === "number" ? listing.bids + 1 : 1;
 
     const updatePayload: Record<string, any> = {
@@ -509,24 +449,20 @@ export async function POST(req: Request) {
       updatePayload.auction_end = newAuctionEnd;
     }
 
-    const updatedListing = await databases.updateDocument(DB_ID, LISTINGS_COLLECTION, listing.$id, updatePayload);
+    const updatedListing = await databases.updateDocument(DB_ID, PLATES_COLLECTION, listing.$id, updatePayload);
 
     // Emails (non-fatal)
     try {
       await sendBidEmails({ listing, bidAmount, bidderEmail });
     } catch (err) {
-      console.error("[place-bid] Unexpected error in sendBidEmails:", err);
+      console.error("[place-bid] sendBidEmails error:", err);
     }
 
     return NextResponse.json({ ok: true, updatedListing, bidDoc });
   } catch (err: any) {
     console.error("[place-bid] route fatal error:", err);
     return NextResponse.json(
-      {
-        error:
-          err?.message ||
-          "Unexpected error placing bid. Please try again or contact support.",
-      },
+      { error: err?.message || "Unexpected error placing bid. Please try again." },
       { status: 500 }
     );
   }
