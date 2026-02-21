@@ -94,15 +94,15 @@ function priceForSort(l: ListingLike) {
 }
 
 function timeForEndingSort(l: ListingLike, tab: Tab) {
-  // Live: sort by auction end
   if (tab === "live") {
     return Date.parse(
       l.auction_end ?? l.end_time ?? l.auction_start ?? l.start_time ?? l.$createdAt ?? ""
     );
   }
 
-  // Coming next: sort by auction start (more sensible)
-  return Date.parse(l.auction_start ?? l.start_time ?? l.auction_end ?? l.end_time ?? l.$createdAt ?? "");
+  return Date.parse(
+    l.auction_start ?? l.start_time ?? l.auction_end ?? l.end_time ?? l.$createdAt ?? ""
+  );
 }
 
 export default function CurrentListingsClient({ initialLive, initialSoon }: Props) {
@@ -173,6 +173,8 @@ export default function CurrentListingsClient({ initialLive, initialSoon }: Prop
         : "Try the Live tab, or come back later once new listings are approved and queued."
       : "Try a different search, clear filters, or switch tabs.";
 
+  const accentLinkStyle = { color: ACCENT };
+
   return (
     <main className="min-h-screen" style={{ backgroundColor: BG, color: "#e8e8e8" }}>
       {/* Header */}
@@ -189,13 +191,13 @@ export default function CurrentListingsClient({ initialLive, initialSoon }: Prop
           {/* Helpful internal links */}
           <div className="mt-3 flex flex-wrap gap-x-4 gap-y-2 text-sm text-white/70">
             <span className="text-white/50">New here?</span>
-            <Link href="/how-it-works" className="text-amber-200 hover:text-amber-100 underline">
+            <Link href="/how-it-works" className="underline" style={accentLinkStyle}>
               How it works
             </Link>
-            <Link href="/fees" className="text-amber-200 hover:text-amber-100 underline">
+            <Link href="/fees" className="underline" style={accentLinkStyle}>
               Fees
             </Link>
-            <Link href="/sell" className="text-amber-200 hover:text-amber-100 underline">
+            <Link href="/sell" className="underline" style={accentLinkStyle}>
               Sell your gear
             </Link>
           </div>
@@ -287,7 +289,7 @@ export default function CurrentListingsClient({ initialLive, initialSoon }: Prop
               <p className="text-[12px] text-white/70 leading-relaxed">
                 Condition matters: sellers should describe cosmetic wear, faults, fungus/haze, shutter count (if known), and
                 what’s included. Buyers should review the description carefully before bidding.{" "}
-                <Link href="/faq" className="text-amber-200 hover:text-amber-100 underline">
+                <Link href="/faq" className="underline" style={accentLinkStyle}>
                   Read FAQ
                 </Link>
                 .

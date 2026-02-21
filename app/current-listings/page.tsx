@@ -6,9 +6,12 @@ import CurrentListingsClient from "./CurrentListingsClient";
 import { Client, Databases, Query } from "node-appwrite";
 
 export const runtime = "nodejs";
+
+// ✅ Use ISR instead of force-dynamic so Google gets stable HTML
 export const revalidate = 300; // 5 minutes
 
 const PROD_SITE_URL = "https://auctionmycamera.co.uk";
+const ACCENT = "#d6b45f";
 
 function isProdEnv() {
   if (process.env.VERCEL_ENV) return process.env.VERCEL_ENV === "production";
@@ -26,7 +29,10 @@ function getSiteUrl() {
   const onVercel = !!process.env.VERCEL_ENV;
   const isProd = isProdEnv();
 
+  // ✅ Always use the real domain in production (canonical consistency)
   if (isProd) return PROD_SITE_URL;
+
+  // Local/dev or preview can use explicit if set
   if (explicit) return explicit;
 
   const vercelUrl = normalizeBaseUrl(
@@ -68,13 +74,17 @@ const projectId = process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID!;
 const apiKey = process.env.APPWRITE_API_KEY!;
 
 // ✅ LISTINGS ONLY — no plates fallback (prevents silent “wrong DB” bugs)
-const DB_ID = (process.env.APPWRITE_LISTINGS_DATABASE_ID ||
+const DB_ID = (
+  process.env.APPWRITE_LISTINGS_DATABASE_ID ||
   process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID ||
-  "").trim();
+  ""
+).trim();
 
-const COLLECTION_ID = (process.env.APPWRITE_LISTINGS_COLLECTION_ID ||
+const COLLECTION_ID = (
+  process.env.APPWRITE_LISTINGS_COLLECTION_ID ||
   process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_COLLECTION_ID ||
-  "").trim();
+  ""
+).trim();
 
 function assertEnv() {
   if (!DB_ID || !COLLECTION_ID) {
@@ -96,6 +106,7 @@ async function fetchByStatus(status: string) {
   const db = serverDb();
   const res = await db.listDocuments(DB_ID, COLLECTION_ID, [
     Query.equal("status", status),
+    // ✅ Stable ordering (helps keep page content consistent for crawlers)
     Query.orderDesc("$updatedAt"),
     Query.limit(200),
   ]);
@@ -106,11 +117,7 @@ function listingHref(doc: any) {
   return `/listing/${doc?.$id}`;
 }
 
-function capitalize(s: string) {
-  if (!s) return s;
-  return s.charAt(0).toUpperCase() + s.slice(1);
-}
-
+/** Prefer camera listing fields, with safe fallbacks for legacy docs */
 function getListingTitle(doc: any) {
   const itemTitle = String(doc?.item_title || doc?.title || "").trim();
   const brand = String(doc?.brand || "").trim();
@@ -134,6 +141,11 @@ function getListingLabel(doc: any) {
   return bits.length ? bits.join(" • ") : "";
 }
 
+function capitalize(s: string) {
+  if (!s) return s;
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
 export default async function CurrentListingsPage() {
   let live: any[] = [];
   let soon: any[] = [];
@@ -146,8 +158,8 @@ export default async function CurrentListingsPage() {
     soon = [];
   }
 
+  // JSON-LD for crawlable auction links (kept small)
   const liveForLd = live.slice(0, 50);
-
   const jsonLdItemList = {
     "@context": "https://schema.org",
     "@type": "ItemList",
@@ -156,7 +168,12 @@ export default async function CurrentListingsPage() {
     itemListElement: liveForLd.map((doc, idx) => {
       const name = `${getListingTitle(doc)} – Camera Gear Auction`;
       const url = `${SITE_URL}${listingHref(doc)}`;
-      return { "@type": "ListItem", position: idx + 1, url, name };
+      return {
+        "@type": "ListItem",
+        position: idx + 1,
+        url,
+        name,
+      };
     }),
   };
 
@@ -164,13 +181,27 @@ export default async function CurrentListingsPage() {
     "@context": "https://schema.org",
     "@type": "BreadcrumbList",
     itemListElement: [
-      { "@type": "ListItem", position: 1, name: "Home", item: `${SITE_URL}/` },
-      { "@type": "ListItem", position: 2, name: "Current auctions", item: `${SITE_URL}/current-listings` },
+      {
+        "@type": "ListItem",
+        position: 1,
+        name: "Home",
+        item: `${SITE_URL}/`,
+      },
+      {
+        "@type": "ListItem",
+        position: 2,
+        name: "Current auctions",
+        item: `${SITE_URL}/current-listings`,
+      },
     ],
   };
 
+  const accentLinkClass = "underline";
+  const accentLinkStyle = { color: ACCENT };
+
   return (
     <>
+      {/* Structured data for SEO */}
       <Script
         id="ld-current-itemlist"
         type="application/ld+json"
@@ -182,20 +213,21 @@ export default async function CurrentListingsPage() {
         dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLdBreadcrumbs) }}
       />
 
+      {/* Small, safe server-rendered crawlable block */}
       <section className="bg-black text-gray-100 px-4 pt-6">
         <div className="max-w-6xl mx-auto">
           <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
             <span className="text-gray-400">Useful:</span>
-            <Link href="/sell" className="text-amber-200 hover:text-amber-100 underline">
+            <Link href="/sell" className={accentLinkClass} style={accentLinkStyle}>
               Sell your gear
             </Link>
-            <Link href="/how-it-works" className="text-amber-200 hover:text-amber-100 underline">
+            <Link href="/how-it-works" className={accentLinkClass} style={accentLinkStyle}>
               How it works
             </Link>
-            <Link href="/fees" className="text-amber-200 hover:text-amber-100 underline">
+            <Link href="/fees" className={accentLinkClass} style={accentLinkStyle}>
               Fees
             </Link>
-            <Link href="/faq" className="text-amber-200 hover:text-amber-100 underline">
+            <Link href="/faq" className={accentLinkClass} style={accentLinkStyle}>
               FAQ
             </Link>
           </div>
@@ -207,7 +239,9 @@ export default async function CurrentListingsPage() {
 
             <div className="mt-4 grid md:grid-cols-2 gap-6">
               <div>
-                <h2 className="text-sm font-bold text-amber-200 mb-2">Live auctions</h2>
+                <h2 className="text-sm font-bold mb-2" style={{ color: ACCENT }}>
+                  Live auctions
+                </h2>
                 {live.length === 0 ? (
                   <p className="text-sm text-gray-300">No live auctions right now.</p>
                 ) : (
@@ -217,7 +251,7 @@ export default async function CurrentListingsPage() {
                       const label = getListingLabel(doc);
                       return (
                         <li key={doc?.$id}>
-                          <Link href={listingHref(doc)} className="text-gray-100 hover:text-amber-200 underline">
+                          <Link href={listingHref(doc)} className="text-gray-100 underline" style={{ color: "#e8e8e8" }}>
                             {title}
                           </Link>
                           {label ? <span className="text-xs text-gray-400">{"  "}({label})</span> : null}
@@ -229,7 +263,9 @@ export default async function CurrentListingsPage() {
               </div>
 
               <div>
-                <h2 className="text-sm font-bold text-amber-200 mb-2">Coming next</h2>
+                <h2 className="text-sm font-bold mb-2" style={{ color: ACCENT }}>
+                  Coming next
+                </h2>
                 {soon.length === 0 ? (
                   <p className="text-sm text-gray-300">Nothing queued right now.</p>
                 ) : (
@@ -239,7 +275,7 @@ export default async function CurrentListingsPage() {
                       const label = getListingLabel(doc);
                       return (
                         <li key={doc?.$id}>
-                          <Link href={listingHref(doc)} className="text-gray-100 hover:text-amber-200 underline">
+                          <Link href={listingHref(doc)} className="text-gray-100 underline" style={{ color: "#e8e8e8" }}>
                             {title}
                           </Link>
                           {label ? <span className="text-xs text-gray-400">{"  "}({label})</span> : null}
@@ -259,6 +295,7 @@ export default async function CurrentListingsPage() {
         </div>
       </section>
 
+      {/* Your existing interactive client UI */}
       <CurrentListingsClient initialLive={live} initialSoon={soon} />
     </>
   );
