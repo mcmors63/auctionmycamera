@@ -1,28 +1,50 @@
+// app/api/stripe/list-payment-methods/route.ts
 import { NextResponse } from "next/server";
 import Stripe from "stripe";
 import { Client as AppwriteClient, Databases, Query, Account } from "node-appwrite";
 
 export const runtime = "nodejs";
 
-const stripeSecretKey = process.env.STRIPE_SECRET_KEY || "";
-if (!stripeSecretKey) console.warn("[list-payment-methods] STRIPE_SECRET_KEY is not set.");
-const stripe = stripeSecretKey ? new Stripe(stripeSecretKey) : null;
+// -----------------------------
+// STRIPE
+// -----------------------------
+const STRIPE_SECRET_KEY = (process.env.STRIPE_SECRET_KEY || "").trim();
+if (!STRIPE_SECRET_KEY) {
+  console.warn("[list-payment-methods] STRIPE_SECRET_KEY is not set.");
+}
+const stripe = STRIPE_SECRET_KEY ? new Stripe(STRIPE_SECRET_KEY) : null;
 
-// Appwrite (for auth + optional profile cache)
-const appwriteEndpoint =
-  (process.env.APPWRITE_ENDPOINT || process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT || "").replace(/\/+$/, "");
-const appwriteProject =
-  process.env.APPWRITE_PROJECT_ID || process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID || "";
-const appwriteApiKey = process.env.APPWRITE_API_KEY || "";
+// -----------------------------
+// APPWRITE (auth + optional profile cache)
+// -----------------------------
+function normalizeAppwriteEndpoint(raw: string) {
+  const x = (raw || "").trim().replace(/\/+$/, "");
+  if (!x) return "";
+  if (x.endsWith("/v1")) return x;
+  return `${x}/v1`;
+}
 
+// ✅ Server-first (server route), public fallback
+const APPWRITE_ENDPOINT = normalizeAppwriteEndpoint(
+  process.env.APPWRITE_ENDPOINT || process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT || ""
+);
+
+const APPWRITE_PROJECT = (
+  process.env.APPWRITE_PROJECT_ID || process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID || ""
+).trim();
+
+const APPWRITE_API_KEY = (process.env.APPWRITE_API_KEY || "").trim();
+
+// Optional profile cache
 const PROFILES_DB_ID =
-  process.env.APPWRITE_PROFILES_DATABASE_ID ||
-  process.env.NEXT_PUBLIC_APPWRITE_PROFILES_DATABASE_ID ||
-  "";
+  (process.env.APPWRITE_PROFILES_DATABASE_ID ||
+    process.env.NEXT_PUBLIC_APPWRITE_PROFILES_DATABASE_ID ||
+    "").trim();
+
 const PROFILES_COLLECTION_ID =
-  process.env.APPWRITE_PROFILES_COLLECTION_ID ||
-  process.env.NEXT_PUBLIC_APPWRITE_PROFILES_COLLECTION_ID ||
-  "";
+  (process.env.APPWRITE_PROFILES_COLLECTION_ID ||
+    process.env.NEXT_PUBLIC_APPWRITE_PROFILES_COLLECTION_ID ||
+    "").trim();
 
 function getBearerJwt(req: Request) {
   const auth = req.headers.get("authorization") || "";
@@ -30,57 +52,92 @@ function getBearerJwt(req: Request) {
   return m?.[1]?.trim() || "";
 }
 
-async function requireUser(req: Request) {
+async function requireAuthedUser(req: Request) {
   const jwt = getBearerJwt(req);
-  if (!jwt || !appwriteEndpoint || !appwriteProject) return null;
+  if (!jwt) {
+    return {
+      ok: false as const,
+      res: NextResponse.json({ ok: false, error: "Not authenticated." }, { status: 401 }),
+    };
+  }
 
-  const client = new AppwriteClient().setEndpoint(appwriteEndpoint).setProject(appwriteProject).setJWT(jwt);
-  const account = new Account(client);
+  if (!APPWRITE_ENDPOINT || !APPWRITE_PROJECT) {
+    return {
+      ok: false as const,
+      res: NextResponse.json({ ok: false, error: "Server missing Appwrite config." }, { status: 500 }),
+    };
+  }
 
   try {
-    return await account.get();
-  } catch {
-    return null;
+    const c = new AppwriteClient()
+      .setEndpoint(APPWRITE_ENDPOINT)
+      .setProject(APPWRITE_PROJECT)
+      .setJWT(jwt);
+
+    const account = new Account(c);
+    const user = await account.get();
+    return { ok: true as const, user };
+  } catch (e) {
+    console.warn("[list-payment-methods] auth failed:", e);
+    return {
+      ok: false as const,
+      res: NextResponse.json({ ok: false, error: "Not authenticated." }, { status: 401 }),
+    };
   }
 }
 
-function getAppwriteOrNull() {
-  if (!appwriteEndpoint || !appwriteProject || !appwriteApiKey || !PROFILES_DB_ID || !PROFILES_COLLECTION_ID) {
-    return null;
-  }
+function getProfilesDbOrNull() {
+  if (!APPWRITE_ENDPOINT || !APPWRITE_PROJECT || !APPWRITE_API_KEY) return null;
+  if (!PROFILES_DB_ID || !PROFILES_COLLECTION_ID) return null;
 
-  const client = new AppwriteClient().setEndpoint(appwriteEndpoint).setProject(appwriteProject).setKey(appwriteApiKey);
+  const client = new AppwriteClient()
+    .setEndpoint(APPWRITE_ENDPOINT)
+    .setProject(APPWRITE_PROJECT)
+    .setKey(APPWRITE_API_KEY);
+
   return { databases: new Databases(client) };
 }
 
+async function findProfileByEmail(databases: Databases, email: string) {
+  const res = await databases.listDocuments(PROFILES_DB_ID, PROFILES_COLLECTION_ID, [
+    Query.equal("email", email),
+    Query.limit(1),
+  ]);
+  return (res.documents[0] as any) || null;
+}
+
+// -----------------------------
+// POST /api/stripe/list-payment-methods
+// Auth: Authorization: Bearer <Appwrite JWT>
+// Returns: { ok, paymentMethods: Array<{id, brand, last4, exp_month, exp_year, isDefault}> }
+// -----------------------------
 export async function POST(req: Request) {
   try {
     if (!stripe) {
-      return NextResponse.json({ ok: false, error: "Stripe is not configured on the server." }, { status: 500 });
+      return NextResponse.json(
+        { ok: false, error: "Stripe is not configured on the server." },
+        { status: 500 }
+      );
     }
 
     // ✅ AUTH REQUIRED
-    const user = await requireUser(req);
-    if (!user?.email) {
-      return NextResponse.json({ ok: false, error: "Not authenticated." }, { status: 401 });
+    const auth = await requireAuthedUser(req);
+    if (!auth.ok) return auth.res;
+
+    const userEmail = (auth.user as any)?.email as string | undefined;
+    if (!userEmail) {
+      return NextResponse.json({ ok: false, error: "Could not determine user email." }, { status: 401 });
     }
 
-    const userEmail = user.email;
-
     // Optional profile lookup (cached stripe_customer_id)
-    const aw = getAppwriteOrNull();
+    const aw = getProfilesDbOrNull();
     let profile: any = null;
     let stripeCustomerId: string | null = null;
 
     if (aw) {
       try {
-        const profRes = await aw.databases.listDocuments(
-          PROFILES_DB_ID,
-          PROFILES_COLLECTION_ID,
-          [Query.equal("email", userEmail)]
-        );
-        profile = (profRes.documents[0] as any) || null;
-        stripeCustomerId = profile?.stripe_customer_id || null;
+        profile = await findProfileByEmail(aw.databases, userEmail);
+        stripeCustomerId = (profile?.stripe_customer_id as string | undefined) || null;
       } catch (e) {
         console.warn("[list-payment-methods] profile lookup skipped:", e);
       }
@@ -105,18 +162,26 @@ export async function POST(req: Request) {
       }
     }
 
-    if (!customerIdUsed) return NextResponse.json({ ok: true, paymentMethods: [] });
+    if (!customerIdUsed) {
+      return NextResponse.json({ ok: true, paymentMethods: [] }, { status: 200 });
+    }
 
     // Default payment method (if set)
     const customer = await stripe.customers.retrieve(customerIdUsed);
     let defaultPmId: string | null = null;
 
     if (!("deleted" in customer)) {
-      const defPm = customer.invoice_settings?.default_payment_method as string | { id: string } | null | undefined;
+      const defPm = customer.invoice_settings?.default_payment_method as
+        | string
+        | { id: string }
+        | null
+        | undefined;
+
       if (typeof defPm === "string") defaultPmId = defPm;
       else if (defPm && typeof defPm === "object") defaultPmId = defPm.id;
     }
 
+    // List cards
     const pmList = await stripe.paymentMethods.list({
       customer: customerIdUsed,
       type: "card",
@@ -131,7 +196,7 @@ export async function POST(req: Request) {
       isDefault: defaultPmId ? pm.id === defaultPmId : false,
     }));
 
-    return NextResponse.json({ ok: true, paymentMethods });
+    return NextResponse.json({ ok: true, paymentMethods }, { status: 200 });
   } catch (err: any) {
     console.error("[list-payment-methods] error:", err);
     return NextResponse.json(
