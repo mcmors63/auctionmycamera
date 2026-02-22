@@ -9,41 +9,51 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 // -----------------------------
-// APPWRITE SETUP
+// APPWRITE SETUP (server-safe)
+// Prefer server envs first, then NEXT_PUBLIC fallbacks.
 // -----------------------------
-const endpoint = process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT!;
-const projectId = process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID!;
-const apiKey = process.env.APPWRITE_API_KEY!;
+const endpoint =
+  process.env.APPWRITE_ENDPOINT ||
+  process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT ||
+  "";
 
-// ✅ Backwards compatible: LISTINGS_* first, then PLATES_* (clone support)
+const projectId =
+  process.env.APPWRITE_PROJECT_ID ||
+  process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID ||
+  "";
+
+const apiKey = (process.env.APPWRITE_API_KEY || "").trim();
+
+// DB + collections (NO hard-coded DB id fallback)
 const DB_ID =
   process.env.APPWRITE_LISTINGS_DATABASE_ID ||
   process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID ||
-  process.env.APPWRITE_PLATES_DATABASE_ID ||
-  process.env.NEXT_PUBLIC_APPWRITE_PLATES_DATABASE_ID ||
-  "690fc34a0000ce1baa63";
+  process.env.APPWRITE_DATABASE_ID ||
+  process.env.NEXT_PUBLIC_APPWRITE_DATABASE_ID ||
+  "";
 
 const LISTINGS_COLLECTION_ID =
   process.env.APPWRITE_LISTINGS_COLLECTION_ID ||
   process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_COLLECTION_ID ||
-  process.env.APPWRITE_PLATES_COLLECTION_ID ||
-  process.env.NEXT_PUBLIC_APPWRITE_PLATES_COLLECTION_ID ||
-  "plates";
+  "";
 
-// BIDS collection (same DB)
 const BIDS_COLLECTION_ID =
   process.env.APPWRITE_BIDS_COLLECTION_ID ||
   process.env.NEXT_PUBLIC_APPWRITE_BIDS_COLLECTION_ID ||
   "";
 
-// TRANSACTIONS collection (same DB)
 const TRANSACTIONS_COLLECTION_ID =
   process.env.APPWRITE_TRANSACTIONS_COLLECTION_ID ||
   process.env.NEXT_PUBLIC_APPWRITE_TRANSACTIONS_COLLECTION_ID ||
   "";
 
-const client = new Client().setEndpoint(endpoint).setProject(projectId).setKey(apiKey);
-const databases = new Databases(client);
+function getDatabases() {
+  if (!endpoint || !projectId || !apiKey) return null;
+  if (!DB_ID || !LISTINGS_COLLECTION_ID) return null;
+
+  const client = new Client().setEndpoint(endpoint).setProject(projectId).setKey(apiKey);
+  return new Databases(client);
+}
 
 // -----------------------------
 // CRON / SECURITY
@@ -51,7 +61,7 @@ const databases = new Databases(client);
 const CRON_SECRET = (process.env.CRON_SECRET || process.env.AUCTION_CRON_SECRET || "").trim();
 
 function cronAuthed(req: NextRequest) {
-  if (!CRON_SECRET) return true; // if you don't set a secret, it's open (not recommended)
+  if (!CRON_SECRET) return false; // ✅ MUST be set, otherwise refuse
   const q = (req.nextUrl.searchParams.get("secret") || "").trim();
   const h = (req.headers.get("x-cron-secret") || "").trim();
   return q === CRON_SECRET || h === CRON_SECRET;
@@ -66,10 +76,7 @@ const stripe = stripeSecret ? new Stripe(stripeSecret) : null;
 // -----------------------------
 // EMAIL
 // -----------------------------
-const SITE_URL = (process.env.NEXT_PUBLIC_SITE_URL || "https://auctionmycamera.co.uk").replace(
-  /\/$/,
-  ""
-);
+const SITE_URL = (process.env.NEXT_PUBLIC_SITE_URL || "https://auctionmycamera.co.uk").replace(/\/+$/, "");
 
 const RAW_FROM_EMAIL =
   process.env.FROM_EMAIL ||
@@ -101,11 +108,12 @@ function getMailer() {
   const user = (process.env.SMTP_USER || "").trim();
   const pass = (process.env.SMTP_PASS || "").trim();
   const port = Number(process.env.SMTP_PORT || "465");
+
   if (host && user && pass) {
     return nodemailer.createTransport({
       host,
       port,
-      secure: port === 465, // ✅ correct for 465 vs 587
+      secure: port === 465,
       auth: { user, pass },
     });
   }
@@ -117,8 +125,7 @@ function fmtLondon(d: Date) {
 }
 
 // -----------------------------
-// CAMERA POLICY
-// (No DVLA fee for cameras)
+// CAMERA POLICY (No DVLA fee)
 // -----------------------------
 const EXTRA_FEE_GBP = 0;
 
@@ -140,21 +147,53 @@ function parseTimestamp(ts: any): number {
   return Number.isFinite(t) ? t : 0;
 }
 
+async function listAllDocs(params: {
+  databases: Databases;
+  dbId: string;
+  colId: string;
+  queries: string[];
+  pageSize?: number;
+  hardLimit?: number;
+}) {
+  const { databases, dbId, colId, queries, pageSize = 200, hardLimit = 5000 } = params;
+
+  const all: any[] = [];
+  let offset = 0;
+
+  while (true) {
+    const page = await databases.listDocuments(dbId, colId, [
+      ...queries,
+      Query.limit(pageSize),
+      Query.offset(offset),
+    ]);
+
+    all.push(...page.documents);
+
+    if (page.documents.length < pageSize) break;
+    offset += pageSize;
+
+    if (all.length >= hardLimit) break; // safety
+  }
+
+  return all;
+}
+
 // -----------------------------
-// Helper: create transaction doc (schema-tolerant)
+// Helper: create transaction doc (best-effort)
 // -----------------------------
 async function createTransactionForWinner(params: {
+  databases: Databases;
   listing: any;
   finalBidAmount: number; // winning bid (GBP)
   winnerEmail: string;
   paymentIntentId: string;
 }) {
+  const { databases, listing, finalBidAmount, winnerEmail, paymentIntentId } = params;
+
   if (!TRANSACTIONS_COLLECTION_ID) {
     console.warn("No TRANSACTIONS_COLLECTION_ID configured; skipping transaction creation.");
     return;
   }
-
-  const { listing, finalBidAmount, winnerEmail, paymentIntentId } = params;
 
   const nowIso = new Date().toISOString();
 
@@ -170,10 +209,7 @@ async function createTransactionForWinner(params: {
   const commissionRate = getNumeric(listing.commission_rate); // e.g. 10 = 10%
   const salePriceInt = Math.round(finalBidAmount);
 
-  const commissionAmount = Math.round(
-    commissionRate > 0 ? (salePriceInt * commissionRate) / 100 : 0
-  );
-
+  const commissionAmount = Math.round(commissionRate > 0 ? (salePriceInt * commissionRate) / 100 : 0);
   const sellerPayout = Math.max(0, salePriceInt - commissionAmount - EXTRA_FEE_GBP);
 
   const data: Record<string, any> = {
@@ -213,12 +249,25 @@ export async function GET(req: NextRequest) {
   const winnerCharges: any[] = [];
 
   try {
+    // ---- Hard guards ----
+    if (!cronAuthed(req)) {
+      return NextResponse.json({ ok: false, error: "Forbidden (cron secret required)." }, { status: 403 });
+    }
+
     if (!endpoint || !projectId || !apiKey) {
       return NextResponse.json({ ok: false, error: "Missing Appwrite env config." }, { status: 500 });
     }
 
-    if (!cronAuthed(req)) {
-      return NextResponse.json({ ok: false, error: "Forbidden (cron secret required)." }, { status: 403 });
+    if (!DB_ID || !LISTINGS_COLLECTION_ID) {
+      return NextResponse.json(
+        { ok: false, error: "Missing listings DB/collection env config." },
+        { status: 500 }
+      );
+    }
+
+    const databases = getDatabases();
+    if (!databases) {
+      return NextResponse.json({ ok: false, error: "Appwrite client could not be initialised." }, { status: 500 });
     }
 
     const now = new Date();
@@ -228,18 +277,24 @@ export async function GET(req: NextRequest) {
     // ---------------------------------
     // 1) Promote queued -> live
     // ---------------------------------
-    const queuedRes = await databases.listDocuments(DB_ID, LISTINGS_COLLECTION_ID, [
-      Query.equal("status", ["queued", "approvedQueued"]),
-      Query.limit(200),
-    ]);
+    const queuedDocs = await listAllDocs({
+      databases,
+      dbId: DB_ID,
+      colId: LISTINGS_COLLECTION_ID,
+      queries: [
+        Query.equal("status", ["queued", "approvedQueued"]),
+        Query.orderAsc("$createdAt"),
+      ],
+      pageSize: 200,
+      hardLimit: 5000,
+    });
 
     let promoted = 0;
 
-    for (const doc of queuedRes.documents as any[]) {
+    for (const doc of queuedDocs as any[]) {
       const startTs = parseTimestamp(doc.auction_start);
 
       // If auction_start missing, do NOT auto-promote blindly.
-      // Leave queued (admin approval should always set auction_start/auction_end).
       if (!startTs) continue;
 
       if (startTs > nowTs) continue;
@@ -253,11 +308,18 @@ export async function GET(req: NextRequest) {
     // ---------------------------------
     // 2) End live auctions
     // ---------------------------------
-    const liveRes = await databases.listDocuments(DB_ID, LISTINGS_COLLECTION_ID, [
-      Query.equal("status", "live"),
-      Query.lessThanEqual("auction_end", nowIso),
-      Query.limit(200),
-    ]);
+    const liveToEndDocs = await listAllDocs({
+      databases,
+      dbId: DB_ID,
+      colId: LISTINGS_COLLECTION_ID,
+      queries: [
+        Query.equal("status", "live"),
+        Query.lessThanEqual("auction_end", nowIso),
+        Query.orderAsc("$createdAt"),
+      ],
+      pageSize: 200,
+      hardLimit: 5000,
+    });
 
     let completed = 0;
     let markedNotSold = 0;
@@ -267,7 +329,7 @@ export async function GET(req: NextRequest) {
     const justCompletedForCharging: any[] = [];
     const mailer = getMailer();
 
-    for (const doc of liveRes.documents as any[]) {
+    for (const doc of liveToEndDocs as any[]) {
       const lid = doc.$id as string;
 
       const currentBid = getNumeric(doc.current_bid);
@@ -382,25 +444,29 @@ End:   ${fmtLondon(end)}
         continue;
       }
 
-      // ---- Load bids for this listing ----
-      let bidsRes;
+      // ---- Load bids for this listing (paged, hard limit 5000) ----
+      let bids: any[] = [];
       try {
-        bidsRes = await databases.listDocuments(DB_ID, BIDS_COLLECTION_ID, [
-          Query.equal("listing_id", lid),
-          Query.limit(1000),
-        ]);
+        bids = await listAllDocs({
+          databases,
+          dbId: DB_ID,
+          colId: BIDS_COLLECTION_ID,
+          queries: [Query.equal("listing_id", lid), Query.orderDesc("$createdAt")],
+          pageSize: 500,
+          hardLimit: 5000,
+        });
       } catch (err) {
         console.error(`Failed to list bids for listing ${lid}. Check BIDS indexes/attributes.`, err);
         winnerCharges.push({ listingId: lid, skipped: true, reason: "failed to load bids (Appwrite error)" });
         continue;
       }
 
-      const bids = (bidsRes.documents as any[]) || [];
       if (!bids.length) {
         winnerCharges.push({ listingId: lid, skipped: true, reason: "no bids found in BIDS collection" });
         continue;
       }
 
+      // Your bid docs sort by a custom timestamp — keep your existing intent:
       bids.sort((a, b) => parseTimestamp(b.timestamp) - parseTimestamp(a.timestamp));
       const winningBid = bids[0];
 
@@ -493,6 +559,7 @@ End:   ${fmtLondon(end)}
         }
 
         await createTransactionForWinner({
+          databases,
           listing,
           finalBidAmount,
           winnerEmail,
@@ -537,9 +604,6 @@ End:   ${fmtLondon(end)}
     });
   } catch (err: any) {
     console.error("auction-scheduler error", err);
-    return NextResponse.json(
-      { ok: false, error: err.message || "Unknown error" },
-      { status: 500 }
-    );
+    return NextResponse.json({ ok: false, error: err.message || "Unknown error" }, { status: 500 });
   }
 }

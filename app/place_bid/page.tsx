@@ -17,15 +17,15 @@ const client = new Client()
 const db = new Databases(client);
 const account = new Account(client);
 
-// ✅ Listings envs ONLY (no plates fallback)
+// ✅ Listings envs ONLY (no listings fallback)
 const LISTINGS_DB =
   process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID ||
-  process.env.NEXT_PUBLIC_APPWRITE_PLATES_DATABASE_ID || // keep ONLY if you still have legacy envs locally
+  process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID || // keep ONLY if you still have legacy envs locally
   "";
 
 const LISTINGS_COLLECTION =
   process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_COLLECTION_ID ||
-  process.env.NEXT_PUBLIC_APPWRITE_PLATES_COLLECTION_ID || // keep ONLY if you still have legacy envs locally
+  process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_COLLECTION_ID || // keep ONLY if you still have legacy envs locally
   "";
 
 // ----------------------------------------------------

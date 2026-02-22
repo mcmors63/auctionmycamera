@@ -1,5 +1,6 @@
 "use client";
 
+import type React from "react";
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { Client, Account } from "appwrite";
@@ -30,7 +31,7 @@ export default function AdminLoginClient() {
     const checkExisting = async () => {
       try {
         const user: any = await account.get();
-        const email = String(user?.email || "").toLowerCase();
+        const email = String(user?.email || "").trim().toLowerCase();
 
         if (alive && email === ADMIN_EMAIL) {
           router.replace("/admin");
@@ -64,7 +65,7 @@ export default function AdminLoginClient() {
       await account.createEmailPasswordSession(ADMIN_EMAIL, password);
 
       const user: any = await account.get();
-      const email = String(user?.email || "").toLowerCase();
+      const email = String(user?.email || "").trim().toLowerCase();
 
       // 3) Only allow the real admin through
       if (email !== ADMIN_EMAIL) {
@@ -85,13 +86,9 @@ export default function AdminLoginClient() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-neutral-50 px-4">
       <div className="bg-white p-8 rounded-2xl shadow-lg w-full max-w-md border border-neutral-200">
-        <h1 className="text-2xl font-bold text-center text-orange-600 mb-6">
-          Admin Login
-        </h1>
+        <h1 className="text-2xl font-bold text-center text-orange-600 mb-6">Admin Login</h1>
 
-        {error && (
-          <p className="text-red-600 text-sm mb-3 text-center">{error}</p>
-        )}
+        {error && <p className="text-red-600 text-sm mb-3 text-center">{error}</p>}
 
         <form onSubmit={handleLogin} className="space-y-4">
           <div>

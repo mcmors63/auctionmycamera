@@ -3,45 +3,93 @@ import { NextRequest, NextResponse } from "next/server";
 import { Client, Databases, ID, Account } from "node-appwrite";
 import nodemailer from "nodemailer";
 import Stripe from "stripe";
-import { calculateSettlement } from "@/lib/calculateSettlement";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 // -----------------------------
-// Stripe (VERIFY)
+// STRIPE
 // -----------------------------
-const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY || "";
+const STRIPE_SECRET_KEY = (process.env.STRIPE_SECRET_KEY || process.env.STRIPE_SECRET || "").trim();
 const stripe = STRIPE_SECRET_KEY ? new Stripe(STRIPE_SECRET_KEY) : null;
 
 // -----------------------------
-// ENV / APPWRITE
+// APPWRITE (server-safe envs)
 // -----------------------------
-const endpoint = process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT!;
-const projectId = process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID!;
-const apiKey = process.env.APPWRITE_API_KEY!;
+const endpoint =
+  process.env.APPWRITE_ENDPOINT ||
+  process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT ||
+  "";
+
+const projectId =
+  process.env.APPWRITE_PROJECT_ID ||
+  process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID ||
+  "";
+
+const apiKey = (process.env.APPWRITE_API_KEY || "").trim();
 
 const DB_ID =
-  process.env.APPWRITE_PLATES_DATABASE_ID || process.env.NEXT_PUBLIC_APPWRITE_PLATES_DATABASE_ID!;
+  process.env.APPWRITE_LISTINGS_DATABASE_ID ||
+  process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID ||
+  process.env.APPWRITE_DATABASE_ID ||
+  process.env.NEXT_PUBLIC_APPWRITE_DATABASE_ID ||
+  "";
 
-const PLATES_COLLECTION_ID =
-  process.env.APPWRITE_PLATES_COLLECTION_ID ||
-  process.env.NEXT_PUBLIC_APPWRITE_PLATES_COLLECTION_ID ||
-  "plates";
+const LISTINGS_COLLECTION_ID =
+  process.env.APPWRITE_LISTINGS_COLLECTION_ID ||
+  process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_COLLECTION_ID ||
+  "listings";
 
 const TX_COLLECTION_ID =
   process.env.APPWRITE_TRANSACTIONS_COLLECTION_ID ||
   process.env.NEXT_PUBLIC_APPWRITE_TRANSACTIONS_COLLECTION_ID ||
   "transactions";
 
-const DVLA_FEE_GBP = 80;
-
-const LEGACY_BUYER_PAYS_IDS = new Set<string>([
-  "696ea3d0001a45280a16",
-  "697bccfd001325add473",
-]);
+// -----------------------------
+// CAMERA POLICY
+// -----------------------------
+const EXTRA_FEE_GBP = 0; // ✅ cameras: no DVLA fee
 
 // -----------------------------
-// AUTH HELPERS (Appwrite JWT)
+// SMTP / EMAIL
+// -----------------------------
+const smtpHost = (process.env.SMTP_HOST || "").trim();
+const smtpPort = Number(process.env.SMTP_PORT || "465");
+const smtpUser = (process.env.SMTP_USER || "").trim();
+const smtpPass = (process.env.SMTP_PASS || "").trim();
+
+const siteUrl = (process.env.NEXT_PUBLIC_SITE_URL || "https://auctionmycamera.co.uk").replace(/\/+$/, "");
+const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || process.env.NEXT_PUBLIC_ADMIN_EMAIL || "admin@auctionmycamera.co.uk")
+  .trim()
+  .toLowerCase();
+
+function getTransporter() {
+  if (!smtpHost || !smtpUser || !smtpPass) {
+    console.warn("[buy-now] SMTP not fully configured; emails will be skipped.");
+    return null;
+  }
+  return nodemailer.createTransport({
+    host: smtpHost,
+    port: smtpPort,
+    secure: smtpPort === 465,
+    auth: { user: smtpUser, pass: smtpPass },
+  });
+}
+
+function escapeText(s: any) {
+  return String(s ?? "").replace(/[\r\n]+/g, " ").trim();
+}
+
+function isValidEmail(email: string) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
+function moneyGBP(n: number) {
+  return n.toLocaleString("en-GB", { style: "currency", currency: "GBP" });
+}
+
+// -----------------------------
+// AUTH HELPERS (Appwrite JWT via Bearer token)
 // -----------------------------
 function getBearerJwt(req: NextRequest) {
   const auth = req.headers.get("authorization") || "";
@@ -53,50 +101,127 @@ async function requireAuthedUser(req: NextRequest) {
   const jwt = getBearerJwt(req);
   if (!jwt) return null;
 
+  if (!endpoint || !projectId) return null;
+
   const c = new Client().setEndpoint(endpoint).setProject(projectId).setJWT(jwt);
   const account = new Account(c);
 
   try {
     const u = await account.get();
-    return { userId: u.$id as string, email: (u as any).email as string };
+    return { userId: u.$id as string, email: String((u as any).email || "").trim() };
   } catch {
     return null;
   }
 }
 
-// -----------------------------
-// SMTP
-// -----------------------------
-const smtpHost = process.env.SMTP_HOST || "";
-const smtpPort = Number(process.env.SMTP_PORT || "465");
-const smtpUser = process.env.SMTP_USER || "";
-const smtpPass = process.env.SMTP_PASS || "";
-const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || "https://auctionmyplate.co.uk";
-
-const ADMIN_EMAIL = process.env.ADMIN_EMAIL || "admin@auctionmyplate.co.uk";
-
-function getAppwriteDatabases() {
-  const client = new Client().setEndpoint(endpoint).setProject(projectId).setKey(apiKey);
-  return new Databases(client);
+function getServerDatabases() {
+  const c = new Client().setEndpoint(endpoint).setProject(projectId).setKey(apiKey);
+  return new Databases(c);
 }
 
-function getTransporter() {
-  if (!smtpHost || !smtpUser || !smtpPass) {
-    console.warn("[buy-now] SMTP not fully configured, emails will be skipped.");
-    return null;
+// -----------------------------
+// SCHEMA TOLERANCE HELPERS
+// -----------------------------
+async function createDocSchemaTolerant(
+  databases: Databases,
+  dbId: string,
+  colId: string,
+  payload: Record<string, any>
+) {
+  const data: Record<string, any> = { ...payload };
+
+  for (let i = 0; i < 12; i++) {
+    try {
+      return await databases.createDocument(dbId, colId, ID.unique(), data);
+    } catch (err: any) {
+      const msg = String(err?.message || "");
+      const m = msg.match(/Unknown attribute:\s*([A-Za-z0-9_]+)/i);
+      if (m?.[1]) {
+        delete data[m[1]];
+        continue;
+      }
+      throw err;
+    }
   }
 
-  return nodemailer.createTransport({
-    host: smtpHost,
-    port: smtpPort,
-    secure: smtpPort === 465,
-    auth: { user: smtpUser, pass: smtpPass },
+  // minimal fallback
+  return await databases.createDocument(dbId, colId, ID.unique(), {
+    listing_id: payload.listing_id,
+    seller_email: payload.seller_email,
+    buyer_email: payload.buyer_email,
+    sale_price: payload.sale_price,
+    payment_status: payload.payment_status || "paid",
+    transaction_status: payload.transaction_status || "pending",
+  });
+}
+
+async function updateDocSchemaTolerant(
+  databases: Databases,
+  dbId: string,
+  colId: string,
+  docId: string,
+  payload: Record<string, any>
+) {
+  const data: Record<string, any> = { ...payload };
+
+  for (let i = 0; i < 12; i++) {
+    try {
+      return await databases.updateDocument(dbId, colId, docId, data);
+    } catch (err: any) {
+      const msg = String(err?.message || "");
+      const m = msg.match(/Unknown attribute:\s*([A-Za-z0-9_]+)/i);
+      if (m?.[1]) {
+        delete data[m[1]];
+        continue;
+      }
+      throw err;
+    }
+  }
+
+  // minimal fallback
+  return await databases.updateDocument(dbId, colId, docId, {
+    status: payload.status,
   });
 }
 
 // -----------------------------
+// LISTING HELPERS
+// -----------------------------
+function getBuyNowPriceGBP(listing: any): number {
+  // Support common schemas
+  const a = listing?.buy_now_price;
+  const b = listing?.buy_now;
+  const c = listing?.buyNowPrice;
+  const d = listing?.buyNow;
+
+  const n =
+    typeof a === "number"
+      ? a
+      : typeof b === "number"
+      ? b
+      : typeof c === "number"
+      ? c
+      : typeof d === "number"
+      ? d
+      : NaN;
+
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return Math.round(n); // store GBP integer
+}
+
+function getItemTitle(listing: any): string {
+  const t = String(listing?.item_title || listing?.title || "").trim();
+  if (t) return t;
+  const brand = String(listing?.brand || "").trim();
+  const model = String(listing?.model || "").trim();
+  const bm = [brand, model].filter(Boolean).join(" ").trim();
+  return bm || "your item";
+}
+
+// -----------------------------
 // POST /api/buy-now
-// Body: { listingId, paymentIntentId, totalCharged }
+// Body: { listingId, paymentIntentId }
+// NOTE: We do NOT trust client totals.
 // -----------------------------
 export async function POST(req: NextRequest) {
   try {
@@ -109,50 +234,78 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
     }
 
-    const body = await req.json().catch(() => ({} as any));
+    if (!endpoint || !projectId || !apiKey) {
+      return NextResponse.json({ error: "Server Appwrite config missing." }, { status: 500 });
+    }
 
+    if (!DB_ID || !LISTINGS_COLLECTION_ID || !TX_COLLECTION_ID) {
+      return NextResponse.json({ error: "Server DB/collection configuration missing." }, { status: 500 });
+    }
+
+    const body = await req.json().catch(() => ({} as any));
     const listingId = body.listingId as string | undefined;
     const paymentIntentId = body.paymentIntentId as string | undefined;
-    const totalChargedRaw = body.totalCharged;
 
     if (!listingId || !paymentIntentId) {
       return NextResponse.json({ error: "listingId and paymentIntentId are required." }, { status: 400 });
     }
 
-    const totalCharged = Number(totalChargedRaw);
-    if (!Number.isFinite(totalCharged) || totalCharged <= 0) {
-      return NextResponse.json({ error: "totalCharged must be a positive number." }, { status: 400 });
+    const databases = getServerDatabases();
+
+    // 1) Load listing (server source of truth)
+    const listing: any = await databases.getDocument(DB_ID, LISTINGS_COLLECTION_ID, listingId);
+
+    const currentStatus = String(listing?.status || "").trim().toLowerCase();
+    if (currentStatus === "sold") {
+      return NextResponse.json({ error: "This listing is already sold." }, { status: 409 });
+    }
+    if (currentStatus === "completed") {
+      return NextResponse.json({ error: "This listing has completed via auction." }, { status: 409 });
     }
 
-    const expectedAmountPence = Math.round(totalCharged * 100);
+    const sellerEmail = String(listing?.seller_email || listing?.sellerEmail || "").trim();
+    if (!sellerEmail) {
+      return NextResponse.json({ error: "Listing has no seller email set." }, { status: 400 });
+    }
 
-    // 0) VERIFY STRIPE PAYMENT INTENT (MUST be succeeded + match listing + amount)
+    // 2) Get Buy Now price from listing
+    const buyNowPrice = getBuyNowPriceGBP(listing);
+    if (!buyNowPrice || buyNowPrice <= 0) {
+      return NextResponse.json({ error: "This listing does not have a valid Buy Now price." }, { status: 400 });
+    }
+
+    const expectedTotal = buyNowPrice + EXTRA_FEE_GBP;
+    const expectedAmountPence = Math.round(expectedTotal * 100);
+
+    // 3) VERIFY STRIPE PAYMENT INTENT (must be succeeded + amount must match listing price)
     const pi = await stripe.paymentIntents.retrieve(paymentIntentId);
 
     if (!pi || (pi.currency || "").toLowerCase() !== "gbp") {
       return NextResponse.json({ error: "Invalid payment intent." }, { status: 400 });
     }
-
     if (pi.status !== "succeeded") {
       return NextResponse.json({ error: `Payment not completed (status: ${pi.status}).` }, { status: 400 });
     }
-
     if (pi.amount !== expectedAmountPence) {
       return NextResponse.json({ error: "Payment amount mismatch." }, { status: 400 });
     }
 
-    const metaListingId = (pi.metadata?.listingId || pi.metadata?.listing_id || "").trim();
+    const metaListingId = String(pi.metadata?.listingId || pi.metadata?.listing_id || "").trim();
     if (metaListingId && metaListingId !== listingId) {
       return NextResponse.json({ error: "Payment metadata mismatch (listingId)." }, { status: 400 });
     }
 
-    // Best-effort buyer match
-    const buyerEmail = authed.email;
-    const metaBuyerEmail = (pi.metadata?.buyerEmail || "").trim().toLowerCase();
+    const buyerEmail = authed.email.trim();
+    if (!buyerEmail || !isValidEmail(buyerEmail)) {
+      return NextResponse.json({ error: "Authenticated user has no valid email." }, { status: 400 });
+    }
+
+    const metaBuyerEmail = String(pi.metadata?.buyerEmail || "").trim().toLowerCase();
     if (metaBuyerEmail && metaBuyerEmail !== buyerEmail.toLowerCase()) {
       return NextResponse.json({ error: "Payment metadata mismatch (buyer)." }, { status: 403 });
     }
 
+    // Best-effort customer email match
     if (pi.customer && typeof pi.customer === "string") {
       try {
         const c = await stripe.customers.retrieve(pi.customer);
@@ -164,79 +317,46 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    if (!DB_ID || !PLATES_COLLECTION_ID || !TX_COLLECTION_ID) {
-      return NextResponse.json({ error: "Server configuration missing for database/collections." }, { status: 500 });
-    }
-
-    const databases = getAppwriteDatabases();
-
-    // 1) Load listing
-    const listing = await databases.getDocument(DB_ID, PLATES_COLLECTION_ID, listingId);
-
-    const currentStatus = String((listing as any).status || "");
-    if (currentStatus === "sold") {
-      return NextResponse.json({ error: "This listing is already sold." }, { status: 409 });
-    }
-
-    const reg = ((listing as any).registration as string) || "Unknown";
-    const sellerEmail = (listing as any).seller_email as string | undefined;
-    const commissionRateFromListing = (listing as any).commission_rate as number | undefined;
-
-    if (!sellerEmail) {
-      return NextResponse.json({ error: "Listing has no seller_email set." }, { status: 400 });
-    }
-
-    // 2) Decide who pays DVLA fee (SERVER ENFORCED)
-    const isLegacyBuyerPays = LEGACY_BUYER_PAYS_IDS.has(listing.$id);
-    const buyerPaysTransferFee = isLegacyBuyerPays;
-    const dvlaFeeChargedToBuyer = buyerPaysTransferFee ? DVLA_FEE_GBP : 0;
-
-    if (buyerPaysTransferFee && totalCharged < DVLA_FEE_GBP) {
-      return NextResponse.json({ error: "Legacy listing totalCharged is invalid (must include DVLA fee)." }, { status: 400 });
-    }
-
-    // 3) Plate sale price (plate-only)
-    const salePrice = Math.max(0, totalCharged - dvlaFeeChargedToBuyer);
-
-    // 4) Settlement
-    const settlement = calculateSettlement(salePrice);
+    // 4) Settlement (camera-style)
+    const commissionRateFromListing = listing?.commission_rate;
+    const listingFeeFromListing = listing?.listing_fee;
 
     const commissionRate =
-      typeof commissionRateFromListing === "number" && commissionRateFromListing > 0
+      typeof commissionRateFromListing === "number" && commissionRateFromListing >= 0
         ? commissionRateFromListing
-        : settlement.commissionRate;
+        : 10; // default 10%
 
-    const commissionAmount = settlement.commissionAmount;
-    const sellerPayoutBeforeDvla = settlement.sellerPayout;
+    const listingFee =
+      typeof listingFeeFromListing === "number" && listingFeeFromListing >= 0 ? listingFeeFromListing : 0;
 
-    const sellerDvlaDeduction = buyerPaysTransferFee ? 0 : DVLA_FEE_GBP;
-    const sellerPayout = Math.max(0, sellerPayoutBeforeDvla - sellerDvlaDeduction);
+    const salePrice = buyNowPrice; // GBP (no extra fee)
+    const commissionAmount = Math.round((salePrice * commissionRate) / 100);
+    const sellerPayout = Math.max(0, salePrice - commissionAmount - listingFee);
 
-    const dvlaFee = DVLA_FEE_GBP;
     const nowIso = new Date().toISOString();
+    const itemTitle = getItemTitle(listing);
 
-    // 5) Create transaction doc
-    const txDoc = await databases.createDocument(DB_ID, TX_COLLECTION_ID, ID.unique(), {
+    // 5) Create transaction doc (schema-tolerant)
+    const txPayload: Record<string, any> = {
       listing_id: listing.$id,
-      registration: reg,
+      item_title: itemTitle,
       seller_email: sellerEmail,
       buyer_email: buyerEmail,
 
       sale_price: salePrice,
-
       commission_rate: commissionRate,
       commission_amount: commissionAmount,
-
       seller_payout: sellerPayout,
-      dvla_fee: dvlaFee,
 
       payment_status: "paid",
-      transaction_status: "awaiting_documents",
+      transaction_status: "pending",
+
       stripe_payment_intent_id: paymentIntentId,
 
       created_at: nowIso,
       updated_at: nowIso,
 
+      // Optional legacy flags (safe if schema strips them)
       seller_docs_requested: true,
       seller_docs_received: false,
       seller_payment_transferred: false,
@@ -249,105 +369,97 @@ export async function POST(req: NextRequest) {
       buyer_transfer_complete: false,
 
       documents: [],
-    });
+    };
 
-    // 6) Mark plate as sold
-    await databases.updateDocument(DB_ID, PLATES_COLLECTION_ID, listing.$id, {
+    const txDoc: any = await createDocSchemaTolerant(databases, DB_ID, TX_COLLECTION_ID, txPayload);
+
+    // 6) Mark listing as sold (schema-tolerant)
+    await updateDocSchemaTolerant(databases, DB_ID, LISTINGS_COLLECTION_ID, listing.$id, {
       status: "sold",
       sold_price: salePrice,
       buyer_email: buyerEmail,
       sale_status: "sold_buy_now",
       payout_status: "pending",
+      updated_at: nowIso,
     });
 
-    const updatedListing = await databases.getDocument(DB_ID, PLATES_COLLECTION_ID, listing.$id);
+    const updatedListing = await databases.getDocument(DB_ID, LISTINGS_COLLECTION_ID, listing.$id);
 
     // 7) Emails (best-effort)
     const transporter = getTransporter();
     if (transporter) {
-      const prettySale = salePrice.toLocaleString("en-GB", { style: "currency", currency: "GBP" });
-      const prettyCommission = commissionAmount.toLocaleString("en-GB", { style: "currency", currency: "GBP" });
-      const prettyPayout = sellerPayout.toLocaleString("en-GB", { style: "currency", currency: "GBP" });
-      const prettyDvla = dvlaFee.toLocaleString("en-GB", { style: "currency", currency: "GBP" });
+      const prettySale = moneyGBP(salePrice);
+      const prettyCommission = moneyGBP(commissionAmount);
+      const prettyPayout = moneyGBP(sellerPayout);
 
       const sellerDashboardUrl = `${siteUrl}/dashboard?tab=transactions`;
       const buyerDashboardUrl = `${siteUrl}/dashboard?tab=purchases`;
-      const adminTxUrl = `${siteUrl}/admin?tab=transactions`;
+      const adminTxUrl = `${siteUrl}/admin`;
 
-      const dvlaAdminLine = buyerPaysTransferFee
-        ? `DVLA fee (charged to buyer): ${prettyDvla}`
-        : `DVLA fee (included seller-side; deducted from payout): ${prettyDvla}`;
-
-      const dvlaSellerLine = buyerPaysTransferFee
-        ? `DVLA assignment fee (paid by buyer): ${prettyDvla}`
-        : `DVLA assignment fee (covered seller-side): ${prettyDvla}`;
-
-      const dvlaBuyerLine = buyerPaysTransferFee
-        ? `A DVLA paperwork fee of ${prettyDvla} has also been charged.`
-        : `No additional DVLA paperwork fee was added at checkout (transfer handling is included seller-side).`;
-
+      // Admin
       try {
-        await transporter.sendMail({
-          from: `"AuctionMyPlate" <${smtpUser}>`,
-          to: ADMIN_EMAIL,
-          subject: `Buy Now – ${reg} purchased`,
-          text: `Buy Now purchase
+        if (ADMIN_EMAIL && isValidEmail(ADMIN_EMAIL)) {
+          await transporter.sendMail({
+            from: `"AuctionMyCamera" <${smtpUser}>`,
+            to: ADMIN_EMAIL,
+            subject: `Buy Now – ${escapeText(itemTitle)} purchased`,
+            text: `Buy Now purchase
 
-Plate: ${reg}
-Plate sale price: ${prettySale}
+Item: ${itemTitle}
+Sale price: ${prettySale}
 Buyer: ${buyerEmail}
 Seller: ${sellerEmail}
 
-Commission: ${prettyCommission}
-${dvlaAdminLine}
+Commission (${commissionRate}%): ${prettyCommission}
 Seller payout (expected): ${prettyPayout}
 
 Transaction ID: ${txDoc.$id}
 
 Admin dashboard: ${adminTxUrl}
 `,
-        });
+          });
+        }
       } catch (err) {
         console.error("[buy-now] Failed to send admin email:", err);
       }
 
+      // Seller
       try {
         await transporter.sendMail({
-          from: `"AuctionMyPlate" <${smtpUser}>`,
+          from: `"AuctionMyCamera" <${smtpUser}>`,
           to: sellerEmail,
-          subject: `🎉 Your plate ${reg} has sold via Buy Now`,
+          subject: `🎉 Your item has sold via Buy Now`,
           text: `Good news!
 
-Your registration ${reg} has been sold via Buy Now on AuctionMyPlate for ${prettySale}.
+Your item "${itemTitle}" has been sold via Buy Now on AuctionMyCamera for ${prettySale}.
 
 Our commission (${commissionRate}%): ${prettyCommission}
-${dvlaSellerLine}
-Amount due to you (subject to successful transfer): ${prettyPayout}
+Amount due to you (subject to completion steps): ${prettyPayout}
 
-You can track this sale in your dashboard:
+Track progress in your dashboard:
 ${sellerDashboardUrl}
 
-Thank you for using AuctionMyPlate.co.uk.
+Thank you for using AuctionMyCamera.co.uk.
 `,
         });
       } catch (err) {
-        console.error("[buy-now] Failed to send seller celebration email:", err);
+        console.error("[buy-now] Failed to send seller email:", err);
       }
 
+      // Buyer
       try {
         await transporter.sendMail({
-          from: `"AuctionMyPlate" <${smtpUser}>`,
+          from: `"AuctionMyCamera" <${smtpUser}>`,
           to: buyerEmail,
-          subject: `You’ve bought ${reg} via Buy Now`,
+          subject: `Your Buy Now purchase is confirmed`,
           text: `Thank you for your purchase.
 
-You’ve successfully bought registration ${reg} on AuctionMyPlate for ${prettySale}.
-${dvlaBuyerLine}
+You’ve successfully bought "${itemTitle}" via Buy Now for ${prettySale}.
 
-You can track this purchase in your dashboard:
+Track this purchase in your dashboard:
 ${buyerDashboardUrl}
 
-Thank you for using AuctionMyPlate.co.uk.
+Thank you for using AuctionMyCamera.co.uk.
 `,
         });
       } catch (err) {
@@ -359,8 +471,6 @@ Thank you for using AuctionMyPlate.co.uk.
       {
         ok: true,
         transactionId: txDoc.$id,
-        buyerPaysTransferFee,
-        policy: buyerPaysTransferFee ? "legacy_buyer_pays" : "new_seller_pays",
         updatedListing,
       },
       { status: 200 }

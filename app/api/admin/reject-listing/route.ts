@@ -6,22 +6,31 @@ import nodemailer from "nodemailer";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-// ----- Appwrite (server) -----
-const endpoint = process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT!;
-const projectId = process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID!;
-const apiKey = process.env.APPWRITE_API_KEY!;
+// -----------------------------
+// Appwrite (server)
+// Prefer server envs first, then public fallbacks (non-breaking).
+// -----------------------------
+const endpoint =
+  process.env.APPWRITE_ENDPOINT ||
+  process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT ||
+  "";
 
-// ✅ Use camera listings env first, then legacy PLATES env as fallback
+const projectId =
+  process.env.APPWRITE_PROJECT_ID ||
+  process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID ||
+  "";
+
+const apiKey = process.env.APPWRITE_API_KEY || "";
+
+// ✅ Use camera listings env first, then legacy fallbacks
 const LISTINGS_DB_ID =
   process.env.APPWRITE_LISTINGS_DATABASE_ID ||
   process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID ||
-  process.env.APPWRITE_LISTINGS_DATABASE_ID ||
-  process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID ||
+  process.env.APPWRITE_DATABASE_ID ||
+  process.env.NEXT_PUBLIC_APPWRITE_DATABASE_ID ||
   "";
 
 const LISTINGS_COLLECTION_ID =
-  process.env.APPWRITE_LISTINGS_COLLECTION_ID ||
-  process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_COLLECTION_ID ||
   process.env.APPWRITE_LISTINGS_COLLECTION_ID ||
   process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_COLLECTION_ID ||
   "listings";
@@ -30,7 +39,6 @@ const SITE_URL = (process.env.NEXT_PUBLIC_SITE_URL || "https://auctionmycamera.c
 
 // ----- Email -----
 // Don’t crash the route if SMTP envs aren’t set.
-// Also make sender/reply-to camera-branded by default.
 function getMailer() {
   const host = process.env.SMTP_HOST;
   const user = process.env.SMTP_USER;
@@ -51,7 +59,7 @@ function getMailer() {
   const fromEmail =
     process.env.FROM_EMAIL ||
     process.env.CONTACT_FROM_EMAIL ||
-    `admin@auctionmycamera.co.uk`;
+    "admin@auctionmycamera.co.uk";
 
   const replyTo =
     process.env.REPLY_TO_EMAIL ||
@@ -59,6 +67,41 @@ function getMailer() {
     fromEmail;
 
   return { transporter, fromEmail, replyTo };
+}
+
+function getServerDatabases() {
+  if (!endpoint || !projectId || !apiKey) return null;
+
+  const client = new Client().setEndpoint(endpoint).setProject(projectId).setKey(apiKey);
+  return new Databases(client);
+}
+
+// Schema-tolerant update: remove unknown keys and retry
+async function updateDocSchemaTolerant(
+  databases: Databases,
+  dbId: string,
+  colId: string,
+  docId: string,
+  payload: Record<string, any>
+) {
+  const data: Record<string, any> = { ...payload };
+
+  for (let i = 0; i < 8; i++) {
+    try {
+      return await databases.updateDocument(dbId, colId, docId, data);
+    } catch (err: any) {
+      const msg = String(err?.message || "");
+      const m = msg.match(/Unknown attribute:\s*([A-Za-z0-9_]+)/i);
+      if (m?.[1]) {
+        delete data[m[1]];
+        continue;
+      }
+      throw err;
+    }
+  }
+
+  // Last resort: attempt status only
+  return await databases.updateDocument(dbId, colId, docId, { status: payload.status });
 }
 
 // Simple GET for testing in browser
@@ -78,12 +121,25 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const body = await req.json();
+    const databases = getServerDatabases();
+    if (!databases) {
+      return NextResponse.json(
+        { error: "Server Appwrite config missing (endpoint/project/apiKey)." },
+        { status: 500 }
+      );
+    }
+
+    let body: any;
+    try {
+      body = await req.json();
+    } catch {
+      return NextResponse.json({ error: "Invalid JSON body." }, { status: 400 });
+    }
 
     // ✅ Accept both legacy and camera naming
-    const listingId = body.plateId || body.listingId || body.id;
-    const sellerEmail = body.sellerEmail || body.seller_email || "";
-    const title = String(body.registration || body.title || body.itemTitle || "your listing").trim();
+    const listingId = body?.plateId || body?.listingId || body?.id;
+    const sellerEmail = String(body?.sellerEmail || body?.seller_email || "").trim();
+    const title = String(body?.registration || body?.title || body?.itemTitle || "your listing").trim();
 
     if (!listingId || !sellerEmail) {
       return NextResponse.json(
@@ -92,13 +148,14 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const client = new Client().setEndpoint(endpoint).setProject(projectId).setKey(apiKey);
-    const databases = new Databases(client);
-
-    // ✅ Update status to rejected (don’t assume other fields exist)
-    const updated = await databases.updateDocument(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, listingId, {
-      status: "rejected",
-    });
+    // ✅ Update status to rejected (schema-tolerant)
+    const updated = await updateDocSchemaTolerant(
+      databases,
+      LISTINGS_DB_ID,
+      LISTINGS_COLLECTION_ID,
+      listingId,
+      { status: "rejected" }
+    );
 
     // Try sending email, but don't fail the rejection if email breaks
     try {

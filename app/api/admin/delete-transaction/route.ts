@@ -7,10 +7,22 @@ export const dynamic = "force-dynamic";
 
 // -----------------------------
 // ENV (server-side)
+// Prefer server envs first, then public fallbacks (non-breaking).
 // -----------------------------
-const endpoint = process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT;
-const projectId = process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID;
-const apiKey = process.env.APPWRITE_API_KEY;
+const endpoint =
+  process.env.APPWRITE_ENDPOINT ||
+  process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT ||
+  "";
+
+const projectId =
+  process.env.APPWRITE_PROJECT_ID ||
+  process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID ||
+  "";
+
+const apiKey = process.env.APPWRITE_API_KEY || "";
+
+// Optional: if set, require ?token=... or header x-admin-token
+const ADMIN_DELETE_TX_SECRET = (process.env.ADMIN_DELETE_TX_SECRET || "").trim();
 
 // Transactions DB/collection (camera first, legacy fallback)
 const TX_DB_ID =
@@ -20,8 +32,8 @@ const TX_DB_ID =
   process.env.NEXT_PUBLIC_APPWRITE_TRANSACTIONS_DB_ID ||
   process.env.APPWRITE_LISTINGS_DATABASE_ID ||
   process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID ||
-  process.env.APPWRITE_PLATES_DATABASE_ID ||
-  process.env.NEXT_PUBLIC_APPWRITE_PLATES_DATABASE_ID ||
+  process.env.APPWRITE_DATABASE_ID ||
+  process.env.NEXT_PUBLIC_APPWRITE_DATABASE_ID ||
   "";
 
 const TX_COLLECTION_ID =
@@ -32,10 +44,12 @@ const TX_COLLECTION_ID =
   "transactions";
 
 function getServerDatabases() {
+  if (!endpoint || !projectId || !apiKey) return null;
+
   const client = new Client()
-    .setEndpoint(endpoint!) // guarded in POST
-    .setProject(projectId!)
-    .setKey(apiKey!);
+    .setEndpoint(endpoint)
+    .setProject(projectId)
+    .setKey(apiKey);
 
   return new Databases(client);
 }
@@ -76,17 +90,39 @@ async function updateDocSchemaTolerant(
 // POST  /api/admin/delete-transaction
 // Body: { txId?: string, transactionId?: string, reason: string }
 // Soft delete (archive) – no hard delete
+// Optional auth: if ADMIN_DELETE_TX_SECRET is set, require token.
 // -----------------------------
 export async function POST(req: NextRequest) {
   try {
     if (!endpoint || !projectId || !apiKey) {
       console.error("❌ DELETE-TX: Missing Appwrite config");
-      return NextResponse.json({ error: "Server Appwrite config missing." }, { status: 500 });
+      return NextResponse.json(
+        { error: "Server Appwrite config missing." },
+        { status: 500 }
+      );
     }
 
     if (!TX_DB_ID || !TX_COLLECTION_ID) {
-      console.error("❌ DELETE-TX: Missing transactions DB/collection config", { TX_DB_ID, TX_COLLECTION_ID });
-      return NextResponse.json({ error: "Server transactions configuration incomplete." }, { status: 500 });
+      console.error("❌ DELETE-TX: Missing transactions DB/collection config", {
+        TX_DB_ID,
+        TX_COLLECTION_ID,
+      });
+      return NextResponse.json(
+        { error: "Server transactions configuration incomplete." },
+        { status: 500 }
+      );
+    }
+
+    // Optional protection: enable by setting ADMIN_DELETE_TX_SECRET in env
+    if (ADMIN_DELETE_TX_SECRET) {
+      const { searchParams } = new URL(req.url);
+      const tokenFromQuery = (searchParams.get("token") || "").trim();
+      const tokenFromHeader = (req.headers.get("x-admin-token") || "").trim();
+      const token = tokenFromQuery || tokenFromHeader;
+
+      if (token !== ADMIN_DELETE_TX_SECRET) {
+        return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
+      }
     }
 
     let body: any;
@@ -96,20 +132,40 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Invalid JSON body." }, { status: 400 });
     }
 
-    const txId = (body?.txId as string | undefined) || (body?.transactionId as string | undefined) || "";
+    const txId =
+      (body?.txId as string | undefined) ||
+      (body?.transactionId as string | undefined) ||
+      "";
+
     const reason = String(body?.reason || "").trim();
 
     if (!txId) {
-      return NextResponse.json({ error: "txId or transactionId is required." }, { status: 400 });
+      return NextResponse.json(
+        { error: "txId or transactionId is required." },
+        { status: 400 }
+      );
     }
     if (!reason) {
-      return NextResponse.json({ error: "A delete reason is required." }, { status: 400 });
+      return NextResponse.json(
+        { error: "A delete reason is required." },
+        { status: 400 }
+      );
     }
 
     const databases = getServerDatabases();
+    if (!databases) {
+      return NextResponse.json(
+        { error: "Server Appwrite client could not be initialised." },
+        { status: 500 }
+      );
+    }
 
     // Load existing doc so we can keep payment_status if present
-    const existing: any = await databases.getDocument(TX_DB_ID, TX_COLLECTION_ID, txId);
+    const existing: any = await databases.getDocument(
+      TX_DB_ID,
+      TX_COLLECTION_ID,
+      txId
+    );
 
     const nowIso = new Date().toISOString();
 
@@ -125,9 +181,18 @@ export async function POST(req: NextRequest) {
       updated_at: nowIso,
     };
 
-    const updated = await updateDocSchemaTolerant(databases, TX_DB_ID, TX_COLLECTION_ID, txId, updatePayload);
+    const updated = await updateDocSchemaTolerant(
+      databases,
+      TX_DB_ID,
+      TX_COLLECTION_ID,
+      txId,
+      updatePayload
+    );
 
-    return NextResponse.json({ ok: true, transaction: updated }, { status: 200 });
+    return NextResponse.json(
+      { ok: true, transaction: updated },
+      { status: 200 }
+    );
   } catch (err: any) {
     console.error("❌ DELETE-TX error:", err);
     return NextResponse.json(
@@ -139,5 +204,8 @@ export async function POST(req: NextRequest) {
 
 // Small debug helper – safe to leave
 export async function GET() {
-  return NextResponse.json({ ok: true, route: "admin/delete-transaction" }, { status: 200 });
+  return NextResponse.json(
+    { ok: true, route: "admin/delete-transaction" },
+    { status: 200 }
+  );
 }

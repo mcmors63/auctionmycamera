@@ -20,12 +20,12 @@ const ADMIN_EMAIL = (process.env.NEXT_PUBLIC_ADMIN_EMAIL || "admin@auctionmycame
   .trim()
   .toLowerCase();
 
-// ✅ Transactions may be a separate DB/Table (match AdminClient.tsx)
+// ✅ Transactions DB/Collection (keep flexible, but remove duplicates)
 const TRANSACTIONS_DB_ID =
   process.env.NEXT_PUBLIC_APPWRITE_TRANSACTIONS_DATABASE_ID ||
   process.env.NEXT_PUBLIC_APPWRITE_TRANSACTIONS_DB_ID ||
   process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID ||
-  process.env.NEXT_PUBLIC_APPWRITE_PLATES_DATABASE_ID ||
+  process.env.NEXT_PUBLIC_APPWRITE_DATABASE_ID ||
   "";
 
 const TRANSACTIONS_COLLECTION_ID =
@@ -47,7 +47,7 @@ type TxDoc = {
   brand?: string;
   model?: string;
 
-  // legacy
+  // legacy (plates)
   registration?: string;
 
   listing_id?: string;
@@ -138,8 +138,10 @@ async function updateDocSchemaTolerant(
 
 export default function AdminTransactionPage() {
   const router = useRouter();
-  const params = useParams<{ id: string }>();
-  const id = params?.id;
+  const params = useParams<{ id?: string | string[] }>();
+
+  const rawId = params?.id;
+  const id = Array.isArray(rawId) ? rawId[0] : rawId;
 
   const [authorized, setAuthorized] = useState(false);
   const [tx, setTx] = useState<TxDoc | null>(null);
@@ -205,7 +207,11 @@ export default function AdminTransactionPage() {
           return;
         }
 
-        const doc: any = await databases.getDocument(TRANSACTIONS_DB_ID, TRANSACTIONS_COLLECTION_ID, id);
+        const doc: any = await databases.getDocument(
+          TRANSACTIONS_DB_ID,
+          TRANSACTIONS_COLLECTION_ID,
+          id
+        );
 
         setTx(doc);
 
@@ -267,10 +273,14 @@ export default function AdminTransactionPage() {
 
     try {
       const payment_status =
-        canPaySeller && sellerFlags.seller_payment_transferred ? "paid" : (tx.payment_status || "pending");
+        canPaySeller && sellerFlags.seller_payment_transferred
+          ? "paid"
+          : tx.payment_status || "pending";
 
       const transaction_status =
-        canMarkSellerComplete && sellerFlags.seller_process_complete ? "complete" : (tx.transaction_status || "pending");
+        canMarkSellerComplete && sellerFlags.seller_process_complete
+          ? "complete"
+          : tx.transaction_status || "pending";
 
       const updateData: Record<string, any> = {
         ...sellerFlags,
@@ -304,7 +314,9 @@ export default function AdminTransactionPage() {
   const handleMarkCompleteOverride = async () => {
     if (!tx) return;
 
-    const ok = window.confirm("Force mark this transaction as COMPLETE?\n\nUse only when you’re happy everything is finished.");
+    const ok = window.confirm(
+      "Force mark this transaction as COMPLETE?\n\nUse only when you’re happy everything is finished."
+    );
     if (!ok) return;
 
     setSaving(true);
@@ -421,12 +433,7 @@ export default function AdminTransactionPage() {
 
               {publicListingHref && (
                 <p className="pt-2">
-                  <a
-                    href={publicListingHref}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-blue-600 underline"
-                  >
+                  <a href={publicListingHref} target="_blank" rel="noopener noreferrer" className="text-blue-600 underline">
                     View public listing page
                   </a>
                 </p>
@@ -577,9 +584,7 @@ export default function AdminTransactionPage() {
 
                     const directUrl = !isStringId && (doc.url || doc.publicUrl || null);
 
-                    const fileId = isStringId
-                      ? doc
-                      : doc.fileId || doc.id || doc.documentId || null;
+                    const fileId = isStringId ? doc : doc.fileId || doc.id || doc.documentId || null;
 
                     const viewHref = directUrl
                       ? directUrl

@@ -73,7 +73,7 @@ const endpoint = endpointRaw.replace(/\/+$/, "");
 const projectId = process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID!;
 const apiKey = process.env.APPWRITE_API_KEY!;
 
-// ✅ IMPORTANT: Only use LISTINGS envs (no PLATES fallback).
+// ✅ IMPORTANT: Only use LISTINGS envs (no LISTINGS fallback).
 // If these are missing, we'd rather fail loudly than silently query the wrong database.
 const DB_ID =
   process.env.APPWRITE_LISTINGS_DATABASE_ID ||

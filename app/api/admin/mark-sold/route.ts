@@ -8,25 +8,35 @@ export const dynamic = "force-dynamic";
 
 // -----------------------------
 // ENV (server-side)
+// Prefer server envs first, then public fallbacks (non-breaking)
 // -----------------------------
-const endpoint = process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT!;
-const projectId = process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID!;
-const apiKey = process.env.APPWRITE_API_KEY!;
+const endpoint =
+  process.env.APPWRITE_ENDPOINT ||
+  process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT ||
+  "";
+
+const projectId =
+  process.env.APPWRITE_PROJECT_ID ||
+  process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID ||
+  "";
+
+const apiKey = process.env.APPWRITE_API_KEY || "";
+
+// Optional: if set, require ?token=... or header x-admin-token
+const ADMIN_MARK_SOLD_SECRET = (process.env.ADMIN_MARK_SOLD_SECRET || "").trim();
 
 // Listings (camera first, legacy fallback)
 const LISTINGS_DB_ID =
   process.env.APPWRITE_LISTINGS_DATABASE_ID ||
   process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID ||
-  process.env.APPWRITE_PLATES_DATABASE_ID ||
-  process.env.NEXT_PUBLIC_APPWRITE_PLATES_DATABASE_ID ||
+  process.env.APPWRITE_DATABASE_ID ||
+  process.env.NEXT_PUBLIC_APPWRITE_DATABASE_ID ||
   "";
 
 const LISTINGS_COLLECTION_ID =
   process.env.APPWRITE_LISTINGS_COLLECTION_ID ||
   process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_COLLECTION_ID ||
-  process.env.APPWRITE_PLATES_COLLECTION_ID ||
-  process.env.NEXT_PUBLIC_APPWRITE_PLATES_COLLECTION_ID ||
-  "plates";
+  "listings";
 
 // Transactions (camera first, legacy fallback)
 const TX_DB_ID =
@@ -46,12 +56,16 @@ const TX_COLLECTION_ID =
 const SITE_URL = (process.env.NEXT_PUBLIC_SITE_URL || "https://auctionmycamera.co.uk").replace(/\/+$/, "");
 
 // Admin email (for summary notifications)
-const ADMIN_EMAIL = (process.env.NEXT_PUBLIC_ADMIN_EMAIL || "admin@auctionmycamera.co.uk").trim().toLowerCase();
+const ADMIN_EMAIL = (process.env.NEXT_PUBLIC_ADMIN_EMAIL || "admin@auctionmycamera.co.uk")
+  .trim()
+  .toLowerCase();
 
 // -----------------------------
 // Helpers
 // -----------------------------
 function getServerDatabases() {
+  if (!endpoint || !projectId || !apiKey) return null;
+
   const client = new Client().setEndpoint(endpoint).setProject(projectId).setKey(apiKey);
   return new Databases(client);
 }
@@ -76,7 +90,7 @@ function getMailer() {
   const fromEmail =
     process.env.FROM_EMAIL ||
     process.env.CONTACT_FROM_EMAIL ||
-    `admin@auctionmycamera.co.uk`;
+    "admin@auctionmycamera.co.uk";
 
   const replyTo =
     process.env.REPLY_TO_EMAIL ||
@@ -106,7 +120,6 @@ function escapeHtml(input: string) {
 
 /**
  * Create a document but automatically remove unknown attributes if the schema is stricter than expected.
- * This prevents “Unknown attribute: foo” from breaking your admin flow.
  */
 async function createDocSchemaTolerant(
   databases: Databases,
@@ -123,16 +136,14 @@ async function createDocSchemaTolerant(
       const msg = String(err?.message || "");
       const m = msg.match(/Unknown attribute:\s*([A-Za-z0-9_]+)/i);
       if (m?.[1]) {
-        const badKey = m[1];
-        // Remove the bad key and retry
-        delete data[badKey];
+        delete data[m[1]];
         continue;
       }
       throw err;
     }
   }
 
-  // If we’re still failing, try minimal payload as last resort
+  // Minimal payload last resort
   return await databases.createDocument(dbId, colId, ID.unique(), {
     listing_id: payload.listing_id,
     seller_email: payload.seller_email,
@@ -143,10 +154,43 @@ async function createDocSchemaTolerant(
   });
 }
 
+/**
+ * Update a document but remove unknown attributes if schema rejects them.
+ */
+async function updateDocSchemaTolerant(
+  databases: Databases,
+  dbId: string,
+  colId: string,
+  docId: string,
+  payload: Record<string, any>
+) {
+  const data: Record<string, any> = { ...payload };
+
+  for (let i = 0; i < 12; i++) {
+    try {
+      return await databases.updateDocument(dbId, colId, docId, data);
+    } catch (err: any) {
+      const msg = String(err?.message || "");
+      const m = msg.match(/Unknown attribute:\s*([A-Za-z0-9_]+)/i);
+      if (m?.[1]) {
+        delete data[m[1]];
+        continue;
+      }
+      throw err;
+    }
+  }
+
+  // Minimal status-only update
+  const minimal: Record<string, any> = {};
+  if (has(payload, "status")) minimal.status = payload.status;
+  return await databases.updateDocument(dbId, colId, docId, minimal);
+}
+
 // -----------------------------
 // POST /api/admin/mark-sold
 // Body: { plateId, finalPrice, buyerEmail }
 // (AdminClient still sends plateId — we accept it for compatibility.)
+// Optional auth: if ADMIN_MARK_SOLD_SECRET is set, require token.
 // -----------------------------
 export async function POST(req: NextRequest) {
   try {
@@ -156,6 +200,18 @@ export async function POST(req: NextRequest) {
 
     if (!LISTINGS_DB_ID || !LISTINGS_COLLECTION_ID || !TX_DB_ID || !TX_COLLECTION_ID) {
       return NextResponse.json({ error: "Server DB configuration incomplete." }, { status: 500 });
+    }
+
+    // Optional protection: enable by setting ADMIN_MARK_SOLD_SECRET in env
+    if (ADMIN_MARK_SOLD_SECRET) {
+      const { searchParams } = new URL(req.url);
+      const tokenFromQuery = (searchParams.get("token") || "").trim();
+      const tokenFromHeader = (req.headers.get("x-admin-token") || "").trim();
+      const token = tokenFromQuery || tokenFromHeader;
+
+      if (token !== ADMIN_MARK_SOLD_SECRET) {
+        return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
+      }
     }
 
     let body: any;
@@ -170,7 +226,10 @@ export async function POST(req: NextRequest) {
     const buyerEmail = String(body?.buyerEmail || "").trim();
 
     if (!listingId || finalPrice == null) {
-      return NextResponse.json({ error: "listingId (or plateId) and finalPrice are required." }, { status: 400 });
+      return NextResponse.json(
+        { error: "listingId (or plateId) and finalPrice are required." },
+        { status: 400 }
+      );
     }
 
     const salePrice = toNumber(finalPrice);
@@ -179,6 +238,9 @@ export async function POST(req: NextRequest) {
     }
 
     const databases = getServerDatabases();
+    if (!databases) {
+      return NextResponse.json({ error: "Server Appwrite client could not be initialised." }, { status: 500 });
+    }
 
     // 1) Load the listing
     const listing: any = await databases.getDocument(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, listingId);
@@ -194,7 +256,6 @@ export async function POST(req: NextRequest) {
       "your item";
 
     // 2) Money: commission + payout (simple camera defaults)
-    // If listing has commission_rate/listing_fee, use them; otherwise default.
     const commissionRateRaw =
       typeof listing?.commission_rate === "number" ? listing.commission_rate : undefined;
 
@@ -218,7 +279,6 @@ export async function POST(req: NextRequest) {
       seller_email: sellerEmail,
       buyer_email: buyerEmail || "",
 
-      // Useful display fields (AdminClient expects these keys)
       item_title: itemTitle,
       sale_price: salePrice,
       commission_rate: commissionRate,
@@ -234,16 +294,15 @@ export async function POST(req: NextRequest) {
 
     const txDoc = await createDocSchemaTolerant(databases, TX_DB_ID, TX_COLLECTION_ID, txPayload);
 
-    // 4) Update listing as sold (schema-tolerant: only set fields that exist)
+    // 4) Update listing as sold (schema-tolerant)
     const listingUpdate: Record<string, any> = { status: "sold" };
 
-    // keep whichever numeric field your listing schema uses for current price
     if (has(listing, "current_bid")) listingUpdate.current_bid = salePrice;
     if (has(listing, "currentBid")) listingUpdate.currentBid = salePrice;
     if (has(listing, "sold_price")) listingUpdate.sold_price = salePrice;
     if (has(listing, "soldPrice")) listingUpdate.soldPrice = salePrice;
 
-    await databases.updateDocument(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, String(listing.$id), listingUpdate);
+    await updateDocSchemaTolerant(databases, LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, String(listing.$id), listingUpdate);
 
     // 5) Emails (best-effort, no crashes)
     try {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { Client, Account, Databases, Query } from "appwrite";
 import { useRouter } from "next/navigation";
 import AdminAuctionTimer from "../components/ui/AdminAuctionTimer";
@@ -21,7 +21,7 @@ const ADMIN_EMAIL = (process.env.NEXT_PUBLIC_ADMIN_EMAIL || "admin@auctionmycame
   .trim()
   .toLowerCase();
 
-// ✅ Listings live in their own DB/Collection (LISTINGS ONLY — no legacy PLATES fallbacks)
+// ✅ Listings live in their own DB/Collection (LISTINGS ONLY — no legacy LISTINGS fallbacks)
 const LISTINGS_DB_ID = process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID || "";
 const LISTINGS_COLLECTION_ID = process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_COLLECTION_ID || "";
 
@@ -109,6 +109,12 @@ function txUpdated(tx: any) {
   return tx?.updated_at || tx?.$updatedAt || null;
 }
 
+function safeNumber(v: any): number | null {
+  const n = typeof v === "number" ? v : Number(v);
+  if (!Number.isFinite(n)) return null;
+  return n;
+}
+
 export default function AdminClient() {
   const router = useRouter();
 
@@ -132,7 +138,7 @@ export default function AdminClient() {
     const verify = async () => {
       try {
         const user: any = await account.get();
-        const email = String(user?.email || "").toLowerCase();
+        const email = String(user?.email || "").trim().toLowerCase();
 
         if (email === ADMIN_EMAIL) {
           if (alive) setAuthState("yes");
@@ -161,7 +167,7 @@ export default function AdminClient() {
       setMessage("");
 
       try {
-        // ✅ LISTINGS env must exist — do not silently fall back to PLATES / "plates"
+        // ✅ LISTINGS env must exist — do not silently fall back
         if (!LISTINGS_DB_ID || !LISTINGS_COLLECTION_ID) {
           setMessage(
             "Missing Appwrite env for listings. Set NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID and NEXT_PUBLIC_APPWRITE_LISTINGS_COLLECTION_ID in Vercel."
@@ -192,9 +198,7 @@ export default function AdminClient() {
           setTransactions(res.documents);
           setListings([]);
         } else {
-          // ✅ IMPORTANT FIX:
-          // Seller submissions are created with status "pending_approval" by /api/listings.
-          // Your tab is called "pending" but the underlying status is "pending_approval".
+          // Seller submissions use status "pending_approval"
           const statusFilter = activeTab === "pending" ? "pending_approval" : activeTab;
 
           const res = await databases.listDocuments(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, [
@@ -230,9 +234,7 @@ export default function AdminClient() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          // keep existing backend expectations
           listingId: selectedListing.$id,
-          // ✅ safer: support either seller_email or sellerEmail depending on schema
           sellerEmail: selectedListing.seller_email || selectedListing.sellerEmail,
           interesting_fact: selectedListing.admin_notes || selectedListing.interesting_fact || "",
           starting_price: Number(selectedListing.starting_price) || 0,
@@ -275,10 +277,8 @@ export default function AdminClient() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          // keep existing backend expectations
           plateId: doc.$id,
-          registration: title, // legacy key, but we pass a useful camera-safe title
-          // ✅ safer: support either seller_email or sellerEmail depending on schema
+          registration: title,
           sellerEmail: doc.seller_email || doc.sellerEmail,
         }),
       });
@@ -306,7 +306,6 @@ export default function AdminClient() {
       setMessage(`Listing "${title}" rejected.`);
       setSelectedListing(null);
 
-      // Re-load current tab (same mapping as above)
       const statusFilter = activeTab === "pending" ? "pending_approval" : activeTab;
 
       const updated = await databases.listDocuments(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, [
@@ -330,7 +329,6 @@ export default function AdminClient() {
     try {
       await databases.deleteDocument(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, id);
 
-      // Re-load current tab (same mapping as above)
       const statusFilter = activeTab === "pending" ? "pending_approval" : activeTab;
 
       const updated = await databases.listDocuments(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, [
@@ -374,7 +372,6 @@ export default function AdminClient() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          // keep existing backend expectations
           plateId: doc.$id,
           finalPrice: salePrice,
           buyerEmail,
@@ -500,6 +497,10 @@ export default function AdminClient() {
                         .join(" • ")
                     : "";
 
+                const listingIdDisplay =
+                  String(doc?.listing_id || "").trim() ||
+                  `AMC-${String(doc.$id).slice(-6).toUpperCase()}`;
+
                 return (
                   <div key={doc.$id} className="border rounded-xl p-5 bg-neutral-50 shadow-sm mt-5">
                     <div className="flex justify-between items-start gap-4">
@@ -510,8 +511,7 @@ export default function AdminClient() {
                         {extra ? <p className="text-xs text-neutral-600">{extra}</p> : null}
 
                         <p className="mt-2">
-                          <strong>Listing ID:</strong>{" "}
-                          {String(doc?.listing_id || `AMC-${String(doc.$id).slice(-6).toUpperCase()}`)}
+                          <strong>Listing ID:</strong> {listingIdDisplay}
                         </p>
 
                         <p>
@@ -519,8 +519,7 @@ export default function AdminClient() {
                         </p>
 
                         <p>
-                          <strong>Reserve:</strong>{" "}
-                          {formatMoney(typeof doc.reserve_price === "number" ? doc.reserve_price : 0)}
+                          <strong>Reserve:</strong> {formatMoney(typeof doc.reserve_price === "number" ? doc.reserve_price : 0)}
                         </p>
 
                         <p>
@@ -646,6 +645,11 @@ export default function AdminClient() {
                         tx.registration ||
                         "-";
 
+                      const salePrice = safeNumber(tx.sale_price) ?? 0;
+                      const commissionAmount = safeNumber(tx.commission_amount) ?? 0;
+                      const commissionRate = safeNumber(tx.commission_rate) ?? 0;
+                      const sellerPayout = safeNumber(tx.seller_payout) ?? 0;
+
                       return (
                         <tr key={tx.$id} className="hover:bg-neutral-50">
                           <td className="py-2 px-2 whitespace-nowrap">{item}</td>
@@ -653,16 +657,14 @@ export default function AdminClient() {
                           <td className="py-2 px-2 whitespace-nowrap">{tx.seller_email || "-"}</td>
                           <td className="py-2 px-2 whitespace-nowrap">{tx.buyer_email || "-"}</td>
 
-                          <td className="py-2 px-2 whitespace-nowrap">
-                            £{(tx.sale_price ?? 0).toLocaleString("en-GB")}
-                          </td>
+                          <td className="py-2 px-2 whitespace-nowrap">£{salePrice.toLocaleString("en-GB")}</td>
 
                           <td className="py-2 px-2 whitespace-nowrap">
-                            £{(tx.commission_amount ?? 0).toLocaleString("en-GB")} ({tx.commission_rate ?? 0}%)
+                            £{commissionAmount.toLocaleString("en-GB")} ({commissionRate}%)
                           </td>
 
                           <td className="py-2 px-2 whitespace-nowrap font-semibold">
-                            £{(tx.seller_payout ?? 0).toLocaleString("en-GB")}
+                            £{sellerPayout.toLocaleString("en-GB")}
                           </td>
 
                           <td className="py-2 px-2 whitespace-nowrap">{tx.payment_status || "pending"}</td>
@@ -709,16 +711,26 @@ export default function AdminClient() {
               <input
                 type="number"
                 className="border w-full p-2 rounded-md text-sm"
-                value={selectedListing.reserve_price ?? 0}
-                onChange={(e) => setSelectedListing({ ...selectedListing, reserve_price: e.target.value })}
+                value={Number(selectedListing.reserve_price ?? 0)}
+                onChange={(e) =>
+                  setSelectedListing({
+                    ...selectedListing,
+                    reserve_price: Number(e.target.value || 0),
+                  })
+                }
               />
 
               <label className="block mt-3 font-semibold text-sm">Starting Price (£)</label>
               <input
                 type="number"
                 className="border w-full p-2 rounded-md text-sm"
-                value={selectedListing.starting_price ?? 0}
-                onChange={(e) => setSelectedListing({ ...selectedListing, starting_price: e.target.value })}
+                value={Number(selectedListing.starting_price ?? 0)}
+                onChange={(e) =>
+                  setSelectedListing({
+                    ...selectedListing,
+                    starting_price: Number(e.target.value || 0),
+                  })
+                }
               />
 
               <label className="block mt-4 font-semibold text-sm">Admin notes (optional)</label>

@@ -13,8 +13,8 @@ export async function POST(req: Request) {
     const { listingId } = await req.json();
 
     const updated = await db.updateDocument(
-      process.env.NEXT_PUBLIC_APPWRITE_PLATES_DATABASE_ID!,
-      process.env.NEXT_PUBLIC_APPWRITE_PLATES_COLLECTION_ID!,
+      process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID!,
+      process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_COLLECTION_ID!,
       listingId,
       { status: "withdrawn" }
     );

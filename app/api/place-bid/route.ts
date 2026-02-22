@@ -15,19 +15,15 @@ const projectId =
   process.env.APPWRITE_PROJECT_ID || process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID || "";
 const apiKey = process.env.APPWRITE_API_KEY || "";
 
-// ✅ IMPORTANT: use LISTINGS if present, otherwise fall back to old PLATES env
+// ✅ Use LISTINGS envs, with NEXT_PUBLIC fallback for dev
 const DB_ID =
   process.env.APPWRITE_LISTINGS_DATABASE_ID ||
   process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID ||
-  process.env.APPWRITE_PLATES_DATABASE_ID ||
-  process.env.NEXT_PUBLIC_APPWRITE_PLATES_DATABASE_ID ||
   "";
 
 const LISTINGS_COLLECTION =
   process.env.APPWRITE_LISTINGS_COLLECTION_ID ||
   process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_COLLECTION_ID ||
-  process.env.APPWRITE_PLATES_COLLECTION_ID ||
-  process.env.NEXT_PUBLIC_APPWRITE_PLATES_COLLECTION_ID ||
   "";
 
 const BIDS_COLLECTION =
@@ -74,7 +70,9 @@ async function findProfileByEmail(aw: Databases, email: string) {
   return (res.documents[0] as any) || null;
 }
 
-async function hasSavedCardForEmail(email: string): Promise<{ has: boolean; customerId?: string | null }> {
+async function hasSavedCardForEmail(
+  email: string
+): Promise<{ has: boolean; customerId?: string | null }> {
   if (!stripe) {
     return { has: false, customerId: null };
   }
@@ -134,18 +132,37 @@ async function hasSavedCardForEmail(email: string): Promise<{ has: boolean; cust
 // Email setup
 // -----------------------------
 const SMTP_HOST = process.env.SMTP_HOST || "";
-const SMTP_PORT = Number(process.env.SMTP_PORT || "587");
+const SMTP_PORT = Number(process.env.SMTP_PORT || "465");
 const SMTP_USER = process.env.SMTP_USER || "";
 const SMTP_PASS = process.env.SMTP_PASS || process.env.SMTP_PASSWORD || "";
 
+// From address should be ONLY an email address
 const EMAIL_FROM =
   process.env.EMAIL_FROM ||
   process.env.FROM_EMAIL ||
   process.env.SMTP_FROM ||
   process.env.CONTACT_FROM_EMAIL ||
+  process.env.SMTP_USER ||
   "";
 
+const FROM_NAME = (process.env.FROM_NAME || "AuctionMyCamera").trim();
+
+// Optional: set SMTP_TLS_REJECT_UNAUTHORIZED=false if your SMTP has cert chain issues
+const TLS_REJECT_UNAUTHORIZED =
+  (process.env.SMTP_TLS_REJECT_UNAUTHORIZED || "true").toLowerCase() !== "false";
+
 let mailTransporter: nodemailer.Transporter | null = null;
+
+function normalizeEmailAddress(input: string) {
+  let v = (input || "").trim();
+
+  const angleMatch = v.match(/<([^>]+)>/);
+  if (angleMatch?.[1]) v = angleMatch[1].trim();
+
+  v = v.replace(/^"+|"+$/g, "").trim();
+  v = v.replace(/\s+/g, "");
+  return v;
+}
 
 function getTransporter() {
   if (!SMTP_HOST || !EMAIL_FROM) {
@@ -156,7 +173,7 @@ function getTransporter() {
   if (!mailTransporter) {
     mailTransporter = nodemailer.createTransport({
       host: SMTP_HOST,
-      port: SMTP_PORT || 587,
+      port: SMTP_PORT || 465,
       secure: SMTP_PORT === 465,
       auth:
         SMTP_USER && SMTP_PASS
@@ -165,6 +182,9 @@ function getTransporter() {
               pass: SMTP_PASS,
             }
           : undefined,
+      tls: {
+        rejectUnauthorized: TLS_REJECT_UNAUTHORIZED,
+      },
     });
   }
   return mailTransporter;
@@ -231,8 +251,20 @@ type Listing = {
   start_time?: string | null;
   end_time?: string | null;
 
+  seller_email?: string | null;
+  sellerEmail?: string | null;
+
+  highest_bidder?: string | null;
+  last_bidder?: string | null;
+
   [key: string]: any;
 };
+
+function isLiveStatus(status: unknown) {
+  const s = String(status || "").toLowerCase().trim();
+  // ✅ accept both styles so AuctionMyPlate/AuctionMyCamera clones don’t fight
+  return s === "live" || s === "active";
+}
 
 async function sendBidEmails(options: { listing: Listing; bidAmount: number; bidderEmail: string }) {
   const { listing, bidAmount, bidderEmail } = options;
@@ -258,9 +290,11 @@ async function sendBidEmails(options: { listing: Listing; bidAmount: number; bid
     listing.ownerEmail ||
     null;
 
+  const fromAddress = normalizeEmailAddress(EMAIL_FROM);
+
   try {
     await transporter.sendMail({
-      from: EMAIL_FROM,
+      from: { name: FROM_NAME, address: fromAddress },
       to: bidderEmail,
       subject: `Bid placed on ${title}: ${amountLabel}`,
       text: [
@@ -281,7 +315,7 @@ async function sendBidEmails(options: { listing: Listing; bidAmount: number; bid
 
   try {
     await transporter.sendMail({
-      from: EMAIL_FROM,
+      from: { name: FROM_NAME, address: fromAddress },
       to: sellerEmail,
       subject: `New bid on your listing: ${title}`,
       text: [
@@ -361,9 +395,13 @@ export async function POST(req: Request) {
     }
 
     // Load listing
-    const listing = (await databases.getDocument(DB_ID, LISTINGS_COLLECTION, listingId)) as unknown as Listing;
+    const listing = (await databases.getDocument(
+      DB_ID,
+      LISTINGS_COLLECTION,
+      listingId
+    )) as unknown as Listing;
 
-    if (!listing || (listing.status || "").toLowerCase() !== "live") {
+    if (!listing || !isLiveStatus(listing.status)) {
       return NextResponse.json({ error: "Auction is not live." }, { status: 400 });
     }
 
@@ -409,6 +447,9 @@ export async function POST(req: Request) {
       );
     }
 
+    // Capture previous highest bidder BEFORE overwriting
+    const previousHighestBidder = String(listing.highest_bidder || "").trim() || null;
+
     // Create bid history doc (non-fatal if fails)
     let bidDoc: any = null;
 
@@ -432,7 +473,13 @@ export async function POST(req: Request) {
     const updatePayload: Record<string, any> = {
       current_bid: bidAmount,
       bids: newBidsCount,
+
+      // who is currently winning
       highest_bidder: bidderEmail,
+
+      // keep previous winner for outbid notices
+      last_bidder: previousHighestBidder,
+
       bidder_email: bidderEmail,
       bidder_id: bidderId,
       last_bid_time: now.toISOString(),
@@ -442,7 +489,12 @@ export async function POST(req: Request) {
       updatePayload.auction_end = newAuctionEnd;
     }
 
-    const updatedListing = await databases.updateDocument(DB_ID, LISTINGS_COLLECTION, listing.$id, updatePayload);
+    const updatedListing = await databases.updateDocument(
+      DB_ID,
+      LISTINGS_COLLECTION,
+      listing.$id,
+      updatePayload
+    );
 
     // Emails (non-fatal)
     try {

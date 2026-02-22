@@ -35,13 +35,13 @@ export default function LiveAuctionPage() {
     fetchUser();
   }, []);
 
-  // ✅ Fetch all live plates
+  // ✅ Fetch all live listings
   const fetchLiveListings = async () => {
     setRefreshing(true);
     try {
       const res = await databases.listDocuments(
         process.env.NEXT_PUBLIC_APPWRITE_DATABASE_ID!,
-        "plates",
+        process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_COLLECTION_ID!,
         [Query.equal("status", "live")]
       );
       setListings(res.documents);
@@ -61,7 +61,7 @@ export default function LiveAuctionPage() {
   useEffect(() => {
     const unsubscribe = client.subscribe(
       [
-        `databases.${process.env.NEXT_PUBLIC_APPWRITE_DATABASE_ID}.collections.plates.documents`,
+        `databases.${process.env.NEXT_PUBLIC_APPWRITE_DATABASE_ID}.collections.listings.documents`,
       ],
       (response: any) => {
         if (response.events.includes("databases.*.collections.*.documents.*.update")) {

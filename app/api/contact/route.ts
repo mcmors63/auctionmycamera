@@ -1,3 +1,4 @@
+// app/api/contact/route.ts
 import { NextResponse } from "next/server";
 import nodemailer from "nodemailer";
 
@@ -7,16 +8,31 @@ export const dynamic = "force-dynamic";
 // -----------------------------
 // ENV
 // -----------------------------
-const smtpHost = process.env.SMTP_HOST;
-const smtpPort = process.env.SMTP_PORT ? parseInt(process.env.SMTP_PORT, 10) : 587;
-const smtpUser = process.env.SMTP_USER;
-const smtpPass = process.env.SMTP_PASS;
+const smtpHost = (process.env.SMTP_HOST || "").trim();
+const smtpPort = Number(process.env.SMTP_PORT || "587");
+const smtpUser = (process.env.SMTP_USER || "").trim();
+const smtpPass = (process.env.SMTP_PASS || "").trim();
 
-// Defaults updated for AuctionMyCamera
-const fromEmail =
-  process.env.FROM_EMAIL || "AuctionMyCamera <no-reply@auctionmycamera.co.uk>";
-const adminEmail =
-  process.env.ADMIN_NOTIFICATIONS_EMAIL || "admin@auctionmycamera.co.uk";
+// ✅ Keep FROM_EMAIL as an email address only
+const FROM_EMAIL =
+  (process.env.FROM_EMAIL ||
+    process.env.CONTACT_FROM_EMAIL ||
+    process.env.SMTP_FROM ||
+    process.env.SMTP_USER ||
+    "no-reply@auctionmycamera.co.uk"
+  ).trim();
+
+// ✅ Display name is separate
+const FROM_NAME = (process.env.FROM_NAME || "AuctionMyCamera").trim();
+
+// Where admin contact messages should go
+const ADMIN_EMAIL =
+  (process.env.ADMIN_NOTIFICATIONS_EMAIL ||
+    process.env.ADMIN_EMAIL ||
+    "admin@auctionmycamera.co.uk"
+  )
+    .trim()
+    .toLowerCase();
 
 const isProd = process.env.NODE_ENV === "production";
 
@@ -31,12 +47,22 @@ function createTransport() {
   return nodemailer.createTransport({
     host: smtpHost,
     port: smtpPort,
-    secure: smtpPort === 465,
+    secure: smtpPort === 465, // true for 465, false for 587
     auth: {
       user: smtpUser,
       pass: smtpPass,
     },
   });
+}
+
+// Prevent header injection (strip CR/LF)
+function safeHeaderValue(v: unknown, fallback = "") {
+  const s = String(v ?? fallback);
+  return s.replace(/[\r\n]+/g, " ").trim();
+}
+
+function isValidEmail(email: string) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
 
 // -----------------------------
@@ -77,20 +103,36 @@ export async function POST(req: Request) {
       message,
     }: { name?: string; email?: string; subject?: string; message?: string } = body;
 
-    if (!email || !message) {
+    const trimmedName = String(name || "").trim();
+    const trimmedEmail = String(email || "").trim();
+    const trimmedSubject = safeHeaderValue(subject, "New contact form message");
+    const trimmedMessage = String(message || "").trim();
+
+    if (!trimmedEmail || !trimmedMessage) {
       return NextResponse.json(
         { ok: false, error: "Please provide your email address and a message." },
         { status: 400 }
       );
     }
 
-    const trimmedName = (name || "").trim();
-    const trimmedEmail = email.trim();
-    const trimmedSubject = (subject && subject.trim()) || "New contact form message";
-    const trimmedMessage = message.trim();
+    if (!isValidEmail(trimmedEmail)) {
+      return NextResponse.json({ ok: false, error: "Please enter a valid email address." }, { status: 400 });
+    }
 
-    if (!trimmedMessage) {
-      return NextResponse.json({ ok: false, error: "Message cannot be empty." }, { status: 400 });
+    if (!isValidEmail(FROM_EMAIL)) {
+      console.error("[contact] Invalid FROM_EMAIL server config:", FROM_EMAIL);
+      return NextResponse.json(
+        { ok: false, error: "Server email configuration error. Please try again later." },
+        { status: 500 }
+      );
+    }
+
+    if (ADMIN_EMAIL && !isValidEmail(ADMIN_EMAIL)) {
+      console.error("[contact] Invalid ADMIN email server config:", ADMIN_EMAIL);
+      return NextResponse.json(
+        { ok: false, error: "Server email configuration error. Please try again later." },
+        { status: 500 }
+      );
     }
 
     const transporter = createTransport();
@@ -107,17 +149,22 @@ Message:
 ${trimmedMessage}
 `.trim();
 
+    // Admin email
     await transporter.sendMail({
-      from: fromEmail,
-      to: adminEmail,
+      from: { name: FROM_NAME, address: FROM_EMAIL },
+      to: ADMIN_EMAIL,
       replyTo: trimmedEmail,
       subject: `[Contact] ${trimmedSubject}`,
       text: adminBody,
     });
 
     // Optional confirmation to user (non-blocking)
-    if (trimmedEmail) {
-      const userBody = `
+    transporter
+      .sendMail({
+        from: { name: FROM_NAME, address: FROM_EMAIL },
+        to: trimmedEmail,
+        subject: "We’ve received your message – AuctionMyCamera",
+        text: `
 Hi${trimmedName ? " " + trimmedName : ""},
 
 Thanks for getting in touch with AuctionMyCamera.
@@ -133,19 +180,11 @@ ${trimmedMessage}
 
 Regards,
 AuctionMyCamera
-`.trim();
-
-      transporter
-        .sendMail({
-          from: fromEmail,
-          to: trimmedEmail,
-          subject: "We’ve received your message – AuctionMyCamera",
-          text: userBody,
-        })
-        .catch((err) => {
-          console.error("[contact] Failed to send confirmation to user:", err);
-        });
-    }
+`.trim(),
+      })
+      .catch((err) => {
+        console.error("[contact] Failed to send confirmation to user:", err);
+      });
 
     return NextResponse.json({ ok: true }, { status: 200 });
   } catch (err: any) {

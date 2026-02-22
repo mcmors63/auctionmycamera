@@ -1,63 +1,179 @@
-import { NextResponse } from "next/server";
+// app/api/notify-admin/route.ts
+import { NextRequest, NextResponse } from "next/server";
 import nodemailer from "nodemailer";
 
-export async function POST(req: Request) {
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+// -----------------------------
+// ENV (safe reads)
+// -----------------------------
+const SMTP_HOST = (process.env.SMTP_HOST || "").trim();
+const SMTP_PORT = Number((process.env.SMTP_PORT || "465").trim());
+const SMTP_USER = (process.env.SMTP_USER || "").trim();
+const SMTP_PASS = (process.env.SMTP_PASS || "").trim();
+
+// From address should be ONLY an email address (no "Name <...>")
+const RAW_FROM_EMAIL =
+  (process.env.FROM_EMAIL || "").trim() ||
+  (process.env.CONTACT_FROM_EMAIL || "").trim() ||
+  (process.env.SMTP_FROM || "").trim() ||
+  SMTP_USER ||
+  "";
+
+const FROM_NAME = (process.env.FROM_NAME || "AuctionMyCamera").trim();
+
+const ADMIN_EMAIL = (
+  process.env.ADMIN_EMAIL ||
+  process.env.ADMIN_TO_EMAIL ||
+  "admin@auctionmycamera.co.uk"
+).trim();
+
+const SUPPORT_EMAIL = (
+  process.env.REPLY_TO_EMAIL ||
+  process.env.SUPPORT_EMAIL ||
+  "support@auctionmycamera.co.uk"
+).trim();
+
+// If your SMTP has cert-chain issues, set SMTP_TLS_REJECT_UNAUTHORIZED=false
+const TLS_REJECT_UNAUTHORIZED =
+  ((process.env.SMTP_TLS_REJECT_UNAUTHORIZED || "true").trim().toLowerCase() !== "false");
+
+// -----------------------------
+// Helpers
+// -----------------------------
+function normalizeEmailAddress(input: string) {
+  let v = (input || "").trim();
+
+  // If someone pasted: Name <email@domain>
+  const angleMatch = v.match(/<([^>]+)>/);
+  if (angleMatch?.[1]) v = angleMatch[1].trim();
+
+  v = v.replace(/^"+|"+$/g, "").trim();
+  v = v.replace(/\s+/g, "");
+  return v;
+}
+
+function isValidEmail(email: string) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
+// Prevent header injection via subjects/names (strip CR/LF)
+function safeHeaderValue(v: unknown, fallback = "") {
+  const s = String(v ?? fallback);
+  return s.replace(/[\r\n]+/g, " ").trim();
+}
+
+function escapeHtml(s: unknown) {
+  const v = String(s ?? "");
+  return v
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+function buildTransporter() {
+  if (!SMTP_HOST || !SMTP_USER || !SMTP_PASS) return null;
+
+  return nodemailer.createTransport({
+    host: SMTP_HOST,
+    port: SMTP_PORT,
+    secure: SMTP_PORT === 465, // 465 SSL, 587 STARTTLS
+    auth: {
+      user: SMTP_USER,
+      pass: SMTP_PASS,
+    },
+    tls: {
+      rejectUnauthorized: TLS_REJECT_UNAUTHORIZED,
+    },
+  });
+}
+
+// -----------------------------
+// POST
+// Body: { userEmail, fullName }
+// Purpose: Password change notification (user + admin)
+// -----------------------------
+export async function POST(req: NextRequest) {
   try {
-    const { registration, reserve_price, seller_email, plate_type, expiry_date } = await req.json();
+    const body = await req.json().catch(() => null);
 
-    // ✅ Setup mail transporter
-   // ✅ Setup mail transporter for Stackmail
-const transporter = nodemailer.createTransport({
-  host: process.env.SMTP_HOST,
-  port: Number(process.env.SMTP_PORT),
-  secure: true, // Stackmail requires SSL on port 465
-  auth: {
-    user: process.env.SMTP_USER,
-    pass: process.env.SMTP_PASS,
-  },
-  tls: {
-    // Allow self-signed certs occasionally issued by Stackmail
-    rejectUnauthorized: false,
-  },
-});
+    const userEmail = normalizeEmailAddress(String(body?.userEmail || ""));
+    const fullName = String(body?.fullName || "").trim();
 
+    if (!userEmail) {
+      return NextResponse.json({ error: "Missing user email" }, { status: 400 });
+    }
+    if (!isValidEmail(userEmail)) {
+      return NextResponse.json({ error: "Invalid user email" }, { status: 400 });
+    }
 
-    // ✅ Format email HTML
-    const html = `
-      <div style="font-family: Arial, sans-serif; padding:20px; background:#fff8e1; border-radius:8px;">
-        <h2 style="color:#d97706;">New Plate Submission – Awaiting Approval</h2>
-        <p>A new registration has been submitted on <strong>auctionmyplate.co.uk</strong> and requires admin review.</p>
+    const fromAddress = normalizeEmailAddress(RAW_FROM_EMAIL);
+    if (!fromAddress || !isValidEmail(fromAddress)) {
+      return NextResponse.json({ error: "Invalid FROM_EMAIL server config" }, { status: 500 });
+    }
 
-        <table style="width:100%; margin-top:10px; border-collapse:collapse;">
-          <tr><td style="padding:6px 0;"><strong>Registration:</strong></td><td>${registration}</td></tr>
-          <tr><td style="padding:6px 0;"><strong>Reserve Price:</strong></td><td>£${reserve_price}</td></tr>
-          <tr><td style="padding:6px 0;"><strong>Plate Type:</strong></td><td>${plate_type || "Not specified"}</td></tr>
-          ${expiry_date ? `<tr><td style="padding:6px 0;"><strong>Expiry Date:</strong></td><td>${expiry_date}</td></tr>` : ""}
-          <tr><td style="padding:6px 0;"><strong>Seller Email:</strong></td><td>${seller_email}</td></tr>
-        </table>
+    const adminTo = normalizeEmailAddress(ADMIN_EMAIL);
+    if (!adminTo || !isValidEmail(adminTo)) {
+      return NextResponse.json({ error: "Invalid ADMIN_EMAIL server config" }, { status: 500 });
+    }
 
-        <p style="margin-top:20px;">Log into the admin panel to review and approve this listing.</p>
+    const transporter = buildTransporter();
+    if (!transporter) {
+      return NextResponse.json(
+        { error: "Email is not configured (SMTP env missing)" },
+        { status: 500 }
+      );
+    }
 
-        <a href="${process.env.NEXT_PUBLIC_SITE_URL || "https://auctionmyplate.co.uk"}/admin-login"
-          style="display:inline-block;margin-top:10px;padding:10px 18px;background:#d97706;color:#fff;text-decoration:none;border-radius:6px;">
-          Go to Admin Panel
-        </a>
+    const safeName = escapeHtml(fullName || "User");
+    const safeEmail = escapeHtml(userEmail);
 
-        <p style="margin-top:30px;font-size:12px;color:#666;">This is an automated message from AuctionMyPlate.co.uk.</p>
+    const userHtml = `
+      <div style="font-family: Arial, sans-serif; line-height: 1.5;">
+        <h3 style="margin:0 0 10px 0;">Your password was changed</h3>
+        <p style="margin:0 0 10px 0;">
+          This is a security notification that your AuctionMyCamera account password was changed.
+        </p>
+        <p style="margin:0 0 10px 0;">
+          If this wasn’t you, reset your password immediately and contact support at
+          <strong>${escapeHtml(SUPPORT_EMAIL)}</strong>.
+        </p>
+        <p style="margin:14px 0 0 0; font-size:12px; color:#666;">– AuctionMyCamera</p>
       </div>
     `;
 
-    // ✅ Send to admin
+    const adminHtml = `
+      <div style="font-family: Arial, sans-serif; line-height: 1.5;">
+        <h3 style="margin:0 0 10px 0;">Password Changed</h3>
+        <p style="margin:0 0 8px 0;"><strong>User:</strong> ${safeName} (${safeEmail})</p>
+        <p style="margin:0;">This user changed their login password.</p>
+      </div>
+    `;
+
+    // Send to USER
     await transporter.sendMail({
-      from: `"Auction My Plate" <${process.env.SMTP_USER}>`,
-      to: "admin@auctionmyplate.co.uk",
-      subject: `New Plate Submitted: ${registration}`,
-      html,
+      from: { name: safeHeaderValue(FROM_NAME, "AuctionMyCamera"), address: fromAddress },
+      to: userEmail,
+      subject: safeHeaderValue("Your password has been changed"),
+      html: userHtml,
+      replyTo: SUPPORT_EMAIL,
+    });
+
+    // Send to ADMIN
+    await transporter.sendMail({
+      from: { name: safeHeaderValue(FROM_NAME, "AuctionMyCamera"), address: fromAddress },
+      to: adminTo,
+      subject: safeHeaderValue(`Password change: ${fullName || userEmail}`),
+      html: adminHtml,
+      replyTo: SUPPORT_EMAIL,
     });
 
     return NextResponse.json({ success: true });
-  } catch (error: any) {
-    console.error("Admin notification failed:", error);
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+  } catch (err: any) {
+    console.error("ERROR notify-admin (password-change):", err);
+    return NextResponse.json({ error: "Server error" }, { status: 500 });
   }
 }

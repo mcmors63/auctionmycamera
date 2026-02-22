@@ -13,9 +13,9 @@ const endpoint = process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT!;
 const project = process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID!;
 const apiKey = process.env.APPWRITE_API_KEY!;
 
-// Plates
-const platesDbId = process.env.APPWRITE_PLATES_DATABASE_ID!;
-const platesCollectionId = process.env.APPWRITE_PLATES_COLLECTION_ID || "plates";
+// Listings
+const listingsDbId = process.env.APPWRITE_LISTINGS_DATABASE_ID!;
+const listingsCollectionId = process.env.APPWRITE_LISTINGS_COLLECTION_ID || "listings";
 
 // Transactions
 const txDbId = process.env.APPWRITE_TRANSACTIONS_DATABASE_ID!;
@@ -113,7 +113,7 @@ async function safeSendMail(
 /**
  * Body:
  * {
- *   listingId: string;   // plates doc $id
+ *   listingId: string;   // listings doc $id
  *   buyerEmail: string;
  *   finalPrice: number;  // plate-only price, e.g. 12500 for £12,500
  * }
@@ -143,8 +143,8 @@ export async function POST(req: NextRequest) {
     const client = getAppwriteClient();
     const databases = new Databases(client);
 
-    // 1) Load the listing from plates
-    const listing = await databases.getDocument(platesDbId, platesCollectionId, listingId);
+    // 1) Load the listing from listings
+    const listing = await databases.getDocument(listingsDbId, listingsCollectionId, listingId);
 
     const reg = ((listing as any).registration as string) || "Unknown";
     const sellerEmail = (listing as any).seller_email as string | undefined;
@@ -201,8 +201,8 @@ export async function POST(req: NextRequest) {
 
     console.log("[create-from-sale] Created transaction", { txId: txDoc.$id });
 
-    // 4) Mark plate as sold (if not already done)
-    await databases.updateDocument(platesDbId, platesCollectionId, listing.$id, {
+    // 4) Mark listing as sold (if not already done)
+    await databases.updateDocument(listingsDbId, listingsCollectionId, listing.$id, {
       status: "sold",
       sold_price: finalPrice,
     });

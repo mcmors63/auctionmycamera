@@ -56,7 +56,7 @@ const projectId =
 
 const apiKey = process.env.APPWRITE_API_KEY || "";
 
-// ✅ LISTINGS ONLY (no legacy PLATES fallbacks)
+// ✅ LISTINGS ONLY (no legacy LISTING fallbacks)
 const LISTINGS_DB_ID =
   process.env.APPWRITE_LISTINGS_DATABASE_ID ||
   process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID ||
@@ -69,7 +69,7 @@ const LISTINGS_COLLECTION_ID =
 
 /**
  * ✅ Listing route is /listing/[id]
- * Guard against mistakes like NEXT_PUBLIC_LISTING_URL_PATTERN=plates
+ * Guard against mistakes like NEXT_PUBLIC_LISTING_URL_PATTERN=listing
  */
 function getListingPattern() {
   const raw = (process.env.NEXT_PUBLIC_LISTING_URL_PATTERN || "").trim();
@@ -77,7 +77,7 @@ function getListingPattern() {
   // If env is missing, use the correct default
   if (!raw) return "/listing/{id}";
 
-  // If someone sets "plates" (or anything not starting with /listing), ignore it
+  // If someone sets "listing" (or anything not starting with /listing), ignore it
   if (!raw.startsWith("/listing")) return "/listing/{id}";
 
   return raw;

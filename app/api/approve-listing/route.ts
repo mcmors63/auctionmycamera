@@ -1,3 +1,4 @@
+// app/api/approve-listing/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { Client, Databases } from "node-appwrite";
 import nodemailer from "nodemailer";
@@ -7,15 +8,49 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 // -----------------------------
-// APPWRITE CONFIG
+// SIMPLE ADMIN GATE (minimal + safe)
+// Set APPROVE_LISTING_SECRET in env and send:
+// x-admin-secret: <value>
 // -----------------------------
-const endpoint = process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT!;
-const projectId = process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID!;
-const apiKey = process.env.APPWRITE_API_KEY!;
+const APPROVE_LISTING_SECRET = (process.env.APPROVE_LISTING_SECRET || "").trim();
+
+function getAdminSecret(req: NextRequest) {
+  return (req.headers.get("x-admin-secret") || "").trim();
+}
+
+function requireAdmin(req: NextRequest) {
+  if (!APPROVE_LISTING_SECRET) {
+    // Fail closed in production
+    const isProd = process.env.NODE_ENV === "production" || process.env.VERCEL_ENV === "production";
+    if (isProd) return false;
+
+    // In dev, allow if secret not set (so you don’t brick yourself locally)
+    return true;
+  }
+  return getAdminSecret(req) === APPROVE_LISTING_SECRET;
+}
+
+// -----------------------------
+// APPWRITE CONFIG (server-safe)
+// Prefer server envs first, then NEXT_PUBLIC fallbacks (non-breaking).
+// -----------------------------
+const endpoint =
+  process.env.APPWRITE_ENDPOINT ||
+  process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT ||
+  "";
+
+const projectId =
+  process.env.APPWRITE_PROJECT_ID ||
+  process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID ||
+  "";
+
+const apiKey = process.env.APPWRITE_API_KEY || "";
 
 const LISTINGS_DB_ID =
   process.env.APPWRITE_LISTINGS_DATABASE_ID ||
   process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID ||
+  process.env.APPWRITE_DATABASE_ID ||
+  process.env.NEXT_PUBLIC_APPWRITE_DATABASE_ID ||
   "";
 
 const LISTINGS_COLLECTION_ID =
@@ -24,12 +59,14 @@ const LISTINGS_COLLECTION_ID =
   "";
 
 const SITE_URL = (process.env.NEXT_PUBLIC_SITE_URL || "https://auctionmycamera.co.uk").replace(
-  /\/$/,
+  /\/+$/,
   ""
 );
 
 // -----------------------------
 function getDatabases() {
+  if (!endpoint || !projectId || !apiKey) return null;
+
   const client = new Client().setEndpoint(endpoint).setProject(projectId).setKey(apiKey);
   return new Databases(client);
 }
@@ -46,11 +83,34 @@ function has(obj: any, key: string) {
   return obj && Object.prototype.hasOwnProperty.call(obj, key);
 }
 
+function escapeHtml(s: unknown) {
+  const v = String(s ?? "");
+  return v
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+function fmtLondon(d: Date) {
+  return d.toLocaleString("en-GB", {
+    timeZone: "Europe/London",
+    dateStyle: "full",
+    timeStyle: "short",
+  });
+}
+
 // -----------------------------
 // POST /api/approve-listing
 // -----------------------------
 export async function POST(req: NextRequest) {
   try {
+    // ✅ Security gate
+    if (!requireAdmin(req)) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
     if (!LISTINGS_DB_ID || !LISTINGS_COLLECTION_ID) {
       return NextResponse.json(
         {
@@ -61,16 +121,32 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const body = await req.json();
-    const listingId = body.listingId;
+    const databases = getDatabases();
+    if (!databases) {
+      return NextResponse.json(
+        { error: "Server Appwrite config missing (endpoint/project/apiKey)." },
+        { status: 500 }
+      );
+    }
+
+    let body: any;
+    try {
+      body = await req.json();
+    } catch {
+      return NextResponse.json({ error: "Invalid JSON body." }, { status: 400 });
+    }
+
+    const listingId = body?.listingId;
 
     if (!listingId) {
       return NextResponse.json({ error: "listingId required" }, { status: 400 });
     }
 
-    const databases = getDatabases();
-
-    const listing: any = await databases.getDocument(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, listingId);
+    const listing: any = await databases.getDocument(
+      LISTINGS_DB_ID,
+      LISTINGS_COLLECTION_ID,
+      listingId
+    );
 
     if (!listing) {
       return NextResponse.json({ error: "Listing not found" }, { status: 404 });
@@ -96,18 +172,23 @@ export async function POST(req: NextRequest) {
     if (has(listing, "starting_price")) {
       updateData.starting_price = toNumber(body.starting_price, listing.starting_price);
     } else if (has(listing, "startingPrice")) {
-      updateData.startingPrice = toNumber(body.starting_price ?? body.startingPrice, listing.startingPrice);
+      updateData.startingPrice = toNumber(
+        body.starting_price ?? body.startingPrice,
+        listing.startingPrice
+      );
     }
 
     // reserve price
     if (has(listing, "reserve_price")) {
       updateData.reserve_price = toNumber(body.reserve_price, listing.reserve_price);
     } else if (has(listing, "reservePrice")) {
-      updateData.reservePrice = toNumber(body.reserve_price ?? body.reservePrice, listing.reservePrice);
+      updateData.reservePrice = toNumber(
+        body.reserve_price ?? body.reservePrice,
+        listing.reservePrice
+      );
     }
 
     // buy now (support both schemas, and only write if we actually have a value OR the field exists)
-    // IMPORTANT: AdminClient does NOT send buy_now currently, so we must preserve what's in the listing.
     const incomingBuyNow =
       body.buy_now ??
       body.buy_now_price ??
@@ -116,53 +197,82 @@ export async function POST(req: NextRequest) {
       undefined;
 
     if (has(listing, "buy_now")) {
-      // Only update if we were given a value; otherwise keep existing
       updateData.buy_now =
         incomingBuyNow === undefined ? listing.buy_now : toNumber(incomingBuyNow, listing.buy_now);
     } else if (has(listing, "buy_now_price")) {
       updateData.buy_now_price =
-        incomingBuyNow === undefined ? listing.buy_now_price : toNumber(incomingBuyNow, listing.buy_now_price);
+        incomingBuyNow === undefined
+          ? listing.buy_now_price
+          : toNumber(incomingBuyNow, listing.buy_now_price);
     }
 
-    const updated = await databases.updateDocument(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, listingId, updateData);
+    const updated = await databases.updateDocument(
+      LISTINGS_DB_ID,
+      LISTINGS_COLLECTION_ID,
+      listingId,
+      updateData
+    );
 
     // -----------------------------
-    // Optional seller email
+    // Optional seller email (best-effort)
     // -----------------------------
     try {
-      const sellerEmail = listing.seller_email || listing.sellerEmail || "";
+      const sellerEmail = String(listing.seller_email || listing.sellerEmail || "").trim();
 
-      if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS && sellerEmail) {
+      const smtpHost = (process.env.SMTP_HOST || "").trim();
+      const smtpUser = (process.env.SMTP_USER || "").trim();
+      const smtpPass = (process.env.SMTP_PASS || "").trim();
+      const smtpPort = Number(process.env.SMTP_PORT || "465");
+      const smtpSecure = smtpPort === 465;
+
+      const tlsRejectUnauthorized =
+        (process.env.SMTP_TLS_REJECT_UNAUTHORIZED || "true").toLowerCase() !== "false";
+
+      const fromEmail =
+        process.env.FROM_EMAIL ||
+        process.env.CONTACT_FROM_EMAIL ||
+        smtpUser ||
+        "admin@auctionmycamera.co.uk";
+
+      const replyTo =
+        process.env.REPLY_TO_EMAIL ||
+        process.env.CONTACT_REPLY_TO_EMAIL ||
+        fromEmail;
+
+      if (smtpHost && smtpUser && smtpPass && sellerEmail) {
         const transporter = nodemailer.createTransport({
-          host: process.env.SMTP_HOST,
-          port: Number(process.env.SMTP_PORT || 465),
-          secure: true,
-          auth: {
-            user: process.env.SMTP_USER,
-            pass: process.env.SMTP_PASS,
-          },
+          host: smtpHost,
+          port: smtpPort,
+          secure: smtpSecure,
+          auth: { user: smtpUser, pass: smtpPass },
+          tls: { rejectUnauthorized: tlsRejectUnauthorized },
         });
 
         const itemTitle =
-          listing.item_title ||
-          listing.title ||
-          [listing.brand, listing.model].filter(Boolean).join(" ") ||
+          String(listing.item_title || listing.title || "").trim() ||
+          [listing.brand, listing.model].filter(Boolean).join(" ").trim() ||
+          String(listing.registration || "").trim() ||
           "your item";
 
+        const safeItemTitle = escapeHtml(itemTitle);
+
         await transporter.sendMail({
-          from: `"AuctionMyCamera" <${process.env.SMTP_USER}>`,
+          from: `"AuctionMyCamera" <${fromEmail}>`,
+          replyTo,
           to: sellerEmail,
           subject: `✅ Approved: ${itemTitle} is now in Coming Soon`,
           html: `
-            <p>Good news!</p>
-            <p>Your listing <strong>${itemTitle}</strong> has been approved and queued for auction.</p>
-            <p>
-              Start: ${start.toLocaleString("en-GB")}<br/>
-              End: ${end.toLocaleString("en-GB")}
-            </p>
-            <p>View your dashboard:<br/>
-            <a href="${SITE_URL}/dashboard">${SITE_URL}/dashboard</a></p>
-            <p>— AuctionMyCamera Team</p>
+            <div style="font-family: Arial, sans-serif; line-height: 1.5;">
+              <p>Good news!</p>
+              <p>Your listing <strong>${safeItemTitle}</strong> has been approved and queued for auction.</p>
+              <p>
+                <strong>Start (UK time):</strong> ${escapeHtml(fmtLondon(start))}<br/>
+                <strong>End (UK time):</strong> ${escapeHtml(fmtLondon(end))}
+              </p>
+              <p>View your dashboard:<br/>
+              <a href="${SITE_URL}/dashboard">${SITE_URL}/dashboard</a></p>
+              <p>— AuctionMyCamera Team</p>
+            </div>
           `,
         });
       }

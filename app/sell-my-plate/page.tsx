@@ -40,7 +40,7 @@ export default function SellMyPlatePage() {
           <div className="rounded-xl border border-gray-800 bg-black/30 p-4">
             <p className="text-[#FFD500] font-semibold text-sm md:text-base">DVLA transfer guidance</p>
             <p className="text-gray-200 text-xs md:text-sm mt-1">
-              Clear steps for plates on vehicles or retention.
+              
             </p>
           </div>
         </div>

@@ -1,3 +1,4 @@
+// app/api/cron/relist/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { Client, Databases, Query } from "node-appwrite";
 import nodemailer from "nodemailer";
@@ -7,29 +8,61 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 // -----------------------------
-// ENV
+// ENV (prefer server vars, fall back to NEXT_PUBLIC where needed)
 // -----------------------------
-const endpoint = process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT!;
-const projectId = process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID!;
-const apiKey = process.env.APPWRITE_API_KEY!;
-const cronSecret = process.env.CRON_SECRET || "";
+const endpoint =
+  (process.env.APPWRITE_ENDPOINT ||
+    process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT ||
+    ""
+  ).trim();
 
-const DB_ID = process.env.NEXT_PUBLIC_APPWRITE_PLATES_DATABASE_ID!;
-const PLATES_COLLECTION_ID =
-  process.env.NEXT_PUBLIC_APPWRITE_PLATES_COLLECTION_ID!;
+const projectId =
+  (process.env.APPWRITE_PROJECT_ID ||
+    process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID ||
+    ""
+  ).trim();
 
-const SITE_URL =
-  process.env.NEXT_PUBLIC_SITE_URL || "https://auctionmyplate.co.uk";
+const apiKey = (process.env.APPWRITE_API_KEY || "").trim();
 
-// SMTP (Stackmail on 465 secure)
-const SMTP_HOST = process.env.SMTP_HOST || "";
-const SMTP_PORT = process.env.SMTP_PORT || "";
-const SMTP_USER = process.env.SMTP_USER || "";
-const SMTP_PASS = process.env.SMTP_PASS || "";
+// Cron secret (required)
+const cronSecret = (process.env.CRON_SECRET || process.env.AUCTION_CRON_SECRET || "").trim();
+
+// DB / Collections
+const DB_ID =
+  (process.env.APPWRITE_LISTINGS_DATABASE_ID ||
+    process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID ||
+    ""
+  ).trim();
+
+const LISTINGS_COLLECTION_ID =
+  (process.env.APPWRITE_LISTINGS_COLLECTION_ID ||
+    process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_COLLECTION_ID ||
+    ""
+  ).trim();
+
+// Site URL (camera default)
+const SITE_URL = (process.env.NEXT_PUBLIC_SITE_URL || "https://auctionmycamera.co.uk").replace(
+  /\/+$/,
+  ""
+);
+
+// SMTP
+const SMTP_HOST = (process.env.SMTP_HOST || "").trim();
+const SMTP_PORT = Number(process.env.SMTP_PORT || "465");
+const SMTP_USER = (process.env.SMTP_USER || "").trim();
+const SMTP_PASS = (process.env.SMTP_PASS || "").trim();
 
 // IMPORTANT: use an address your SMTP provider will actually allow sending from
-const FROM_EMAIL =
-  process.env.CONTACT_FROM_EMAIL || SMTP_USER || "no-reply@auctionmyplate.co.uk";
+const FROM_ADDRESS = (
+  process.env.FROM_EMAIL ||
+  process.env.CONTACT_FROM_EMAIL ||
+  process.env.EMAIL_FROM ||
+  process.env.SMTP_FROM ||
+  SMTP_USER ||
+  "no-reply@auctionmycamera.co.uk"
+).trim();
+
+const FROM_NAME = (process.env.FROM_NAME || "AuctionMyCamera").trim();
 
 // -----------------------------
 // Mail (created once)
@@ -39,8 +72,8 @@ const mailEnabled = Boolean(SMTP_HOST && SMTP_PORT && SMTP_USER && SMTP_PASS);
 const transporter = mailEnabled
   ? nodemailer.createTransport({
       host: SMTP_HOST,
-      port: Number(SMTP_PORT),
-      secure: true,
+      port: SMTP_PORT,
+      secure: SMTP_PORT === 465, // ✅ 465 secure, 587 not
       auth: { user: SMTP_USER, pass: SMTP_PASS },
     })
   : null;
@@ -62,6 +95,38 @@ function fmtLondonTimeLabel(d: Date) {
 // -----------------------------
 // Helpers
 // -----------------------------
+function safeHeaderValue(v: unknown, fallback = "") {
+  const s = String(v ?? fallback);
+  return s.replace(/[\r\n]+/g, " ").trim();
+}
+
+function escapeHtml(input: string) {
+  return String(input || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+function getItemLabel(doc: any) {
+  const itemTitle = String(doc?.item_title || doc?.title || "").trim();
+  if (itemTitle) return itemTitle;
+
+  const brand = String(doc?.brand || "").trim();
+  const model = String(doc?.model || "").trim();
+  const bm = [brand, model].filter(Boolean).join(" ").trim();
+  if (bm) return bm;
+
+  const reg = String(doc?.registration || "").trim();
+  if (reg) return reg;
+
+  const gearType = String(doc?.gear_type || doc?.type || "").trim();
+  if (gearType) return gearType;
+
+  return "your listing";
+}
+
 function isSold(doc: any) {
   const saleStatus = String(doc.sale_status || "").toLowerCase();
   return (
@@ -99,26 +164,26 @@ function isAuthed(req: NextRequest) {
 
 async function sendRelistedEmail(params: {
   sellerEmail: string;
-  registration: string;
+  itemLabel: string;
   start: Date;
   end: Date;
   listingId: string;
 }) {
   if (!transporter) return;
 
-  const { sellerEmail, registration, start, end, listingId } = params;
+  const { sellerEmail, itemLabel, start, end } = params;
 
-  const subject = `Update: ${registration} didn’t sell — we’ve re-listed it`;
+  const subject = safeHeaderValue(`Update: ${itemLabel} didn’t sell — we’ve re-listed it`);
+
   const dashboardLink = `${SITE_URL}/dashboard`;
-  const publicLink = `${SITE_URL}/current-listings`;
 
-  // Match your requested style: Monday 01:00 / Sunday 23:00
+  // Match your style: Monday 01:00 / Sunday 23:00
   const startLabel = fmtLondonTimeLabel(start);
   const endLabel = fmtLondonTimeLabel(end);
 
   const text = `Hi,
 
-Your plate ${registration} didn’t sell in the last auction, so we’ve automatically re-listed it for the next weekly auction (because you selected “Keep listing until sold”).
+Your item "${itemLabel}" didn’t sell in the last auction, so we’ve automatically re-listed it for the next weekly auction (because you selected “Keep listing until sold”).
 
 Next auction window (UK time):
 Start: ${startLabel}
@@ -127,24 +192,26 @@ End:   ${endLabel} (with 5-minute soft close)
 You can view your listing and change your relist/withdraw settings here:
 ${dashboardLink}
 
-— AuctionMyPlate Team`;
+— AuctionMyCamera Team`;
 
   const html = `
     <p>Hi,</p>
-    <p>Your plate <strong>${registration}</strong> didn’t sell in the last auction, so we’ve automatically re-listed it for the next weekly auction (because you selected <strong>“Keep listing until sold”</strong>).</p>
+    <p>Your item <strong>${escapeHtml(itemLabel)}</strong> didn’t sell in the last auction, so we’ve automatically re-listed it for the next weekly auction (because you selected <strong>“Keep listing until sold”</strong>).</p>
     <p><strong>Next auction window (UK time):</strong><br/>
-      Start: ${startLabel}<br/>
-      End: ${endLabel} <em>(with 5-minute soft close)</em>
+      Start: ${escapeHtml(startLabel)}<br/>
+      End: ${escapeHtml(endLabel)} <em>(with 5-minute soft close)</em>
     </p>
     <p>
       You can view your listing and change your relist/withdraw settings here:<br/>
-      <a href="${dashboardLink}" target="_blank" rel="noopener noreferrer">${dashboardLink}</a>
+      <a href="${escapeHtml(dashboardLink)}" target="_blank" rel="noopener noreferrer">${escapeHtml(
+    dashboardLink
+  )}</a>
     </p>
-    <p>— AuctionMyPlate Team</p>
+    <p>— AuctionMyCamera Team</p>
   `;
 
   await transporter.sendMail({
-    from: `"AuctionMyPlate" <${FROM_EMAIL}>`,
+    from: { name: safeHeaderValue(FROM_NAME, "AuctionMyCamera"), address: FROM_ADDRESS },
     to: sellerEmail,
     subject,
     text,
@@ -175,14 +242,25 @@ export async function GET(req: NextRequest) {
     }
 
     if (!isAuthed(req)) {
+      return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
+    }
+
+    if (!endpoint || !projectId || !apiKey) {
+      return NextResponse.json({ ok: false, error: "Missing Appwrite server env config." }, { status: 500 });
+    }
+
+    if (!DB_ID || !LISTINGS_COLLECTION_ID) {
       return NextResponse.json(
-        { ok: false, error: "Unauthorized" },
-        { status: 401 }
+        {
+          ok: false,
+          error:
+            "Missing Appwrite listings DB/collection env. Set APPWRITE_LISTINGS_DATABASE_ID and APPWRITE_LISTINGS_COLLECTION_ID (or NEXT_PUBLIC equivalents).",
+        },
+        { status: 500 }
       );
     }
 
-    const { now, currentStart, currentEnd, nextStart, nextEnd } =
-      getAuctionWindow();
+    const { now, currentStart, currentEnd, nextStart, nextEnd } = getAuctionWindow();
     const nowMs = now.getTime();
 
     // -------------------------------------------------------
@@ -209,7 +287,7 @@ export async function GET(req: NextRequest) {
         ];
         if (cursor) queries.push(Query.cursorAfter(cursor));
 
-        const page = await db.listDocuments(DB_ID, PLATES_COLLECTION_ID, queries);
+        const page = await db.listDocuments(DB_ID, LISTINGS_COLLECTION_ID, queries);
         if (!page.documents.length) break;
 
         scannedQueued += page.documents.length;
@@ -240,9 +318,7 @@ export async function GET(req: NextRequest) {
 
           // If we are inside THIS listing's window, it should be live
           if (nowMs >= startMs && nowMs < endMs) {
-            await db.updateDocument(DB_ID, PLATES_COLLECTION_ID, doc.$id, {
-              status: "live",
-            });
+            await db.updateDocument(DB_ID, LISTINGS_COLLECTION_ID, doc.$id, { status: "live" });
             activated++;
           } else {
             queuedSkippedNotInWindow++;
@@ -270,7 +346,7 @@ export async function GET(req: NextRequest) {
     let relistSkippedMissingEnd = 0;
     let relistSkippedBadEnd = 0;
     let relistSkippedNotEndedYet = 0;
-    let relistSkippedMissingSellerOrReg = 0;
+    let relistSkippedMissingSeller = 0;
 
     {
       let cursor: string | undefined;
@@ -283,7 +359,7 @@ export async function GET(req: NextRequest) {
         ];
         if (cursor) queries.push(Query.cursorAfter(cursor));
 
-        const page = await db.listDocuments(DB_ID, PLATES_COLLECTION_ID, queries);
+        const page = await db.listDocuments(DB_ID, LISTINGS_COLLECTION_ID, queries);
         if (!page.documents.length) break;
 
         scannedRelist += page.documents.length;
@@ -324,12 +400,9 @@ export async function GET(req: NextRequest) {
           const end = useNext ? nextEnd : currentEnd;
 
           // queued until start, then activation pass flips it to live
-          const newStatus =
-            nowMs >= start.getTime() && nowMs < end.getTime()
-              ? "live"
-              : "queued";
+          const newStatus = nowMs >= start.getTime() && nowMs < end.getTime() ? "live" : "queued";
 
-          await db.updateDocument(DB_ID, PLATES_COLLECTION_ID, doc.$id, {
+          await db.updateDocument(DB_ID, LISTINGS_COLLECTION_ID, doc.$id, {
             status: newStatus,
             auction_start: start.toISOString(),
             auction_end: end.toISOString(),
@@ -347,12 +420,11 @@ export async function GET(req: NextRequest) {
           relisted++;
 
           // ✅ Email seller (best-effort; do not fail cron if SMTP is down)
-          const sellerEmail = String(doc.seller_email || "").trim();
-          const registration = String(doc.registration || "").trim();
+          const sellerEmail = String(doc.seller_email || doc.sellerEmail || "").trim();
 
-          if (!sellerEmail || !registration) {
+          if (!sellerEmail) {
             relistEmailsSkipped++;
-            relistSkippedMissingSellerOrReg++;
+            relistSkippedMissingSeller++;
             continue;
           }
 
@@ -364,18 +436,14 @@ export async function GET(req: NextRequest) {
           try {
             await sendRelistedEmail({
               sellerEmail,
-              registration,
+              itemLabel: getItemLabel(doc),
               start,
               end,
               listingId: doc.$id,
             });
             relistEmailsSent++;
           } catch (mailErr) {
-            console.error(
-              "[cron/relist] Failed to send relist email for",
-              doc.$id,
-              mailErr
-            );
+            console.error("[cron/relist] Failed to send relist email for", doc.$id, mailErr);
             relistEmailsFailed++;
           }
         }
@@ -413,7 +481,7 @@ export async function GET(req: NextRequest) {
         missingEnd: relistSkippedMissingEnd,
         badEnd: relistSkippedBadEnd,
         notEndedYet: relistSkippedNotEndedYet,
-        missingSellerOrReg: relistSkippedMissingSellerOrReg,
+        missingSeller: relistSkippedMissingSeller,
       },
 
       // Window visibility (monitoring)

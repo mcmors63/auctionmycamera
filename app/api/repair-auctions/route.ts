@@ -14,8 +14,8 @@ export async function GET() {
 
     const databases = new Databases(client);
 
-    const DB = process.env.NEXT_PUBLIC_APPWRITE_PLATES_DATABASE_ID!;
-    const COLLECTION = process.env.NEXT_PUBLIC_APPWRITE_PLATES_COLLECTION_ID!;
+    const DB = process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID!;
+    const COLLECTION = process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_COLLECTION_ID!;
 
     // ---------------------------
     // Load LIVE listings only

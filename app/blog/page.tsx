@@ -17,14 +17,14 @@ const projectId = process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID!;
 const apiKey = process.env.APPWRITE_API_KEY!;
 
 const DB_ID =
-  process.env.APPWRITE_PLATES_DATABASE_ID ||
-  process.env.NEXT_PUBLIC_APPWRITE_PLATES_DATABASE_ID!;
+  process.env.APPWRITE_LISTINGS_DATABASE_ID ||
+  process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID!;
 const BLOG_COLLECTION_ID =
   process.env.APPWRITE_BLOG_COLLECTION_ID || "blog_posts";
 
 export const metadata: Metadata = {
   title: "Blog | Auction My Plate",
-  description: "Guides, tips and DVLA know-how for buying and selling cherished plates.",
+  description: "Guides, tips and DVLA know-how for buying and selling cherished listings.",
   alternates: { canonical: "/blog" },
 };
 
@@ -71,7 +71,7 @@ export default async function BlogIndexPage() {
         <header className="mb-8">
           <h1 className="text-3xl font-extrabold text-yellow-400 mb-2">Blog</h1>
           <p className="text-sm text-gray-300">
-            Guides, tips and DVLA know-how for buying and selling cherished plates.
+            Guides, tips and DVLA know-how for buying and selling cherished listings.
           </p>
         </header>
 

@@ -1,7 +1,12 @@
-import { NextResponse } from "next/server";
+// app/api/process-listing-fee/route.ts
+import { NextRequest, NextResponse } from "next/server";
 import nodemailer from "nodemailer";
 
-// 🧮 Helper: Determine fee based on reserve price
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+// 🧮 Helper: Determine fee based on reserve price (PROVISIONAL)
+// Keep identical behaviour for now, but this route does NOT charge a card unless you wire Stripe.
 function calculateListingFee(reserve: number): number {
   if (reserve < 5000) return 5;
   if (reserve < 10000) return 10;
@@ -10,52 +15,205 @@ function calculateListingFee(reserve: number): number {
   return 50;
 }
 
-export async function POST(req: Request) {
-  try {
-    const { registration, reserve_price, seller_email, auction_start } = await req.json();
+// -----------------------------
+// ENV (safe reads)
+// -----------------------------
+const SMTP_HOST = process.env.SMTP_HOST || "";
+const SMTP_PORT = Number(process.env.SMTP_PORT || "465");
+const SMTP_USER = process.env.SMTP_USER || "";
+const SMTP_PASS = process.env.SMTP_PASS || "";
 
-    if (!registration || !seller_email || reserve_price === undefined) {
+// From address should be ONLY an email address (no "Name <...>")
+const RAW_FROM_EMAIL =
+  process.env.FROM_EMAIL ||
+  process.env.CONTACT_FROM_EMAIL ||
+  process.env.SMTP_FROM ||
+  process.env.SMTP_USER ||
+  "";
+
+const FROM_NAME = (process.env.FROM_NAME || "AuctionMyCamera").trim();
+
+const SITE_URL = (process.env.NEXT_PUBLIC_SITE_URL || "https://auctionmycamera.co.uk").replace(
+  /\/+$/,
+  ""
+);
+
+// Optional: set SMTP_TLS_REJECT_UNAUTHORIZED=false if your SMTP cert chain is problematic
+const TLS_REJECT_UNAUTHORIZED =
+  (process.env.SMTP_TLS_REJECT_UNAUTHORIZED || "true").toLowerCase() !== "false";
+
+// -----------------------------
+// Helpers
+// -----------------------------
+function normalizeEmailAddress(input: string) {
+  let v = (input || "").trim();
+
+  // If someone pasted: Name <email@domain>
+  const angleMatch = v.match(/<([^>]+)>/);
+  if (angleMatch?.[1]) v = angleMatch[1].trim();
+
+  // Remove surrounding quotes
+  v = v.replace(/^"+|"+$/g, "").trim();
+
+  // Remove stray spaces
+  v = v.replace(/\s+/g, "");
+
+  return v;
+}
+
+function isValidEmail(email: string) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
+// Prevent header injection via subjects/names (strip CR/LF)
+function safeHeaderValue(v: unknown, fallback = "") {
+  const s = String(v ?? fallback);
+  return s.replace(/[\r\n]+/g, " ").trim();
+}
+
+function escapeHtml(s: unknown) {
+  const v = String(s ?? "");
+  return v
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+function formatAuctionStart(auctionStart: unknown) {
+  const iso = String(auctionStart || "").trim();
+  if (!iso) return "TBC";
+  const ms = Date.parse(iso);
+  if (!Number.isFinite(ms)) return "TBC";
+  return new Date(ms).toLocaleString("en-GB", { dateStyle: "full", timeStyle: "short" });
+}
+
+function buildTransporter() {
+  if (!SMTP_HOST || !SMTP_USER || !SMTP_PASS) return null;
+
+  return nodemailer.createTransport({
+    host: SMTP_HOST,
+    port: SMTP_PORT,
+    secure: SMTP_PORT === 465,
+    auth: {
+      user: SMTP_USER,
+      pass: SMTP_PASS,
+    },
+    tls: {
+      rejectUnauthorized: TLS_REJECT_UNAUTHORIZED,
+    },
+  });
+}
+
+// -----------------------------
+// POST /api/process-listing-fee
+// Body (legacy compatible):
+// { registration, reserve_price, seller_email, auction_start }
+// Also accepts camera fields if present: { item_title, title }
+// -----------------------------
+export async function POST(req: NextRequest) {
+  try {
+    const body = await req.json().catch(() => null);
+
+    const sellerEmail = normalizeEmailAddress(String(body?.seller_email || body?.sellerEmail || ""));
+    const reserveRaw = body?.reserve_price ?? body?.reservePrice;
+    const reserve = Number(reserveRaw);
+
+    // Legacy label vs camera label
+    const registration = String(body?.registration || "").trim();
+    const itemTitle = String(body?.item_title || body?.title || "").trim();
+    const displayTitle = itemTitle || registration;
+
+    const auctionStart = body?.auction_start ?? body?.auctionStart;
+
+    if (!displayTitle || !sellerEmail || !Number.isFinite(reserve)) {
       return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
     }
 
-    const listingFee = calculateListingFee(Number(reserve_price));
+    if (!isValidEmail(sellerEmail)) {
+      return NextResponse.json({ error: "Invalid seller_email" }, { status: 400 });
+    }
 
-    // 💳 In future this can connect to Stripe — for now we just “simulate” payment success
-    console.log(`💰 Listing fee of £${listingFee} processed for ${registration}`);
+    const fromAddress = normalizeEmailAddress(RAW_FROM_EMAIL);
+    if (!fromAddress || !isValidEmail(fromAddress)) {
+      console.error("❌ Invalid FROM email address (server config)", { RAW_FROM_EMAIL, fromAddress });
+      return NextResponse.json(
+        { error: "Invalid FROM email address (server config). Fix FROM_EMAIL." },
+        { status: 500 }
+      );
+    }
 
-    // 💌 Send seller confirmation
-    const transporter = nodemailer.createTransport({
-      host: process.env.SMTP_HOST!,
-      port: Number(process.env.SMTP_PORT!),
-      secure: true,
-      auth: {
-        user: process.env.SMTP_USER!,
-        pass: process.env.SMTP_PASS!,
-      },
-    });
+    const transporter = buildTransporter();
+    if (!transporter) {
+      console.error("❌ Missing SMTP config for /api/process-listing-fee", {
+        SMTP_HOST: !!SMTP_HOST,
+        SMTP_USER: !!SMTP_USER,
+        SMTP_PASS: !!SMTP_PASS,
+      });
+      return NextResponse.json(
+        { error: "Email is not configured (SMTP env missing)" },
+        { status: 500 }
+      );
+    }
+
+    const listingFee = calculateListingFee(reserve);
+
+    // ✅ HONEST log: this route does not charge anything unless Stripe is implemented.
+    console.log(
+      `[process-listing-fee] Provisional fee calculated (£${listingFee}) for "${displayTitle}". No payment processed in this route.`
+    );
+
+    const safeTitle = escapeHtml(displayTitle);
+    const whenLabel = escapeHtml(formatAuctionStart(auctionStart));
 
     await transporter.sendMail({
-      from: `"Auction My Plate" <${process.env.SMTP_USER!}>`,
-      to: seller_email,
-      subject: `Listing Approved – ${registration}`,
+      from: { name: safeHeaderValue(FROM_NAME, "AuctionMyCamera"), address: fromAddress },
+      to: sellerEmail,
+      subject: safeHeaderValue(`Listing approved: ${displayTitle}`),
       html: `
-        <h2>Your listing has been approved!</h2>
-        <p>Congratulations — your registration <strong>${registration}</strong> has been approved for auction.</p>
-        <p>The listing fee of <strong>£${listingFee}</strong> has now been processed.</p>
-        <p>Your plate will enter the next live auction starting on <strong>${new Date(auction_start).toLocaleString("en-GB", { dateStyle: "full", timeStyle: "short" })}</strong>.</p>
-        <br />
-        <p>Thank you for selling with <strong>AuctionMyPlate.co.uk</strong>!</p>
+        <div style="font-family: Arial, sans-serif; line-height: 1.5; max-width: 640px; margin: 0 auto;">
+          <h2 style="margin:0 0 10px 0;">Your listing has been approved</h2>
+
+          <p style="margin:0 0 10px 0;">
+            Your listing <strong>${safeTitle}</strong> has been approved for auction.
+          </p>
+
+          <p style="margin:0 0 10px 0;">
+            <strong>Listing fee:</strong> £${escapeHtml(String(listingFee))}
+          </p>
+
+          <p style="margin:0 0 12px 0;">
+            <strong>Auction start:</strong> ${whenLabel}
+          </p>
+
+          <p style="margin:0 0 12px 0;">
+            You can track progress in your dashboard on <strong>${escapeHtml(SITE_URL)}</strong>.
+          </p>
+
+          <hr style="margin:18px 0; border:none; border-top:1px solid #eee;" />
+
+          <p style="margin:0; font-size:12px; color:#666;">
+            AuctionMyCamera — Buy and sell camera gear with confidence.
+          </p>
+
+          <p style="margin:6px 0 0 0; font-size:12px; color:#666;">
+            Note: This email confirms approval. Payment processing is handled separately.
+          </p>
+        </div>
       `,
     });
 
     return NextResponse.json({
       success: true,
-      message: `Listing fee £${listingFee} processed and email sent.`,
+      message: `Fee £${listingFee} calculated and email sent.`,
+      listingFee,
+      paymentProcessed: false, // ✅ explicit truth
     });
   } catch (err: any) {
-    console.error("❌ Listing fee error:", err);
+    console.error("❌ /api/process-listing-fee error:", err);
     return NextResponse.json(
-      { error: "Failed to process listing fee", details: err.message },
+      { error: "Failed to process listing fee", details: err?.message || String(err) },
       { status: 500 }
     );
   }

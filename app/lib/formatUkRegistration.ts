@@ -58,7 +58,7 @@ export function formatUkRegistration(raw: string | null | undefined): string {
     return `${clean.slice(0, splitIndex)} ${clean.slice(splitIndex)}`;
   }
 
-  // 8) Short plates – nothing clever to do
+  // 8) Short listings – nothing clever to do
   return clean;
 }
 

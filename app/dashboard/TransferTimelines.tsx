@@ -39,9 +39,9 @@ export default function TransferTimelines() {
           </li>
           <li>
             <span className="font-semibold">
-              We email you when DVLA has assigned the plate to your vehicle.
+              We email you when DVLA has assigned the listing to your vehicle.
             </span>{" "}
-            This is the point you can obtain and fit physical plates.
+            This is the point you can obtain and fit physical listings.
           </li>
         </ol>
         <p className="text-xs text-gray-600 mt-2">
@@ -52,7 +52,7 @@ export default function TransferTimelines() {
         <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-2 mt-2">
           <span className="font-semibold">Important:</span> do not drive your
           vehicle displaying the new registration until we confirm the DVLA
-          assignment is complete. Ordering plates early is fine –{" "}
+          assignment is complete. Ordering listings early is fine –{" "}
           <span className="font-semibold">fitting them early is not</span>.
         </p>
         <div className="mt-3">

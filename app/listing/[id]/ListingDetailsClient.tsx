@@ -17,11 +17,11 @@ const databases = new Databases(client);
 // Client-side envs must be NEXT_PUBLIC_*
 const DATABASE_ID =
   process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID ||
-  process.env.NEXT_PUBLIC_APPWRITE_PLATES_DATABASE_ID!;
+  process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID!;
 
 const LISTINGS_COLLECTION_ID =
   process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_COLLECTION_ID ||
-  process.env.NEXT_PUBLIC_APPWRITE_PLATES_COLLECTION_ID!;
+  process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_COLLECTION_ID!;
 
 // ✅ Storage bucket for camera images (still used for sanity checks)
 const CAMERA_IMAGES_BUCKET_ID =
@@ -502,7 +502,7 @@ export default function ListingDetailsClient({ initial }: { initial: Listing }) 
             <h2 className="text-base md:text-lg font-bold text-gray-900">Buying tips</h2>
             <ul className="mt-3 list-disc list-inside space-y-1 text-sm">
               <li>Check condition notes carefully (marks, fungus/haze, faults, battery health, etc.).</li>
-              <li>Confirm what’s included (caps, straps, chargers, boxes, filters, tripod plates).</li>
+              <li>Confirm what’s included (caps, straps, chargers, boxes, filters, tripod).</li>
               <li>If it’s a camera, shutter count (if provided) is helpful — but not the whole story.</li>
             </ul>
           </div>

@@ -6,32 +6,38 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 // -----------------------------
-// Appwrite ENV
+// Appwrite ENV (SAFE reads)
 // -----------------------------
-const endpoint = process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT!;
-const projectId = process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID!;
-const apiKey = process.env.APPWRITE_API_KEY!;
+const endpoint =
+  process.env.APPWRITE_ENDPOINT ||
+  process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT ||
+  "";
+
+const projectId =
+  process.env.APPWRITE_PROJECT_ID ||
+  process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID ||
+  "";
+
+const apiKey = process.env.APPWRITE_API_KEY || "";
 
 // Optional admin access helpers (ONLY used for document permissions if you enable Row Security)
 const ADMINS_TEAM_ID = (process.env.APPWRITE_ADMINS_TEAM_ID || "").trim(); // optional
 const ADMIN_USER_ID = (process.env.APPWRITE_ADMIN_USER_ID || "").trim(); // optional
 
-// Backwards-compatible env names (your clone still uses "PLATES")
+// Backwards-compatible env names (your clone still uses "LISTINGS")
 const LISTINGS_DB_ID =
   process.env.APPWRITE_LISTINGS_DATABASE_ID ||
   process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID ||
-  process.env.APPWRITE_PLATES_DATABASE_ID ||
-  process.env.NEXT_PUBLIC_APPWRITE_PLATES_DATABASE_ID ||
   "690fc34a0000ce1baa63";
 
 const LISTINGS_COLLECTION_ID =
   process.env.APPWRITE_LISTINGS_COLLECTION_ID ||
   process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_COLLECTION_ID ||
-  process.env.APPWRITE_PLATES_COLLECTION_ID ||
-  process.env.NEXT_PUBLIC_APPWRITE_PLATES_COLLECTION_ID ||
-  "plates";
+  "listings";
 
+// -----------------------------
 // Helpers
+// -----------------------------
 function toNumber(value: any, fallback = 0) {
   const n = Number(value);
   return Number.isFinite(n) ? n : fallback;
@@ -42,10 +48,7 @@ function safeString(v: any) {
 }
 
 function getAdminDatabases() {
-  const client = new Client()
-    .setEndpoint(endpoint)
-    .setProject(projectId)
-    .setKey(apiKey);
+  const client = new Client().setEndpoint(endpoint).setProject(projectId).setKey(apiKey);
   return new Databases(client);
 }
 
@@ -62,11 +65,7 @@ async function getAuthedUser(req: NextRequest) {
   const jwt = getJwtFromRequest(req);
   if (!jwt) return null;
 
-  const userClient = new Client()
-    .setEndpoint(endpoint)
-    .setProject(projectId)
-    .setJWT(jwt);
-
+  const userClient = new Client().setEndpoint(endpoint).setProject(projectId).setJWT(jwt);
   const account = new Account(userClient);
 
   try {
@@ -120,6 +119,7 @@ function buildCreatePermissions(userId: string) {
 // -----------------------------
 export async function POST(req: NextRequest) {
   try {
+    // ✅ Hard fail only inside handler (prevents build-time crashes)
     if (!endpoint || !projectId || !apiKey) {
       return NextResponse.json(
         { error: "Server Appwrite config missing." },
@@ -169,8 +169,9 @@ export async function POST(req: NextRequest) {
     // - SellClient currently sends image_id (single). We also accept image_ids (array) for future-proofing.
     const imageId = safeString(body.image_id || body.imageId);
     const imageIdsRaw = Array.isArray(body.image_ids || body.imageIds)
-      ? (body.image_ids || body.imageIds)
+      ? body.image_ids || body.imageIds
       : null;
+
     const imageIds =
       Array.isArray(imageIdsRaw) && imageIdsRaw.length
         ? imageIdsRaw
@@ -194,10 +195,7 @@ export async function POST(req: NextRequest) {
     }
 
     if (startingPrice < 0 || reservePrice < 0) {
-      return NextResponse.json(
-        { error: "Prices cannot be negative." },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "Prices cannot be negative." }, { status: 400 });
     }
 
     if (reservePrice > 0 && startingPrice > 0 && startingPrice >= reservePrice) {
@@ -269,12 +267,10 @@ export async function POST(req: NextRequest) {
       description: description || null,
 
       // ✅ Photo references (schema-tolerant)
-      // If you only add one attribute in Appwrite, add: image_id (string).
-      // If you later add gallery support, add: image_ids (string array).
       image_id: imageId || null,
       image_ids: imageIds || null,
 
-      // Legacy harmless defaults
+      // Legacy harmless defaults (keep if schema already expects these in your shared codebase)
       plate_status: body.plate_status || "available",
       expiry_date: body.expiry_date || null,
       interesting_fact: body.interesting_fact || null,
@@ -305,9 +301,6 @@ export async function POST(req: NextRequest) {
         reserve_price: reservePrice,
         buy_now: buyNow,
         status: "pending_approval",
-
-        // Try to keep photo even in minimal mode — if schema doesn’t have it,
-        // Appwrite will still reject, so we omit it if that happens next time.
         image_id: imageId || null,
       };
 

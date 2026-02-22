@@ -20,13 +20,37 @@ function requireEnv(name: string) {
   return v;
 }
 
+function normalizeEmailAddress(input: string) {
+  let v = (input || "").trim();
+
+  // If someone pasted: Name <email@domain>
+  const angleMatch = v.match(/<([^>]+)>/);
+  if (angleMatch?.[1]) v = angleMatch[1].trim();
+
+  v = v.replace(/^"+|"+$/g, "").trim();
+  v = v.replace(/\s+/g, "");
+  return v;
+}
+
+function isValidEmail(email: string) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
+// Prevent header injection via subjects/names (strip CR/LF)
+function safeHeaderValue(v: unknown, fallback = "") {
+  const s = String(v ?? fallback);
+  return s.replace(/[\r\n]+/g, " ").trim();
+}
+
 // -----------------------------
 // Appwrite (server/admin) setup
 // -----------------------------
 function getDatabasesOrNull() {
-  const endpoint =
-    env("APPWRITE_ENDPOINT") || env("NEXT_PUBLIC_APPWRITE_ENDPOINT");
-  const projectId = requireEnv("NEXT_PUBLIC_APPWRITE_PROJECT_ID");
+  const endpoint = env("APPWRITE_ENDPOINT") || env("NEXT_PUBLIC_APPWRITE_ENDPOINT");
+
+  const projectId =
+    env("APPWRITE_PROJECT_ID") || env("NEXT_PUBLIC_APPWRITE_PROJECT_ID");
+
   const apiKey = requireEnv("APPWRITE_API_KEY");
 
   if (!endpoint || !projectId || !apiKey) return null;
@@ -36,7 +60,7 @@ function getDatabasesOrNull() {
 }
 
 // -----------------------------
-// Listings DB/collection (NO plates fallbacks)
+// Listings DB/collection
 // -----------------------------
 function getListingsTarget() {
   const dbId =
@@ -56,14 +80,20 @@ function getListingsTarget() {
 const SITE_URL = (env("NEXT_PUBLIC_SITE_URL") || "https://auctionmycamera.co.uk").replace(/\/+$/, "");
 
 const SMTP_HOST = env("SMTP_HOST");
-const SMTP_PORT = env("SMTP_PORT");
+const SMTP_PORT_RAW = env("SMTP_PORT");
 const SMTP_USER = env("SMTP_USER");
 const SMTP_PASS = env("SMTP_PASS");
 
 const FROM_EMAIL =
   env("CONTACT_FROM_EMAIL") ||
+  env("FROM_EMAIL") ||
+  env("EMAIL_FROM") ||
   SMTP_USER ||
   "no-reply@auctionmycamera.co.uk";
+
+// Optional: set SMTP_TLS_REJECT_UNAUTHORIZED=false if your SMTP cert chain is problematic
+const TLS_REJECT_UNAUTHORIZED =
+  (env("SMTP_TLS_REJECT_UNAUTHORIZED") || "true").toLowerCase() !== "false";
 
 function fmtLondonTimeLabel(d: Date) {
   return d.toLocaleString("en-GB", {
@@ -76,14 +106,20 @@ function fmtLondonTimeLabel(d: Date) {
 }
 
 function createTransporterOrNull() {
-  const enabled = Boolean(SMTP_HOST && SMTP_PORT && SMTP_USER && SMTP_PASS);
+  const enabled = Boolean(SMTP_HOST && SMTP_PORT_RAW && SMTP_USER && SMTP_PASS);
   if (!enabled) return null;
+
+  const port = Number(SMTP_PORT_RAW || "465");
+  const secure = port === 465;
 
   return nodemailer.createTransport({
     host: SMTP_HOST,
-    port: Number(SMTP_PORT),
-    secure: true,
+    port,
+    secure,
     auth: { user: SMTP_USER, pass: SMTP_PASS },
+    tls: {
+      rejectUnauthorized: TLS_REJECT_UNAUTHORIZED,
+    },
   });
 }
 
@@ -95,6 +131,9 @@ function titleFromDoc(doc: any) {
   const model = String(doc?.model || "").trim();
   const bm = [brand, model].filter(Boolean).join(" ").trim();
   if (bm) return bm;
+
+  const legacy = String(doc?.registration || "").trim();
+  if (legacy) return legacy;
 
   return "your listing";
 }
@@ -109,7 +148,7 @@ export async function POST(req: Request) {
       return NextResponse.json(
         {
           error:
-            "Server Appwrite config missing. Ensure NEXT_PUBLIC_APPWRITE_PROJECT_ID, APPWRITE_API_KEY, and APPWRITE_ENDPOINT or NEXT_PUBLIC_APPWRITE_ENDPOINT are set.",
+            "Server Appwrite config missing. Ensure APPWRITE_PROJECT_ID (or NEXT_PUBLIC_APPWRITE_PROJECT_ID), APPWRITE_API_KEY, and APPWRITE_ENDPOINT (or NEXT_PUBLIC_APPWRITE_ENDPOINT) are set.",
         },
         { status: 500 }
       );
@@ -136,9 +175,9 @@ export async function POST(req: Request) {
     // Load listing
     const doc: any = await databases.getDocument(dbId, collectionId, listingId);
 
-    const status = String(doc?.status || "").toLowerCase();
+    const status = String(doc?.status || "").toLowerCase().trim();
 
-    // ✅ HARD SAFETY: only allow relist from NOT_SOLD (same as your plate logic)
+    // ✅ HARD SAFETY: only allow relist from NOT_SOLD
     if (status !== "not_sold") {
       return NextResponse.json(
         {
@@ -160,7 +199,7 @@ export async function POST(req: Request) {
     const newStatus =
       nowMs >= start.getTime() && nowMs < end.getTime() ? "live" : "queued";
 
-    // Schema-tolerant reset payload (camera listings may not have all bid fields)
+    // Schema-tolerant reset payload
     const updateData: Record<string, any> = {
       status: newStatus,
       auction_start: start.toISOString(),
@@ -186,22 +225,23 @@ export async function POST(req: Request) {
     const updated = await databases.updateDocument(dbId, collectionId, listingId, updateData);
 
     // Best-effort email to seller (if present)
-    const sellerEmail = String(doc?.seller_email || doc?.sellerEmail || "").trim();
+    const sellerEmail = normalizeEmailAddress(String(doc?.seller_email || doc?.sellerEmail || ""));
     const transporter = createTransporterOrNull();
 
-    if (transporter && sellerEmail) {
+    if (transporter && sellerEmail && isValidEmail(sellerEmail)) {
       const dashboardLink = `${SITE_URL}/dashboard`;
       const startLabel = fmtLondonTimeLabel(start);
       const endLabel = fmtLondonTimeLabel(end);
+      const title = titleFromDoc(doc);
 
       try {
         await transporter.sendMail({
-          from: `"AuctionMyCamera" <${FROM_EMAIL}>`,
+          from: `AuctionMyCamera <${FROM_EMAIL}>`,
           to: sellerEmail,
-          subject: `Update: ${titleFromDoc(doc)} has been re-listed`,
+          subject: safeHeaderValue(`Update: ${title} has been re-listed`),
           text: `Hi,
 
-Your listing "${titleFromDoc(doc)}" has been re-listed for the next auction window.
+Your listing "${title}" has been re-listed for the next auction window.
 
 Next auction window (UK time):
 Start: ${startLabel}

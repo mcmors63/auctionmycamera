@@ -2,8 +2,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Client, Databases, Query } from "appwrite";
+import { Client, Databases, Query, Account } from "appwrite";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 
 // Appwrite setup
 const client = new Client()
@@ -11,9 +12,16 @@ const client = new Client()
   .setProject(process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID!);
 
 const databases = new Databases(client);
+const account = new Account(client);
 
-const AUCTIONS_DB = process.env.NEXT_PUBLIC_APPWRITE_AUCTIONS_DATABASE_ID!;
-const AUCTIONS_COLLECTION = process.env.NEXT_PUBLIC_APPWRITE_AUCTIONS_COLLECTION_ID!;
+// ✅ Single source of truth for admin email
+const ADMIN_EMAIL = (process.env.NEXT_PUBLIC_ADMIN_EMAIL || "admin@auctionmycamera.co.uk")
+  .trim()
+  .toLowerCase();
+
+// Auctions DB/Collection
+const AUCTIONS_DB = (process.env.NEXT_PUBLIC_APPWRITE_AUCTIONS_DATABASE_ID || "").trim();
+const AUCTIONS_COLLECTION = (process.env.NEXT_PUBLIC_APPWRITE_AUCTIONS_COLLECTION_ID || "").trim();
 
 type AuctionWeek = {
   $id: string;
@@ -31,13 +39,52 @@ function formatLondon(iso?: string | null) {
 }
 
 export default function AdminAuctionsClient() {
+  const router = useRouter();
+
+  const [authState, setAuthState] = useState<"checking" | "yes">("checking");
+  const [signedInEmail, setSignedInEmail] = useState<string>("");
+
   const [currentWeek, setCurrentWeek] = useState<AuctionWeek | null>(null);
   const [nextWeek, setNextWeek] = useState<AuctionWeek | null>(null);
   const [pastWeeks, setPastWeeks] = useState<AuctionWeek[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // ------------------------------------------------------
+  // VERIFY ADMIN LOGIN (same pattern as AdminClient)
+  // ------------------------------------------------------
   useEffect(() => {
+    let alive = true;
+
+    const verify = async () => {
+      try {
+        const user: any = await account.get();
+        const email = String(user?.email || "").toLowerCase();
+
+        if (alive) setSignedInEmail(email);
+
+        if (email === ADMIN_EMAIL) {
+          if (alive) setAuthState("yes");
+        } else {
+          router.replace("/admin-login");
+        }
+      } catch {
+        router.replace("/admin-login");
+      }
+    };
+
+    verify();
+    return () => {
+      alive = false;
+    };
+  }, [router]);
+
+  // ------------------------------------------------------
+  // LOAD AUCTION WEEKS (admin-only)
+  // ------------------------------------------------------
+  useEffect(() => {
+    if (authState !== "yes") return;
+
     let cancelled = false;
 
     const loadWeeks = async () => {
@@ -47,7 +94,7 @@ export default function AdminAuctionsClient() {
 
         if (!AUCTIONS_DB || !AUCTIONS_COLLECTION) {
           throw new Error(
-            "Missing AUCTIONS env vars. Check NEXT_PUBLIC_APPWRITE_AUCTIONS_DATABASE_ID / NEXT_PUBLIC_APPWRITE_AUCTIONS_COLLECTION_ID."
+            "Missing AUCTIONS env vars. Set NEXT_PUBLIC_APPWRITE_AUCTIONS_DATABASE_ID and NEXT_PUBLIC_APPWRITE_AUCTIONS_COLLECTION_ID."
           );
         }
 
@@ -90,15 +137,35 @@ export default function AdminAuctionsClient() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [authState]);
+
+  // ------------------------------------------------------
+  // UI
+  // ------------------------------------------------------
+  if (authState === "checking") {
+    return (
+      <div className="min-h-[50vh] flex items-center justify-center">
+        <div className="rounded-2xl border border-neutral-200 bg-white p-6 shadow-sm text-sm text-neutral-600">
+          Checking admin session…
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="p-8 max-w-4xl mx-auto">
-      <h1 className="text-3xl font-bold text-yellow-700 mb-4">Auction Week Manager</h1>
+    <div className="bg-white rounded-2xl shadow-lg border border-yellow-200 p-6 md:p-8">
+      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-6">
+        <div>
+          <h1 className="text-3xl font-bold text-yellow-800">Auction Week Manager</h1>
+          <p className="text-xs text-neutral-500 mt-1">
+            Signed in as <span className="font-semibold">{signedInEmail || ADMIN_EMAIL}</span>
+          </p>
+        </div>
 
-      <Link href="/admin" className="text-blue-600 underline mb-6 inline-block">
-        ← Back to Admin Dashboard
-      </Link>
+        <Link href="/admin" className="text-blue-600 underline text-sm">
+          ← Back to Admin Dashboard
+        </Link>
+      </div>
 
       {error && (
         <div className="mb-6 border border-red-200 bg-red-50 text-red-800 rounded-lg p-4 text-sm">
@@ -106,58 +173,72 @@ export default function AdminAuctionsClient() {
         </div>
       )}
 
-      {loading && <p>Loading auction weeks…</p>}
+      {loading && <p className="text-neutral-700">Loading auction weeks…</p>}
 
       {!loading && (
         <>
           {/* CURRENT WEEK */}
-          {currentWeek ? (
-            <div className="border rounded-lg p-4 mb-6 bg-yellow-50">
-              <h2 className="text-xl font-bold text-yellow-800">Current Week</h2>
-              <p>Week Key: {currentWeek.week_key || "—"}</p>
-              <p>Start: {formatLondon(currentWeek.auction_start)}</p>
-              <p>End: {formatLondon(currentWeek.auction_end)}</p>
-            </div>
-          ) : (
-            <div className="border rounded-lg p-4 mb-6 bg-yellow-50">
-              <h2 className="text-xl font-bold text-yellow-800">Current Week</h2>
+          <div className="border rounded-xl p-4 mb-6 bg-yellow-50">
+            <h2 className="text-xl font-bold text-yellow-900 mb-2">Current Week</h2>
+            {currentWeek ? (
+              <>
+                <p>
+                  <span className="font-semibold">Week Key:</span> {currentWeek.week_key || "—"}
+                </p>
+                <p>
+                  <span className="font-semibold">Start:</span> {formatLondon(currentWeek.auction_start)}
+                </p>
+                <p>
+                  <span className="font-semibold">End:</span> {formatLondon(currentWeek.auction_end)}
+                </p>
+              </>
+            ) : (
               <p className="text-sm text-gray-700">No current week found.</p>
-            </div>
-          )}
+            )}
+          </div>
 
           {/* NEXT WEEK */}
-          {nextWeek ? (
-            <div className="border rounded-lg p-4 mb-6 bg-blue-50">
-              <h2 className="text-xl font-bold text-blue-800">Next Week</h2>
-              <p>Week Key: {nextWeek.week_key || "—"}</p>
-              <p>Start: {formatLondon(nextWeek.auction_start)}</p>
-              <p>End: {formatLondon(nextWeek.auction_end)}</p>
-            </div>
-          ) : (
-            <div className="border rounded-lg p-4 mb-6 bg-blue-50">
-              <h2 className="text-xl font-bold text-blue-800">Next Week</h2>
+          <div className="border rounded-xl p-4 mb-6 bg-blue-50">
+            <h2 className="text-xl font-bold text-blue-900 mb-2">Next Week</h2>
+            {nextWeek ? (
+              <>
+                <p>
+                  <span className="font-semibold">Week Key:</span> {nextWeek.week_key || "—"}
+                </p>
+                <p>
+                  <span className="font-semibold">Start:</span> {formatLondon(nextWeek.auction_start)}
+                </p>
+                <p>
+                  <span className="font-semibold">End:</span> {formatLondon(nextWeek.auction_end)}
+                </p>
+              </>
+            ) : (
               <p className="text-sm text-gray-700">No next week found.</p>
-            </div>
-          )}
+            )}
+          </div>
 
           {/* PAST WEEKS */}
-          <h2 className="text-xl font-bold mt-6 mb-3">Past Weeks</h2>
+          <h2 className="text-xl font-bold mt-8 mb-3 text-neutral-900">Past Weeks</h2>
 
-          {pastWeeks.length === 0 && <p>No past auction weeks.</p>}
-
-          {pastWeeks.map((w) => (
-            <div key={w.$id} className="border rounded-lg p-4 mb-4 bg-gray-50">
-              <p>
-                <strong>Week:</strong> {w.week_key || "—"}
-              </p>
-              <p>
-                <strong>Start:</strong> {formatLondon(w.auction_start)}
-              </p>
-              <p>
-                <strong>End:</strong> {formatLondon(w.auction_end)}
-              </p>
+          {pastWeeks.length === 0 ? (
+            <p className="text-neutral-700">No past auction weeks.</p>
+          ) : (
+            <div className="space-y-3">
+              {pastWeeks.map((w) => (
+                <div key={w.$id} className="border rounded-xl p-4 bg-gray-50">
+                  <p>
+                    <span className="font-semibold">Week:</span> {w.week_key || "—"}
+                  </p>
+                  <p>
+                    <span className="font-semibold">Start:</span> {formatLondon(w.auction_start)}
+                  </p>
+                  <p>
+                    <span className="font-semibold">End:</span> {formatLondon(w.auction_end)}
+                  </p>
+                </div>
+              ))}
             </div>
-          ))}
+          )}
         </>
       )}
     </div>

@@ -1,4 +1,3 @@
-// app/dashboard/page.tsx
 "use client";
 
 import type React from "react";
@@ -7,6 +6,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Client, Account, Databases, Storage, ID, Query } from "appwrite";
 import { CheckCircleIcon, XCircleIcon } from "@heroicons/react/24/solid";
+
 // -----------------------------
 // Appwrite (browser)
 // -----------------------------
@@ -16,32 +16,29 @@ const client = new Client()
 
 const account = new Account(client);
 const databases = new Databases(client);
+const storage = new Storage(client);
 
 // -----------------------------
 // ENV (Listings + Profiles + Transactions)
 // -----------------------------
 const LISTINGS_DB_ID =
   process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID ||
-  process.env.NEXT_PUBLIC_APPWRITE_PLATES_DATABASE_ID ||
+  process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID ||
   process.env.APPWRITE_LISTINGS_DATABASE_ID ||
-  process.env.APPWRITE_PLATES_DATABASE_ID ||
+  process.env.APPWRITE_LISTINGS_DATABASE_ID ||
   "690fc34a0000ce1baa63";
 
 const LISTINGS_COLLECTION_ID =
   process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_COLLECTION_ID ||
-  process.env.NEXT_PUBLIC_APPWRITE_PLATES_COLLECTION_ID ||
+  process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_COLLECTION_ID ||
   process.env.APPWRITE_LISTINGS_COLLECTION_ID ||
-  process.env.APPWRITE_PLATES_COLLECTION_ID ||
-  "plates";
+  process.env.APPWRITE_LISTINGS_COLLECTION_ID ||
+  "listings";
 
-const PROFILES_DB_ID =
-  process.env.NEXT_PUBLIC_APPWRITE_PROFILES_DATABASE_ID ||
-  process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID ||
-  process.env.NEXT_PUBLIC_APPWRITE_PLATES_DATABASE_ID ||
-  "690fc34a0000ce1baa63";
-
-const PROFILES_COLLECTION_ID =
-  process.env.NEXT_PUBLIC_APPWRITE_PROFILES_COLLECTION_ID || "profiles";
+// ✅ IMPORTANT: Dashboard must use the SAME env vars as registration.
+// No “guessing” via listings DB. If these are missing, we show a clear error.
+const PROFILES_DB_ID = (process.env.NEXT_PUBLIC_APPWRITE_PROFILES_DATABASE_ID || "").trim();
+const PROFILES_COLLECTION_ID = (process.env.NEXT_PUBLIC_APPWRITE_PROFILES_COLLECTION_ID || "").trim();
 
 // Transactions are optional in AuctionMyCamera for now
 const TX_DB_ID = LISTINGS_DB_ID;
@@ -66,6 +63,9 @@ type Profile = {
   postcode?: string;
   phone?: string;
   email?: string;
+
+  // optional helper fields (some clones store it)
+  userId?: string;
 };
 
 type Listing = {
@@ -174,12 +174,7 @@ function isFinishedTransaction(tx: Transaction) {
 }
 
 function listingTitle(l: Listing) {
-  return (
-    safeStr(l.item_title) ||
-    safeStr((l as any).title) ||
-    safeStr(l.registration) ||
-    "Untitled listing"
-  );
+  return safeStr(l.item_title) || safeStr((l as any).title) || safeStr(l.registration) || "Untitled listing";
 }
 
 function listingSubtitle(l: Listing) {
@@ -247,6 +242,7 @@ export default function DashboardPage() {
   // Photo (dashboard sell)
   const [sellPhoto, setSellPhoto] = useState<File | null>(null);
   const [sellPhotoPreview, setSellPhotoPreview] = useState<string | null>(null);
+
   // Fee preview (simple for now)
   const [commissionRate, setCommissionRate] = useState(0);
   const [commissionValue, setCommissionValue] = useState(0);
@@ -304,6 +300,15 @@ export default function DashboardPage() {
       setBannerError("");
       setBannerSuccess("");
 
+      // 0) Ensure profile env is actually set
+      if (!PROFILES_DB_ID || !PROFILES_COLLECTION_ID) {
+        setBannerError(
+          "Dashboard misconfigured: missing NEXT_PUBLIC_APPWRITE_PROFILES_DATABASE_ID or NEXT_PUBLIC_APPWRITE_PROFILES_COLLECTION_ID."
+        );
+        setInitialLoading(false);
+        return;
+      }
+
       // 1) AUTH
       let current: any;
       try {
@@ -333,12 +338,44 @@ export default function DashboardPage() {
       if (cancelled) return;
       setUser(current);
 
-      // 2) PROFILE (best effort)
+      // 2) PROFILE (strict env + fallback search)
       try {
+        // Primary: doc id = user id (this is what your RegisterClient does)
         const prof = await databases.getDocument(PROFILES_DB_ID, PROFILES_COLLECTION_ID, current.$id);
         if (!cancelled) setProfile(prof as any);
       } catch {
-        if (!cancelled) setProfile(null);
+        // Fallback: some older clones stored profiles under random $id and linked by userId/email.
+        try {
+          const found: any[] = [];
+
+          // try userId if it exists in schema
+          try {
+            const rByUserId = await databases.listDocuments(PROFILES_DB_ID, PROFILES_COLLECTION_ID, [
+              Query.equal("userId", current.$id),
+              Query.limit(1),
+            ]);
+            found.push(...(rByUserId.documents || []));
+          } catch {
+            // ignore
+          }
+
+          // try email as last resort
+          if (found.length === 0) {
+            try {
+              const rByEmail = await databases.listDocuments(PROFILES_DB_ID, PROFILES_COLLECTION_ID, [
+                Query.equal("email", current.email),
+                Query.limit(1),
+              ]);
+              found.push(...(rByEmail.documents || []));
+            } catch {
+              // ignore
+            }
+          }
+
+          if (!cancelled) setProfile(found[0] ? (found[0] as any) : null);
+        } catch {
+          if (!cancelled) setProfile(null);
+        }
       }
 
       // 3) LISTINGS (seller_email or sellerEmail)
@@ -562,7 +599,7 @@ export default function DashboardPage() {
 
     try {
       const hasActiveListing = allListings.some((l) =>
-        [ "pending", "pending_approval", "queued", "approved", "live", "active" ].includes(
+        ["pending", "pending_approval", "queued", "approved", "live", "active"].includes(
           (l.status || "").toLowerCase()
         )
       );
@@ -614,7 +651,6 @@ export default function DashboardPage() {
   const calculateFees = (reserve: number) => {
     let commission = 0;
 
-    // Same tiering as before (you can change later)
     if (reserve <= 4999.99) commission = 10;
     else if (reserve <= 9999.99) commission = 8;
     else if (reserve <= 24999.99) commission = 7;
@@ -658,36 +694,28 @@ export default function DashboardPage() {
   };
 
   // -----------------------------
-// Upload photo for dashboard sell
-// -----------------------------
+  // Upload photo for dashboard sell
+  // -----------------------------
+  async function uploadDashboardPhotoIfProvided(): Promise<string | null> {
+    if (!sellPhoto) return null;
 
-const storage = new Storage(client);
+    const bucketId = (process.env.NEXT_PUBLIC_APPWRITE_CAMERA_IMAGES_BUCKET_ID || "").trim();
 
-async function uploadDashboardPhotoIfProvided(): Promise<string | null> {
-  if (!sellPhoto) return null;
+    if (!bucketId) {
+      alert("Camera image bucket not configured.");
+      return null;
+    }
 
-  const bucketId =
-    process.env.NEXT_PUBLIC_APPWRITE_CAMERA_IMAGES_BUCKET_ID || "";
-
-  if (!bucketId) {
-    alert("Camera image bucket not configured.");
-    return null;
+    try {
+      const file = await storage.createFile(bucketId, ID.unique(), sellPhoto);
+      return file.$id;
+    } catch (err) {
+      console.error("Photo upload failed:", err);
+      alert("Failed to upload image.");
+      return null;
+    }
   }
 
-  try {
-    const file = await storage.createFile(
-      bucketId,
-      ID.unique(),
-      sellPhoto
-    );
-
-    return file.$id;
-  } catch (err) {
-    console.error("Photo upload failed:", err);
-    alert("Failed to upload image.");
-    return null;
-  }
-}
   // -----------------------------
   // Create listing via /api/listings (JWT auth)
   // -----------------------------
@@ -742,43 +770,41 @@ async function uploadDashboardPhotoIfProvided(): Promise<string | null> {
     setSellSubmitting(true);
 
     try {
-      // ✅ Get a JWT so the API can verify who the user is
       const jwt = await account.createJWT();
-const token = (jwt as any)?.jwt || "";
+      const token = (jwt as any)?.jwt || "";
 
-if (!token) {
-  setSellError("Could not create auth token. Please log out and log in again.");
-  setSellSubmitting(false);
-  return;
-}
+      if (!token) {
+        setSellError("Could not create auth token. Please log out and log in again.");
+        setSellSubmitting(false);
+        return;
+      }
 
-// ✅ ADD THIS LINE
-const uploadedImageId = await uploadDashboardPhotoIfProvided();
+      const uploadedImageId = await uploadDashboardPhotoIfProvided();
 
-const res = await fetch("/api/listings", {
-  method: "POST",
-  headers: {
-    "Content-Type": "application/json",
-    Authorization: `Bearer ${token}`,
-  },
-  body: JSON.stringify({
-    item_title: title,
-    gear_type: safeStr(sellForm.gear_type),
-    brand: safeStr(sellForm.brand),
-    model: safeStr(sellForm.model),
-    era: safeStr(sellForm.era),
-    condition: safeStr(sellForm.condition),
-    description: safeStr(sellForm.description),
+      const res = await fetch("/api/listings", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          item_title: title,
+          gear_type: safeStr(sellForm.gear_type),
+          brand: safeStr(sellForm.brand),
+          model: safeStr(sellForm.model),
+          era: safeStr(sellForm.era),
+          condition: safeStr(sellForm.condition),
+          description: safeStr(sellForm.description),
 
-    reserve_price: reserve,
-    starting_price: !isNaN(starting) ? starting : 0,
-    buy_now: !isNaN(buyNow) ? buyNow : 0,
+          reserve_price: reserve,
+          starting_price: !isNaN(starting) ? starting : 0,
+          buy_now: !isNaN(buyNow) ? buyNow : 0,
 
-    image_id: uploadedImageId,
+          image_id: uploadedImageId,
 
-    relist_until_sold: !!sellForm.relist_until_sold,
-  }),
-});
+          relist_until_sold: !!sellForm.relist_until_sold,
+        }),
+      });
 
       const data = await res.json().catch(() => ({} as any));
 
@@ -858,7 +884,7 @@ const res = await fetch("/api/listings", {
   }
 
   // -----------------------------
-  // UI styles (camera theme, no AMP yellow)
+  // UI styles (camera theme)
   // -----------------------------
   const accentText = "text-sky-300";
   const accentBorder = "border-sky-700/50";
@@ -944,7 +970,12 @@ const res = await fetch("/api/listings", {
 
             {!profile ? (
               <p className="text-neutral-300">
-                No profile found. If you only just registered, try refreshing. If it persists, contact support.
+                No profile found for your account.
+                <br />
+                This usually means your dashboard is pointing at a different Appwrite database/collection than your registration.
+                <br />
+                Check your env vars: <strong>NEXT_PUBLIC_APPWRITE_PROFILES_DATABASE_ID</strong> and{" "}
+                <strong>NEXT_PUBLIC_APPWRITE_PROFILES_COLLECTION_ID</strong>.
               </p>
             ) : (
               <>
@@ -1227,38 +1258,39 @@ const res = await fetch("/api/listings", {
               </div>
 
               {/* Photo Upload */}
-<div>
-  <label className="block text-sm font-medium text-neutral-200 mb-1">
-    Photo (optional)
-  </label>
+              <div>
+                <label className="block text-sm font-medium text-neutral-200 mb-1">
+                  Photo (optional)
+                </label>
 
-  <input
-    type="file"
-    accept="image/*"
-    onChange={(e) => {
-      const file = e.target.files?.[0] || null;
-      setSellPhoto(file);
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0] || null;
+                    setSellPhoto(file);
 
-      if (file) {
-        const url = URL.createObjectURL(file);
-        setSellPhotoPreview(url);
-      } else {
-        setSellPhotoPreview(null);
-      }
-    }}
-    className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100"
-  />
+                    if (file) {
+                      const url = URL.createObjectURL(file);
+                      setSellPhotoPreview(url);
+                    } else {
+                      setSellPhotoPreview(null);
+                    }
+                  }}
+                  className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100"
+                />
 
-  {sellPhotoPreview && (
-    <div className="mt-3">
-      <img
-        src={sellPhotoPreview}
-        alt="Preview"
-        className="h-40 rounded-lg border border-neutral-700 object-cover"
-      />
-    </div>
-  )}
-</div>
+                {sellPhotoPreview && (
+                  <div className="mt-3">
+                    <img
+                      src={sellPhotoPreview}
+                      alt="Preview"
+                      className="h-40 rounded-lg border border-neutral-700 object-cover"
+                    />
+                  </div>
+                )}
+              </div>
+
               {/* Prices */}
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <div>
@@ -1335,9 +1367,7 @@ const res = await fetch("/api/listings", {
                     onChange={handleSellChange}
                     className="mt-1 accent-sky-500"
                   />
-                  <span>
-                    I confirm I own this item (or have authority to sell it) and my description is accurate.
-                  </span>
+                  <span>I confirm I own this item (or have authority to sell it) and my description is accurate.</span>
                 </label>
 
                 <label className="flex items-start gap-2">
@@ -1516,9 +1546,7 @@ const res = await fetch("/api/listings", {
             </p>
 
             {liveListings.length === 0 ? (
-              <p className="text-neutral-400 text-sm text-center">
-                You currently have no live listings.
-              </p>
+              <p className="text-neutral-400 text-sm text-center">You currently have no live listings.</p>
             ) : (
               <div className="grid gap-4">
                 {liveListings.map((l) => (
@@ -1581,14 +1609,10 @@ const res = await fetch("/api/listings", {
         {activeTab === "sold" && (
           <div className="space-y-4">
             <h2 className={`text-xl font-bold mb-2 ${accentText}`}>Sold (You as Seller)</h2>
-            <p className="text-sm text-neutral-300 mb-2">
-              Completed sales where you were the seller.
-            </p>
+            <p className="text-sm text-neutral-300 mb-2">Completed sales where you were the seller.</p>
 
             {soldTransactions.length === 0 ? (
-              <p className="text-neutral-400 text-sm text-center">
-                You don&apos;t have any completed sales yet.
-              </p>
+              <p className="text-neutral-400 text-sm text-center">You don&apos;t have any completed sales yet.</p>
             ) : (
               <div className="grid gap-4">
                 {soldTransactions.map((tx) => (
@@ -1625,14 +1649,10 @@ const res = await fetch("/api/listings", {
         {activeTab === "purchased" && (
           <div className="space-y-4">
             <h2 className={`text-xl font-bold mb-2 ${accentText}`}>Purchased (You as Buyer)</h2>
-            <p className="text-sm text-neutral-300 mb-2">
-              Completed purchases where you were the buyer.
-            </p>
+            <p className="text-sm text-neutral-300 mb-2">Completed purchases where you were the buyer.</p>
 
             {purchasedTransactions.length === 0 ? (
-              <p className="text-neutral-400 text-sm text-center">
-                You haven&apos;t completed any purchases yet.
-              </p>
+              <p className="text-neutral-400 text-sm text-center">You haven&apos;t completed any purchases yet.</p>
             ) : (
               <div className="grid gap-4">
                 {purchasedTransactions.map((tx) => (
@@ -1667,9 +1687,7 @@ const res = await fetch("/api/listings", {
             <h2 className={`text-xl font-bold mb-2 ${accentText}`}>History</h2>
 
             {historyListings.length === 0 ? (
-              <p className="text-neutral-400 text-sm text-center">
-                Ended, sold, and unsold auctions will appear here.
-              </p>
+              <p className="text-neutral-400 text-sm text-center">Ended, sold, and unsold auctions will appear here.</p>
             ) : (
               <div className="grid gap-5">
                 {historyListings.map((l) => (
@@ -1694,7 +1712,6 @@ const res = await fetch("/api/listings", {
                       </p>
                     </div>
 
-                    {/* Relist button deliberately omitted here for cameras until the relist API is added */}
                     <p className="text-[11px] text-neutral-500 mt-3">
                       Relist controls will be added once the camera relist endpoint is wired up.
                     </p>
@@ -1709,9 +1726,7 @@ const res = await fetch("/api/listings", {
         {activeTab === "transactions" && (
           <div className="space-y-4">
             <h2 className={`text-xl font-bold mb-2 ${accentText}`}>Transactions</h2>
-            <p className="text-sm text-neutral-300 mb-2">
-              Active sales and purchases still in progress.
-            </p>
+            <p className="text-sm text-neutral-300 mb-2">Active sales and purchases still in progress.</p>
 
             <div className="flex flex-wrap gap-3 text-xs text-neutral-200 mb-2">
               <span className="px-3 py-1 rounded-full bg-neutral-950/60 border border-neutral-800">
@@ -1725,9 +1740,7 @@ const res = await fetch("/api/listings", {
             </div>
 
             {activeTransactions.length === 0 ? (
-              <p className="text-neutral-400 text-sm text-center">
-                You don&apos;t have any active transactions right now.
-              </p>
+              <p className="text-neutral-400 text-sm text-center">You don&apos;t have any active transactions right now.</p>
             ) : (
               <div className="grid gap-4">
                 {activeTransactions.map((tx) => {

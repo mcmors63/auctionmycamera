@@ -16,7 +16,9 @@ export const runtime = "nodejs";
 const stripeSecret = process.env.STRIPE_SECRET_KEY || "";
 
 if (!stripeSecret) {
-  console.warn("STRIPE_SECRET_KEY is not set. /api/stripe/charge-off-session will return an error.");
+  console.warn(
+    "STRIPE_SECRET_KEY is not set. /api/stripe/charge-off-session will return an error."
+  );
 }
 
 const stripe = stripeSecret ? new Stripe(stripeSecret) : null;
@@ -28,22 +30,35 @@ const APPWRITE_ENDPOINT =
   process.env.APPWRITE_ENDPOINT ||
   process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT ||
   "";
+
 const APPWRITE_PROJECT =
   process.env.APPWRITE_PROJECT_ID ||
   process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID ||
   "";
+
 const APPWRITE_API_KEY = process.env.APPWRITE_API_KEY || "";
 
+// IMPORTANT: do NOT use non-null assertions here (can crash at import time)
 const PROFILES_DB_ID =
   process.env.APPWRITE_PROFILES_DATABASE_ID ||
-  process.env.NEXT_PUBLIC_APPWRITE_PROFILES_DATABASE_ID!;
+  process.env.NEXT_PUBLIC_APPWRITE_PROFILES_DATABASE_ID ||
+  "";
+
 const PROFILES_COLLECTION_ID =
   process.env.APPWRITE_PROFILES_COLLECTION_ID ||
-  process.env.NEXT_PUBLIC_APPWRITE_PROFILES_COLLECTION_ID!;
+  process.env.NEXT_PUBLIC_APPWRITE_PROFILES_COLLECTION_ID ||
+  "";
 
 function getAppwrite() {
   if (!APPWRITE_ENDPOINT || !APPWRITE_PROJECT || !APPWRITE_API_KEY) {
-    throw new Error("Appwrite env vars missing (APPWRITE_ENDPOINT / PROJECT_ID / API_KEY).");
+    throw new Error(
+      "Appwrite env vars missing (APPWRITE_ENDPOINT / PROJECT_ID / API_KEY)."
+    );
+  }
+  if (!PROFILES_DB_ID || !PROFILES_COLLECTION_ID) {
+    throw new Error(
+      "Profiles DB/collection env vars missing (APPWRITE_PROFILES_DATABASE_ID / APPWRITE_PROFILES_COLLECTION_ID)."
+    );
   }
 
   const client = new AppwriteClient()
@@ -63,13 +78,22 @@ function getBearer(req: Request) {
 async function requireAuthedUser(req: Request) {
   const jwt = getBearer(req);
   if (!jwt) {
-    return { ok: false as const, res: NextResponse.json({ ok: false, error: "Not authenticated." }, { status: 401 }) };
+    return {
+      ok: false as const,
+      res: NextResponse.json(
+        { ok: false, error: "Not authenticated." },
+        { status: 401 }
+      ),
+    };
   }
 
   if (!APPWRITE_ENDPOINT || !APPWRITE_PROJECT) {
     return {
       ok: false as const,
-      res: NextResponse.json({ ok: false, error: "Server missing Appwrite config." }, { status: 500 }),
+      res: NextResponse.json(
+        { ok: false, error: "Server missing Appwrite config." },
+        { status: 500 }
+      ),
     };
   }
 
@@ -84,7 +108,13 @@ async function requireAuthedUser(req: Request) {
     return { ok: true as const, user };
   } catch (e) {
     console.warn("[charge-off-session] auth failed:", e);
-    return { ok: false as const, res: NextResponse.json({ ok: false, error: "Not authenticated." }, { status: 401 }) };
+    return {
+      ok: false as const,
+      res: NextResponse.json(
+        { ok: false, error: "Not authenticated." },
+        { status: 401 }
+      ),
+    };
   }
 }
 
@@ -211,9 +241,19 @@ async function pickPaymentMethod(customerId: string) {
   return { paymentMethodId: pm.id, usedDefault: false };
 }
 
+function readIdempotencyKey(req: Request, body: any): string | undefined {
+  const headerKey = (req.headers.get("idempotency-key") || "").trim();
+  if (headerKey) return headerKey;
+
+  const bodyKey = typeof body?.idempotencyKey === "string" ? body.idempotencyKey.trim() : "";
+  if (bodyKey) return bodyKey;
+
+  return undefined;
+}
+
 // -----------------------------
 // POST /api/stripe/charge-off-session
-// Body: { amountInPence, description?, metadata? }
+// Body: { amountInPence, description?, metadata?, idempotencyKey? }
 // Identity comes from Appwrite JWT header.
 // -----------------------------
 export async function POST(req: Request) {
@@ -236,19 +276,16 @@ export async function POST(req: Request) {
     const userId = (auth.user as any)?.$id as string | undefined;
 
     if (!userEmail || !userId) {
-      return NextResponse.json(
-        { ok: false, error: "Not authenticated." },
-        { status: 401 }
-      );
+      return NextResponse.json({ ok: false, error: "Not authenticated." }, { status: 401 });
     }
 
     const body = await req.json().catch(() => ({}));
 
-    const amountInPenceRaw = body?.amountInPence;
+    const amountInPence = asPositiveInt(body?.amountInPence);
     const description = (body?.description || "") as string;
     const metadata = coerceMetadata(body?.metadata);
+    const idempotencyKey = readIdempotencyKey(req, body);
 
-    const amountInPence = asPositiveInt(amountInPenceRaw);
     if (!amountInPence) {
       return NextResponse.json(
         { ok: false, error: "Missing or invalid amountInPence." },
@@ -274,16 +311,19 @@ export async function POST(req: Request) {
     }
 
     // 3) Create an off-session PaymentIntent and confirm it
-    const intent = await stripe.paymentIntents.create({
-      amount: amountInPence,
-      currency: "gbp",
-      customer: customerId,
-      payment_method: paymentMethodId,
-      off_session: true,
-      confirm: true,
-      description: description || undefined,
-      metadata,
-    });
+    const intent = await stripe.paymentIntents.create(
+      {
+        amount: amountInPence,
+        currency: "gbp",
+        customer: customerId,
+        payment_method: paymentMethodId,
+        off_session: true,
+        confirm: true,
+        description: description || undefined,
+        metadata,
+      },
+      idempotencyKey ? { idempotencyKey } : undefined
+    );
 
     // ✅ Only treat SUCCEEDED as paid
     if (intent.status !== "succeeded") {
@@ -308,16 +348,35 @@ export async function POST(req: Request) {
       paymentMethodId,
     });
   } catch (err: any) {
-    console.error("charge-off-session error:", err);
+    console.error("[charge-off-session] error:", err);
 
     const anyErr = err as any;
-    const pi = anyErr?.raw?.payment_intent;
 
-    const code = anyErr?.code as string | undefined;
+    // Stripe error details
+    const stripeCode = anyErr?.code as string | undefined;
+    const stripeDeclineCode = anyErr?.decline_code as string | undefined;
 
-    const requiresAction = code === "authentication_required";
+    // Sometimes Stripe nests a PaymentIntent on the raw error
+    const rawPi = anyErr?.raw?.payment_intent;
+    const piId = rawPi?.id as string | undefined;
+    const piStatus = rawPi?.status as string | undefined;
+
+    // Stripe common outcomes for off-session:
+    // - authentication_required => needs on-session confirmation (3DS)
+    // - card_declined / expired_card / incorrect_* => needs new payment method
+    const requiresAction =
+      stripeCode === "authentication_required" ||
+      stripeCode === "card_not_authenticated";
+
     const requiresPaymentMethod =
-      code === "card_declined" || code === "expired_card" || false;
+      stripeCode === "card_declined" ||
+      stripeCode === "expired_card" ||
+      stripeCode === "incorrect_cvc" ||
+      stripeCode === "incorrect_number" ||
+      stripeCode === "incorrect_zip" ||
+      stripeDeclineCode === "do_not_honor" ||
+      stripeDeclineCode === "insufficient_funds" ||
+      false;
 
     return NextResponse.json(
       {
@@ -325,8 +384,8 @@ export async function POST(req: Request) {
         error: anyErr?.message || "Stripe charge failed.",
         requiresPaymentMethod,
         requiresAction,
-        paymentIntentId: pi?.id,
-        paymentIntentStatus: pi?.status,
+        paymentIntentId: piId,
+        paymentIntentStatus: piStatus,
       },
       { status: 400 }
     );

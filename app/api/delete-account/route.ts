@@ -1,8 +1,9 @@
 // app/api/delete-account/route.ts
 import { NextRequest, NextResponse } from "next/server";
-import { Client, Databases, Users, Query } from "node-appwrite";
+import { Client, Databases, Users, Account, Query } from "node-appwrite";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 // -----------------------------
 // ENV (server-side)
@@ -47,6 +48,10 @@ const PROFILES_COLLECTION_ID =
   process.env.NEXT_PUBLIC_APPWRITE_PROFILES_COLLECTION_ID ||
   "";
 
+// A safe placeholder email for anonymised history
+const DELETED_EMAIL_PLACEHOLDER =
+  process.env.DELETED_EMAIL_PLACEHOLDER || "deleted@auctionmycamera.co.uk";
+
 // -----------------------------
 // Helpers
 // -----------------------------
@@ -54,122 +59,213 @@ function requireEnv(name: string, value: string) {
   if (!value) throw new Error(`Missing ${name}.`);
 }
 
-function getClient() {
-  requireEnv("APPWRITE_ENDPOINT (or NEXT_PUBLIC_APPWRITE_ENDPOINT)", endpoint);
-  requireEnv("APPWRITE_PROJECT_ID (or NEXT_PUBLIC_APPWRITE_PROJECT_ID)", projectId);
-  requireEnv("APPWRITE_API_KEY", apiKey);
-  return new Client().setEndpoint(endpoint).setProject(projectId).setKey(apiKey);
-}
-
-function getDatabases() {
-  return new Databases(getClient());
-}
-
-function getUsers() {
-  return new Users(getClient());
-}
-
-function isTransactionFinished(tx: any): boolean {
-  const tStatus = String(tx?.transaction_status || "").toLowerCase();
-  const pStatus = String(tx?.payment_status || "").toLowerCase();
-  return tStatus === "complete" || tStatus === "completed" || pStatus === "paid";
+function getBearerJwt(req: NextRequest) {
+  const auth = req.headers.get("authorization") || "";
+  const m = auth.match(/^Bearer\s+(.+)$/i);
+  return m?.[1]?.trim() || "";
 }
 
 function safeEmail(e: unknown) {
   return String(e || "").trim().toLowerCase();
 }
 
-// Some projects store seller email as seller_email, others as sellerEmail.
-// We check both where possible.
-function sellerEmailQueries(email: string) {
-  return [
-    // Most common
-    Query.equal("seller_email", email),
-    // Optional fallback if schema supports it (Appwrite will error if attribute doesn't exist)
-    Query.equal("sellerEmail", email),
-  ];
+function serverClient() {
+  requireEnv("APPWRITE_ENDPOINT (or NEXT_PUBLIC_APPWRITE_ENDPOINT)", endpoint);
+  requireEnv("APPWRITE_PROJECT_ID (or NEXT_PUBLIC_APPWRITE_PROJECT_ID)", projectId);
+  requireEnv("APPWRITE_API_KEY", apiKey);
+  return new Client().setEndpoint(endpoint).setProject(projectId).setKey(apiKey);
+}
+
+function jwtClient(jwt: string) {
+  requireEnv("APPWRITE_ENDPOINT (or NEXT_PUBLIC_APPWRITE_ENDPOINT)", endpoint);
+  requireEnv("APPWRITE_PROJECT_ID (or NEXT_PUBLIC_APPWRITE_PROJECT_ID)", projectId);
+  return new Client().setEndpoint(endpoint).setProject(projectId).setJWT(jwt);
+}
+
+function getDatabases() {
+  return new Databases(serverClient());
+}
+
+function getUsers() {
+  return new Users(serverClient());
+}
+
+function isTransactionFinished(tx: any): boolean {
+  // Be conservative: only consider “finished” when transaction says so.
+  const t = String(tx?.transaction_status || "").toLowerCase();
+  return (
+    t === "complete" ||
+    t === "completed" ||
+    t === "deleted" ||
+    t === "cancelled" ||
+    t === "canceled"
+  );
+}
+
+function has(obj: any, key: string) {
+  return obj && Object.prototype.hasOwnProperty.call(obj, key);
+}
+
+async function listAllDocuments(
+  databases: Databases,
+  dbId: string,
+  colId: string,
+  baseQueries: string[],
+  pageSize = 100
+) {
+  const out: any[] = [];
+  let cursor: string | undefined;
+
+  while (true) {
+    const queries = [...baseQueries, Query.orderAsc("$id"), Query.limit(pageSize)];
+    if (cursor) queries.push(Query.cursorAfter(cursor));
+
+    const page = await databases.listDocuments(dbId, colId, queries);
+    out.push(...page.documents);
+
+    if (!page.documents.length || page.documents.length < pageSize) break;
+    cursor = page.documents[page.documents.length - 1].$id;
+  }
+
+  return out;
+}
+
+// Schema-tolerant update: remove unknown keys and retry
+async function updateDocSchemaTolerant(
+  databases: Databases,
+  dbId: string,
+  colId: string,
+  docId: string,
+  payload: Record<string, any>
+) {
+  const data: Record<string, any> = { ...payload };
+
+  for (let i = 0; i < 12; i++) {
+    try {
+      return await databases.updateDocument(dbId, colId, docId, data);
+    } catch (err: any) {
+      const msg = String(err?.message || "");
+      const m = msg.match(/Unknown attribute:\s*([A-Za-z0-9_]+)/i);
+      if (m?.[1]) {
+        delete data[m[1]];
+        continue;
+      }
+      throw err;
+    }
+  }
+
+  // last resort: do nothing
+  return await databases.getDocument(dbId, colId, docId);
+}
+
+async function deleteDocsByQuerySchemaTolerant(params: {
+  databases: Databases;
+  dbId: string;
+  colId: string;
+  tryQueries: string[][];
+  limit?: number;
+}) {
+  const { databases, dbId, colId, tryQueries, limit = 25 } = params;
+
+  for (const queries of tryQueries) {
+    try {
+      const res = await databases.listDocuments(dbId, colId, [...queries, Query.limit(limit)]);
+      for (const doc of res.documents) {
+        await databases.deleteDocument(dbId, colId, doc.$id);
+      }
+      return { ok: true, deleted: res.documents.length };
+    } catch {
+      // try next query shape
+      continue;
+    }
+  }
+
+  return { ok: false, deleted: 0 };
 }
 
 // -----------------------------
 // POST /api/delete-account
-// Body: { userId, email }
+// Body: { confirm?: string }  (optional: you can enforce a confirm phrase)
+// Requires: Authorization: Bearer <appwrite_jwt>
 // -----------------------------
 export async function POST(req: NextRequest) {
   try {
-    // Validate env required for this route
+    // Required env for this route
     requireEnv("APPWRITE_ENDPOINT (or NEXT_PUBLIC_APPWRITE_ENDPOINT)", endpoint);
     requireEnv("APPWRITE_PROJECT_ID (or NEXT_PUBLIC_APPWRITE_PROJECT_ID)", projectId);
     requireEnv("APPWRITE_API_KEY", apiKey);
     requireEnv("APPWRITE_LISTINGS_DATABASE_ID (or NEXT_PUBLIC_...)", LISTINGS_DB_ID);
     requireEnv("APPWRITE_LISTINGS_COLLECTION_ID (or NEXT_PUBLIC_...)", LISTINGS_COLLECTION_ID);
 
-    const body = await req.json().catch(() => null);
-    if (!body) {
-      return NextResponse.json({ error: "Invalid JSON body." }, { status: 400 });
+    // ✅ Require session (JWT)
+    const jwt = getBearerJwt(req);
+    if (!jwt) {
+      return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
     }
 
-    const userId = String(body.userId || "").trim();
-    const email = safeEmail(body.email);
+    const body = await req.json().catch(() => ({} as any));
+
+    // Optional confirmation gate (nice safety)
+    // If you want it enforced, uncomment:
+    // if (String(body?.confirm || "").trim().toUpperCase() !== "DELETE") {
+    //   return NextResponse.json({ error: 'Type DELETE to confirm.' }, { status: 400 });
+    // }
+
+    // Who is calling?
+    const account = new Account(jwtClient(jwt));
+    let sessionUser: any;
+    try {
+      sessionUser = await account.get();
+    } catch {
+      return NextResponse.json({ error: "Invalid session." }, { status: 401 });
+    }
+
+    const userId = String(sessionUser?.$id || "").trim();
+    const email = safeEmail(sessionUser?.email);
 
     if (!userId || !email) {
-      return NextResponse.json({ error: "userId and email are required." }, { status: 400 });
+      return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
     }
 
     const databases = getDatabases();
     const users = getUsers();
 
     // -----------------------------
-    // 1) Double-check user exists & email matches
+    // 1) Check for active listings (pending_approval / queued / live)
     // -----------------------------
-    let user: any;
-    try {
-      user = await users.get(userId);
-    } catch (err) {
-      console.error("❌ DELETE-ACCOUNT: users.get failed", err);
-      return NextResponse.json({ error: "User not found or invalid userId." }, { status: 404 });
-    }
-
-    const appwriteEmail = safeEmail(user?.email);
-    if (!appwriteEmail || appwriteEmail !== email) {
-      console.warn("⚠️ DELETE-ACCOUNT: Email mismatch", {
-        userId,
-        appwriteEmail,
-        bodyEmail: email,
-      });
-      return NextResponse.json(
-        { error: "Email does not match the account being deleted." },
-        { status: 400 }
-      );
-    }
-
-    // -----------------------------
-    // 2) Check for active listings (pending_approval / queued / live)
-    // -----------------------------
-    // IMPORTANT: Your actual “pending” status is pending_approval.
     const blockingStatuses = ["pending_approval", "queued", "live"];
 
     let activeListingCount = 0;
 
-    // Try seller_email first; if schema doesn't have it, catch and try sellerEmail.
-    try {
-      const activeListings = await databases.listDocuments(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, [
-        Query.equal("seller_email", email),
-        Query.equal("status", blockingStatuses),
-        Query.limit(1),
-      ]);
-      activeListingCount = activeListings.total;
-    } catch (errA) {
-      try {
-        const activeListings = await databases.listDocuments(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, [
-          Query.equal("sellerEmail", email),
-          Query.equal("status", blockingStatuses),
-          Query.limit(1),
-        ]);
-        activeListingCount = activeListings.total;
-      } catch (errB) {
-        console.error("❌ DELETE-ACCOUNT: Failed to check listings (schema/env)", { errA, errB });
+    // Prefer seller_id style if you have it, then fall back to email attributes.
+    const listingChecks: string[][] = [
+      [Query.equal("seller_id", userId), Query.equal("status", blockingStatuses)],
+      [Query.equal("sellerId", userId), Query.equal("status", blockingStatuses)],
+      [Query.equal("userId", userId), Query.equal("status", blockingStatuses)],
+      [Query.equal("ownerUserId", userId), Query.equal("status", blockingStatuses)],
+      [Query.equal("seller_email", email), Query.equal("status", blockingStatuses)],
+      [Query.equal("sellerEmail", email), Query.equal("status", blockingStatuses)],
+    ];
+
+    {
+      let checked = false;
+      for (const q of listingChecks) {
+        try {
+          const res = await databases.listDocuments(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, [
+            ...q,
+            Query.limit(1),
+          ]);
+          activeListingCount = res.total;
+          checked = true;
+          break;
+        } catch {
+          continue;
+        }
+      }
+
+      if (!checked) {
         return NextResponse.json(
-          { error: "Failed to check listing status. Check schema + env IDs." },
+          { error: "Failed to check listings (schema/env mismatch)." },
           { status: 500 }
         );
       }
@@ -187,36 +283,39 @@ export async function POST(req: NextRequest) {
     }
 
     // -----------------------------
-    // 3) Check for active transactions
+    // 2) Check for active transactions (block if anything not clearly finished)
     // -----------------------------
-    if (!TX_DB_ID || !TX_COLLECTION_ID) {
-      // If you truly don't use transactions, this can be empty.
-      // But if you do, set envs — otherwise users could delete while deals exist.
-      console.warn("⚠️ DELETE-ACCOUNT: TX env missing; skipping transaction checks.");
-    } else {
-      let hasActiveTransactions = false;
-      try {
-        const txSeller = await databases.listDocuments(TX_DB_ID, TX_COLLECTION_ID, [
-          Query.equal("seller_email", email),
-          Query.limit(200),
-        ]);
+    if (TX_DB_ID && TX_COLLECTION_ID) {
+      // Use pagination and multiple schema paths
+      const txQueryShapes: string[][] = [
+        [Query.equal("seller_id", userId)],
+        [Query.equal("sellerId", userId)],
+        [Query.equal("buyer_id", userId)],
+        [Query.equal("buyerId", userId)],
+        [Query.equal("seller_email", email)],
+        [Query.equal("sellerEmail", email)],
+        [Query.equal("buyer_email", email)],
+        [Query.equal("buyerEmail", email)],
+      ];
 
-        const txBuyer = await databases.listDocuments(TX_DB_ID, TX_COLLECTION_ID, [
-          Query.equal("buyer_email", email),
-          Query.limit(200),
-        ]);
+      let foundAny = false;
+      let hasActive = false;
 
-        const allTx = [...txSeller.documents, ...txBuyer.documents];
-        hasActiveTransactions = allTx.some((tx) => !isTransactionFinished(tx));
-      } catch (err) {
-        console.error("❌ DELETE-ACCOUNT: Failed to check transactions", err);
-        return NextResponse.json(
-          { error: "Failed to check transactions. Try again later." },
-          { status: 500 }
-        );
+      for (const q of txQueryShapes) {
+        try {
+          const docs = await listAllDocuments(databases, TX_DB_ID, TX_COLLECTION_ID, q, 100);
+          if (docs.length) foundAny = true;
+          if (docs.some((tx) => !isTransactionFinished(tx))) {
+            hasActive = true;
+            break;
+          }
+        } catch {
+          // ignore this shape if schema doesn't have field
+          continue;
+        }
       }
 
-      if (hasActiveTransactions) {
+      if (foundAny && hasActive) {
         return NextResponse.json(
           {
             error:
@@ -225,33 +324,33 @@ export async function POST(req: NextRequest) {
           { status: 400 }
         );
       }
+    } else {
+      // If you use transactions, you should set these envs.
+      console.warn("⚠️ DELETE-ACCOUNT: TX env missing; skipping transaction checks.");
     }
 
     // -----------------------------
-    // 4) Delete profile document (Personal Details)
+    // 3) Delete profile document(s)
     // -----------------------------
     if (PROFILES_DB_ID && PROFILES_COLLECTION_ID) {
-      try {
-        const profRes = await databases.listDocuments(PROFILES_DB_ID, PROFILES_COLLECTION_ID, [
-          Query.equal("email", email),
-          Query.limit(10),
-        ]);
+      const profTryQueries: string[][] = [
+        [Query.equal("userId", userId)],
+        [Query.equal("user_id", userId)],
+        [Query.equal("ownerUserId", userId)],
+        [Query.equal("email", email)],
+      ];
 
-        // If multiple docs exist (shouldn't), delete them all.
-        for (const profileDoc of profRes.documents) {
-          await databases.deleteDocument(PROFILES_DB_ID, PROFILES_COLLECTION_ID, profileDoc.$id);
-          console.log("✅ DELETE-ACCOUNT: Profile deleted", profileDoc.$id);
-        }
+      const profDelete = await deleteDocsByQuerySchemaTolerant({
+        databases,
+        dbId: PROFILES_DB_ID,
+        colId: PROFILES_COLLECTION_ID,
+        tryQueries: profTryQueries,
+        limit: 25,
+      });
 
-        if (profRes.total === 0) {
-          console.log("ℹ️ DELETE-ACCOUNT: No profile document found for", email);
-        }
-      } catch (err) {
-        console.error("❌ DELETE-ACCOUNT: Failed to delete profile document", err);
-        return NextResponse.json(
-          { error: "Failed to delete profile. Try again later." },
-          { status: 500 }
-        );
+      if (!profDelete.ok) {
+        // Not fatal — some builds don't have profiles collection or it's different
+        console.warn("⚠️ DELETE-ACCOUNT: Could not locate profile docs to delete (non-fatal).");
       }
     } else {
       console.warn(
@@ -260,49 +359,49 @@ export async function POST(req: NextRequest) {
     }
 
     // -----------------------------
-    // 5) Anonymise historical listings (optional clean-up)
-    //    Keep SOLD/ENDED history but strip seller email.
+    // 4) Anonymise historical listings (keep sold/ended history but strip seller identity)
     // -----------------------------
     try {
       const historicalStatuses = ["sold", "not_sold", "completed", "ended"];
 
-      // seller_email path
+      // Find listings by ID fields or email fields (schema tolerant)
+      const historyShapes: string[][] = [
+        [Query.equal("seller_id", userId), Query.equal("status", historicalStatuses)],
+        [Query.equal("sellerId", userId), Query.equal("status", historicalStatuses)],
+        [Query.equal("userId", userId), Query.equal("status", historicalStatuses)],
+        [Query.equal("ownerUserId", userId), Query.equal("status", historicalStatuses)],
+        [Query.equal("seller_email", email), Query.equal("status", historicalStatuses)],
+        [Query.equal("sellerEmail", email), Query.equal("status", historicalStatuses)],
+      ];
+
       let historyDocs: any[] = [];
-      try {
-        const res = await databases.listDocuments(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, [
-          Query.equal("seller_email", email),
-          Query.equal("status", historicalStatuses),
-          Query.limit(200),
-        ]);
-        historyDocs = res.documents;
-      } catch (errA) {
-        // sellerEmail fallback
-        const res = await databases.listDocuments(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, [
-          Query.equal("sellerEmail", email),
-          Query.equal("status", historicalStatuses),
-          Query.limit(200),
-        ]);
-        historyDocs = res.documents;
+
+      for (const q of historyShapes) {
+        try {
+          // paginate
+          const docs = await listAllDocuments(databases, LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, q, 100);
+          if (docs.length) {
+            historyDocs = docs;
+            break;
+          }
+        } catch {
+          continue;
+        }
       }
 
       for (const listing of historyDocs) {
-        try {
-          await databases.updateDocument(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, listing.$id, {
-            seller_email: "deleted@auctionmycamera.co.uk",
-          });
-        } catch (innerErrA) {
-          // If schema doesn't allow seller_email, try sellerEmail
-          try {
-            await databases.updateDocument(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, listing.$id, {
-              sellerEmail: "deleted@auctionmycamera.co.uk",
-            });
-          } catch (innerErrB) {
-            console.error(
-              "⚠️ DELETE-ACCOUNT: Failed to anonymise listing",
-              listing.$id,
-              { innerErrA, innerErrB }
-            );
-          }
+        const payload: Record<string, any> = {};
+
+        // Update whatever fields exist on that doc without blowing up
+        if (has(listing, "seller_email")) payload.seller_email = DELETED_EMAIL_PLACEHOLDER;
+        if (has(listing, "sellerEmail")) payload.sellerEmail = DELETED_EMAIL_PLACEHOLDER;
+        if (has(listing, "seller_id")) payload.seller_id = "deleted";
+        if (has(listing, "sellerId")) payload.sellerId = "deleted";
+        if (has(listing, "userId")) payload.userId = "deleted";
+        if (has(listing, "ownerUserId")) payload.ownerUserId = "deleted";
+
+        if (Object.keys(payload).length) {
+          await updateDocSchemaTolerant(databases, LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, listing.$id, payload);
         }
       }
     } catch (err) {
@@ -310,7 +409,7 @@ export async function POST(req: NextRequest) {
     }
 
     // -----------------------------
-    // 6) Finally, delete Appwrite user
+    // 5) Finally, delete Appwrite user (this will also remove sessions)
     // -----------------------------
     try {
       await users.delete(userId);

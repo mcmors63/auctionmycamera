@@ -3,7 +3,7 @@ import Link from "next/link";
 
 export const metadata = {
   title: "Login or Register | AuctionMyPlate",
-  description: "Login or create an account to bid or sell plates.",
+  description: "Login or create an account to bid or sell listings.",
 };
 
 export default function LoginOrRegisterPage() {
@@ -37,7 +37,7 @@ export default function LoginOrRegisterPage() {
 
         <p className="mt-4 text-xs text-gray-400">
           Once logged in, you can access your{" "}
-          <strong>Seller Dashboard</strong>, list plates, and place bids.
+          <strong>Seller Dashboard</strong>, list cameras, and place bids.
         </p>
 
         <p className="mt-2 text-[11px] text-gray-500">

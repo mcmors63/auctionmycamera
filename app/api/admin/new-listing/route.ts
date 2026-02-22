@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import nodemailer from "nodemailer";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 // -----------------------------
 // SMTP CONFIG
@@ -36,6 +37,24 @@ const adminTo = (
   process.env.ADMIN_TO_EMAIL ||
   "admin@auctionmycamera.co.uk"
 ).trim();
+
+// Where the admin should click through
+function normalizeBaseUrl(input: string) {
+  const trimmed = (input || "").trim();
+  if (!trimmed) return "";
+  return trimmed.replace(/\/+$/, "");
+}
+
+const siteUrl =
+  normalizeBaseUrl(process.env.NEXT_PUBLIC_SITE_URL || "") ||
+  "https://auctionmycamera.co.uk";
+
+const adminPanelPath = (process.env.ADMIN_PANEL_PATH || "/admin").trim();
+const adminPanelUrl = `${siteUrl}${adminPanelPath.startsWith("/") ? "" : "/"}${adminPanelPath}`;
+
+// Stackmail / odd-cert support (default: strict)
+const tlsRejectUnauthorized =
+  (process.env.SMTP_TLS_REJECT_UNAUTHORIZED || "true").toLowerCase() !== "false";
 
 function normalizeEmailAddress(input: string) {
   let v = (input || "").trim();
@@ -94,6 +113,9 @@ const transporter =
         port,
         secure: port === 465, // true for 465, false for 587
         auth: { user, pass },
+        tls: {
+          rejectUnauthorized: tlsRejectUnauthorized,
+        },
       })
     : null;
 
@@ -105,10 +127,16 @@ const transporter =
 // -----------------------------
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json();
+    let body: any;
+    try {
+      body = await req.json();
+    } catch {
+      return NextResponse.json({ error: "Invalid JSON body." }, { status: 400 });
+    }
 
     // Common fields
-    const sellerEmail = body?.sellerEmail || body?.seller_email || body?.email;
+    const sellerEmailRaw = body?.sellerEmail || body?.seller_email || body?.email;
+    const sellerEmail = normalizeEmailAddress(String(sellerEmailRaw || ""));
 
     // Camera-ish
     const listingId = body?.listingId || body?.listing_id || body?.plateId; // fallback
@@ -146,7 +174,7 @@ export async function POST(req: NextRequest) {
     }
 
     // Hard fail if FROM_EMAIL is malformed
-    if (!isValidEmail(fromAddress)) {
+    if (!fromAddress || !isValidEmail(fromAddress)) {
       console.error("❌ Invalid FROM email address (fix your env var FROM_EMAIL)", {
         rawFromAddress,
         normalized: fromAddress,
@@ -157,7 +185,20 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    if (!isValidEmail(String(sellerEmail))) {
+    // Validate admin inbox too
+    const adminToNorm = normalizeEmailAddress(adminTo);
+    if (!adminToNorm || !isValidEmail(adminToNorm)) {
+      console.error("❌ Invalid ADMIN_EMAIL / adminTo address (fix env)", {
+        adminTo,
+        normalized: adminToNorm,
+      });
+      return NextResponse.json(
+        { error: "Invalid admin email address (server config). Fix ADMIN_EMAIL." },
+        { status: 500 }
+      );
+    }
+
+    if (!isValidEmail(sellerEmail)) {
       return NextResponse.json({ error: "Invalid sellerEmail" }, { status: 400 });
     }
 
@@ -180,33 +221,46 @@ export async function POST(req: NextRequest) {
     );
 
     const adminHtml = `
-      <h2>New Listing Submitted</h2>
-      <p>A seller has submitted a new listing for review.</p>
-      <ul>
-        <li><strong>Listing ID:</strong> ${escapeHtml(listingId)}</li>
-        <li><strong>Title:</strong> ${safeTitle}</li>
-        ${
-          looksLikeCamera
-            ? `
-              <li><strong>Type:</strong> ${escapeHtml(gearType || "—")}</li>
-              <li><strong>Era:</strong> ${escapeHtml(era || "—")}</li>
-              <li><strong>Condition:</strong> ${escapeHtml(condition || "—")}</li>
-              <li><strong>Brand:</strong> ${escapeHtml(brand || "—")}</li>
-              <li><strong>Model:</strong> ${escapeHtml(model || "—")}</li>
-            `
-            : ``
-        }
-        <li><strong>Seller:</strong> ${safeSeller}</li>
-        <li><strong>Reserve:</strong> ${escapeHtml(moneyGBP(reserve))}</li>
-        <li><strong>Starting price:</strong> ${escapeHtml(moneyGBP(starting))}</li>
-        <li><strong>Buy Now:</strong> ${escapeHtml(moneyGBP(buyNow))}</li>
-      </ul>
-      <p>Log in to the admin dashboard to review and approve this listing.</p>
+      <div style="font-family: Arial, sans-serif; line-height: 1.5;">
+        <h2 style="margin:0 0 10px 0;">New Listing Submitted</h2>
+        <p style="margin:0 0 12px 0;">A seller has submitted a new listing for review.</p>
+
+        <ul style="padding-left:18px; margin:0 0 14px 0;">
+          <li><strong>Listing ID:</strong> ${escapeHtml(listingId)}</li>
+          <li><strong>Title:</strong> ${safeTitle}</li>
+          ${
+            looksLikeCamera
+              ? `
+                <li><strong>Type:</strong> ${escapeHtml(gearType || "—")}</li>
+                <li><strong>Era:</strong> ${escapeHtml(era || "—")}</li>
+                <li><strong>Condition:</strong> ${escapeHtml(condition || "—")}</li>
+                <li><strong>Brand:</strong> ${escapeHtml(brand || "—")}</li>
+                <li><strong>Model:</strong> ${escapeHtml(model || "—")}</li>
+              `
+              : ``
+          }
+          <li><strong>Seller:</strong> ${safeSeller}</li>
+          <li><strong>Reserve:</strong> ${escapeHtml(moneyGBP(reserve))}</li>
+          <li><strong>Starting price:</strong> ${escapeHtml(moneyGBP(starting))}</li>
+          <li><strong>Buy Now:</strong> ${escapeHtml(moneyGBP(buyNow))}</li>
+        </ul>
+
+        <p style="margin:0 0 12px 0;">Review and approve this listing in the admin dashboard:</p>
+        <p style="margin:0;">
+          <a href="${escapeHtml(adminPanelUrl)}" style="color:#2563eb; text-decoration:underline;">
+            ${escapeHtml(adminPanelUrl)}
+          </a>
+        </p>
+
+        <p style="margin:14px 0 0 0; font-size:12px; color:#666;">
+          Automated message from AuctionMyCamera.co.uk
+        </p>
+      </div>
     `;
 
     await transporter.sendMail({
       from,
-      to: adminTo,
+      to: adminToNorm,
       subject: adminSubject,
       html: adminHtml,
       replyTo,
@@ -216,18 +270,24 @@ export async function POST(req: NextRequest) {
     const sellerSubject = safeHeaderValue(`Your listing has been submitted: ${itemTitle}`);
 
     const sellerHtml = `
-      <h2>Thanks — we’ve received your listing</h2>
-      <p>We have received your listing for <strong>${safeTitle}</strong>.</p>
-      <p>Our team will review it shortly. You will receive another email once it has been approved and queued for auction.</p>
-      <p>If you did not create this listing, please contact us immediately at <strong>${escapeHtml(
-        replyTo
-      )}</strong>.</p>
-      <p>– AuctionMyCamera.co.uk</p>
+      <div style="font-family: Arial, sans-serif; line-height: 1.5;">
+        <h2 style="margin:0 0 10px 0;">Thanks — we’ve received your listing</h2>
+        <p style="margin:0 0 10px 0;">
+          We have received your listing for <strong>${safeTitle}</strong>.
+        </p>
+        <p style="margin:0 0 10px 0;">
+          Our team will review it shortly. You’ll receive another email once it has been approved and queued for auction.
+        </p>
+        <p style="margin:0 0 10px 0;">
+          If you did not create this listing, contact us at <strong>${escapeHtml(replyTo)}</strong>.
+        </p>
+        <p style="margin:0;">– AuctionMyCamera.co.uk</p>
+      </div>
     `;
 
     await transporter.sendMail({
       from,
-      to: String(sellerEmail),
+      to: sellerEmail,
       subject: sellerSubject,
       html: sellerHtml,
       replyTo,
@@ -236,6 +296,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true });
   } catch (err: any) {
     console.error("❌ /api/admin/new-listing error:", err);
-    return NextResponse.json({ error: "Failed to send new listing emails" }, { status: 500 });
+    return NextResponse.json(
+      { error: "Failed to send new listing emails" },
+      { status: 500 }
+    );
   }
 }
