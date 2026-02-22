@@ -1,3 +1,4 @@
+// app/contact/page.tsx
 import type { Metadata } from "next";
 import ContactForm from "./ContactForm";
 
@@ -15,7 +16,7 @@ export const metadata: Metadata = {
 
 export default function ContactPage() {
   return (
-    <main className="min-h-screen bg-black text-gray-100 py-10 px-4">
+    <main className="min-h-screen bg-background text-foreground py-10 px-4">
       <ContactForm />
     </main>
   );

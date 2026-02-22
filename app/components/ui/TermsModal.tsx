@@ -7,8 +7,13 @@ import Link from "next/link";
 export default function TermsModal({ onClose }: { onClose: () => void }) {
   const year = new Date().getFullYear();
   const panelRef = useRef<HTMLDivElement | null>(null);
+  const restoreFocusRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
+    // Save the element that had focus before opening (so we can restore it)
+    restoreFocusRef.current =
+      (document.activeElement as HTMLElement | null) ?? null;
+
     // Lock background scroll
     const prevOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
@@ -25,13 +30,20 @@ export default function TermsModal({ onClose }: { onClose: () => void }) {
     return () => {
       document.body.style.overflow = prevOverflow;
       window.removeEventListener("keydown", onKeyDown);
+
+      // Restore focus to the previous element (best-effort)
+      try {
+        restoreFocusRef.current?.focus?.();
+      } catch {
+        // ignore
+      }
     };
   }, [onClose]);
 
   return (
     <div
       className="fixed inset-0 z-50 px-4 bg-black/70 backdrop-blur-sm flex items-center justify-center"
-      onMouseDown={(e) => {
+      onPointerDown={(e) => {
         // Click outside the panel closes the modal
         if (e.target === e.currentTarget) onClose();
       }}
@@ -55,7 +67,7 @@ export default function TermsModal({ onClose }: { onClose: () => void }) {
               Terms &amp; Conditions (Summary)
             </h2>
             <p className="text-xs text-gray-500">
-              Effective Date: February 2026
+              Effective date: see full Terms
             </p>
           </div>
 

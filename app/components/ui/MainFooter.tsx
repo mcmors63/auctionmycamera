@@ -8,7 +8,7 @@ export default function MainFooter() {
   return (
     <footer className="border-t border-slate-200 bg-white/80 backdrop-blur mt-10">
       <div className="max-w-6xl mx-auto px-4 py-4 flex flex-col md:flex-row items-center justify-between gap-2 text-xs text-slate-600">
-        <span>© {year} AuctionMyPlate.co.uk. All rights reserved.</span>
+        <span>© {year} AuctionMyCamera.co.uk. All rights reserved.</span>
 
         <div className="flex flex-wrap gap-4">
           <Link href="/terms" className="hover:underline">
@@ -21,7 +21,7 @@ export default function MainFooter() {
             Cookie Policy
           </Link>
           <a
-            href="mailto:support@auctionmyplate.co.uk"
+            href="mailto:support@auctionmycamera.co.uk"
             className="hover:underline"
           >
             Contact

@@ -1,3 +1,4 @@
+﻿// app/contact/ContactForm.tsx
 "use client";
 
 import { useState } from "react";
@@ -43,7 +44,7 @@ export default function ContactForm() {
         throw new Error(data.error || "We couldn't send your message. Please try again.");
       }
 
-      setSuccess("Thanks — your message has been sent. We’ll reply as soon as we can.");
+      setSuccess("Thanks â€” your message has been sent. Weâ€™ll reply as soon as we can.");
       setName("");
       setEmail("");
       setSubject("");
@@ -57,24 +58,32 @@ export default function ContactForm() {
   };
 
   return (
-    <div className="max-w-xl mx-auto bg-[#111111] border border-white/10 rounded-2xl shadow-sm p-6 sm:p-8 space-y-6 text-gray-100">
+    <div className="max-w-xl mx-auto bg-card border border-border rounded-2xl shadow-sm p-6 sm:p-8 space-y-6 text-foreground">
       <div>
-        <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-gold">
+        <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-foreground">
           Contact Us
         </h1>
-        <p className="mt-2 text-sm text-gray-300">
-          Questions about a listing, an auction, delivery/collection, or a deal? Send us a message and we’ll help.
+        <p className="mt-2 text-sm text-muted-foreground">
+          Questions about a listing, an auction, delivery/collection, or a deal? Send us a message and weâ€™ll help.
         </p>
       </div>
 
       {error && (
-        <p className="bg-red-900/30 text-red-300 border border-red-500/70 text-sm rounded-md px-3 py-2">
+        <p
+          role="status"
+          aria-live="polite"
+          className="bg-destructive/10 text-destructive border border-destructive/30 text-sm rounded-md px-3 py-2"
+        >
           {error}
         </p>
       )}
 
       {success && (
-        <p className="bg-green-900/30 text-green-300 border border-green-500/70 text-sm rounded-md px-3 py-2">
+        <p
+          role="status"
+          aria-live="polite"
+          className="bg-green-500/10 text-green-700 border border-green-500/30 text-sm rounded-md px-3 py-2"
+        >
           {success}
         </p>
       )}
@@ -83,24 +92,25 @@ export default function ContactForm() {
         <div>
           <label
             htmlFor="name"
-            className="block text-xs font-semibold text-gray-300 uppercase tracking-wide"
+            className="block text-xs font-semibold text-muted-foreground uppercase tracking-wide"
           >
             Name (optional)
           </label>
           <input
             id="name"
             type="text"
-            className="mt-1 block w-full rounded-md border border-gray-600 px-3 py-2 text-sm bg-black/60 text-gray-100 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-gold focus:border-gold"
+            className="mt-1 block w-full rounded-md border border-input px-3 py-2 text-sm bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-ring"
             value={name}
             onChange={(e) => setName(e.target.value)}
             autoComplete="name"
+            disabled={submitting}
           />
         </div>
 
         <div>
           <label
             htmlFor="email"
-            className="block text-xs font-semibold text-gray-300 uppercase tracking-wide"
+            className="block text-xs font-semibold text-muted-foreground uppercase tracking-wide"
           >
             Email address *
           </label>
@@ -108,33 +118,35 @@ export default function ContactForm() {
             id="email"
             type="email"
             required
-            className="mt-1 block w-full rounded-md border border-gray-600 px-3 py-2 text-sm bg-black/60 text-gray-100 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-gold focus:border-gold"
+            className="mt-1 block w-full rounded-md border border-input px-3 py-2 text-sm bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-ring"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             autoComplete="email"
+            disabled={submitting}
           />
         </div>
 
         <div>
           <label
             htmlFor="subject"
-            className="block text-xs font-semibold text-gray-300 uppercase tracking-wide"
+            className="block text-xs font-semibold text-muted-foreground uppercase tracking-wide"
           >
             Subject (optional)
           </label>
           <input
             id="subject"
             type="text"
-            className="mt-1 block w-full rounded-md border border-gray-600 px-3 py-2 text-sm bg-black/60 text-gray-100 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-gold focus:border-gold"
+            className="mt-1 block w-full rounded-md border border-input px-3 py-2 text-sm bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-ring"
             value={subject}
             onChange={(e) => setSubject(e.target.value)}
+            disabled={submitting}
           />
         </div>
 
         <div>
           <label
             htmlFor="message"
-            className="block text-xs font-semibold text-gray-300 uppercase tracking-wide"
+            className="block text-xs font-semibold text-muted-foreground uppercase tracking-wide"
           >
             Message *
           </label>
@@ -142,24 +154,29 @@ export default function ContactForm() {
             id="message"
             required
             rows={5}
-            className="mt-1 block w-full rounded-md border border-gray-600 px-3 py-2 text-sm bg-black/60 text-gray-100 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-gold focus:border-gold"
+            className="mt-1 block w-full rounded-md border border-input px-3 py-2 text-sm bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-ring"
             value={message}
             onChange={(e) => setMessage(e.target.value)}
+            disabled={submitting}
+            minLength={10}
           />
+          <p className="mt-1 text-[11px] text-muted-foreground">
+            Please include enough detail for us to help (at least 10 characters).
+          </p>
         </div>
 
         <button
           type="submit"
           disabled={submitting}
-          className="w-full rounded-lg bg-gold text-black text-sm font-semibold py-2.5 disabled:opacity-60 disabled:cursor-not-allowed hover:opacity-90 transition"
+          className="w-full rounded-lg bg-primary text-primary-foreground text-sm font-semibold py-2.5 disabled:opacity-60 disabled:cursor-not-allowed hover:opacity-90 transition"
         >
-          {submitting ? "Sending…" : "Send message"}
+          {submitting ? "Sendingâ€¦" : "Send message"}
         </button>
       </form>
 
-      <div className="pt-3 border-t border-gray-700 flex items-center justify-between text-xs text-gray-400">
-        <Link href="/" className="hover:text-gold">
-          ← Back to home
+      <div className="pt-3 border-t border-border flex items-center justify-between text-xs text-muted-foreground">
+        <Link href="/" className="hover:text-foreground">
+          â† Back to home
         </Link>
       </div>
     </div>

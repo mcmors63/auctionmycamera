@@ -24,6 +24,8 @@ export const metadata: Metadata = {
     description:
       "How AuctionMyCamera.co.uk uses cookies and similar technologies to keep your account secure, run auctions, support payments, and improve the website.",
     url: `${SITE_URL}/cookies`,
+    siteName: "AuctionMyCamera",
+    type: "website",
   },
 };
 
