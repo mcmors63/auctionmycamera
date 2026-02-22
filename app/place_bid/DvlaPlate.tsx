@@ -2,7 +2,7 @@
 "use client";
 
 import React from "react";
-import NumberPlate from "@/components/ui/NumberPlate";
+import PlatePreviewStatic from "../components/ui/PlatePreviewStatic";
 
 type DvlaPlateProps = {
   // Accept either "registration" or "reg" so it's flexible
@@ -11,28 +11,32 @@ type DvlaPlateProps = {
 
   // What callers can pass in:
   size?: "standard" | "card" | "large";
-  variant?: "front" | "rear";
 };
+
+function normalizeReg(input: string) {
+  return (input || "").toUpperCase().replace(/[^A-Z0-9 ]/g, "").trim();
+}
 
 export default function DvlaPlate({
   registration,
   reg,
   size = "standard",
-  variant = "rear",
 }: DvlaPlateProps) {
-  // Prefer registration, then reg, then empty string
-  const actualReg = (registration ?? reg ?? "") || "";
+  const actualReg = normalizeReg((registration ?? reg ?? "") || "");
 
-  // Map anything that's not "large" to "card" so it matches NumberPlate's type
-  const normalisedSize: "card" | "large" =
-    size === "large" ? "large" : "card";
+  // Map sizes to sensible pixel dimensions for your static preview
+  const dims =
+    size === "large"
+      ? { width: 420, height: 95 }
+      : size === "card"
+      ? { width: 300, height: 70 }
+      : { width: 360, height: 80 }; // standard
 
   return (
-    <NumberPlate
-      reg={actualReg}
-      size={normalisedSize}
-      variant={variant}
-      showBlueBand={true}
+    <PlatePreviewStatic
+      registration={actualReg}
+      width={dims.width}
+      height={dims.height}
     />
   );
 }
