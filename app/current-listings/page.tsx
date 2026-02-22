@@ -90,19 +90,24 @@ function serverDb() {
   return new Databases(client);
 }
 
-async function fetchByStatus(status: string) {
+async function fetchByStatuses(statuses: string[]) {
   if (!DB_ID || !COLLECTION_ID) {
     throw new Error(
       "Missing Appwrite LISTINGS env vars. Set APPWRITE_LISTINGS_DATABASE_ID + APPWRITE_LISTINGS_COLLECTION_ID (or NEXT_PUBLIC equivalents)."
     );
   }
 
+  const clean = (statuses || []).map((s) => String(s || "").trim()).filter(Boolean);
+  if (clean.length === 0) return [];
+
   const db = serverDb();
   const res = await db.listDocuments(DB_ID, COLLECTION_ID, [
-    Query.equal("status", status),
+    // Appwrite supports passing an array to equal() for OR matching on a single attribute
+    Query.equal("status", clean),
     Query.orderDesc("$updatedAt"),
     Query.limit(200),
   ]);
+
   return res.documents as any[];
 }
 
@@ -142,17 +147,27 @@ function getListingLabel(doc: any) {
 export default async function CurrentListingsPage() {
   let live: any[] = [];
   let soon: any[] = [];
+  let loadFailed = false;
 
   try {
-    [live, soon] = await Promise.all([fetchByStatus("live"), fetchByStatus("queued")]);
+    // Be tolerant to common cloned-project status naming
+    const LIVE_STATUSES = ["live", "active"];
+    const SOON_STATUSES = ["queued", "upcoming"];
+
+    [live, soon] = await Promise.all([
+      fetchByStatuses(LIVE_STATUSES),
+      fetchByStatuses(SOON_STATUSES),
+    ]);
   } catch (err) {
     console.error("Failed to load current listings (server):", err);
+    loadFailed = true;
     live = [];
     soon = [];
   }
 
   // JSON-LD for crawlable auction links (kept small)
   const liveForLd = live.slice(0, 50);
+
   const jsonLdItemList = {
     "@context": "https://schema.org",
     "@type": "ItemList",
@@ -279,6 +294,16 @@ export default async function CurrentListingsPage() {
                   Missing Appwrite LISTINGS env vars. Set{" "}
                   <code className="font-mono">APPWRITE_LISTINGS_DATABASE_ID</code> and{" "}
                   <code className="font-mono">APPWRITE_LISTINGS_COLLECTION_ID</code>.
+                </p>
+              </div>
+            ) : null}
+
+            {loadFailed ? (
+              <div className="mt-4 rounded-xl border border-destructive/30 bg-destructive/10 p-3 text-xs">
+                <p className="font-semibold">Listings temporarily unavailable</p>
+                <p className="mt-1">
+                  The server couldn’t reach the listings database just now. This usually means Appwrite env keys/scopes,
+                  endpoint, or permissions are misconfigured. Check server logs for the exact error.
                 </p>
               </div>
             ) : null}

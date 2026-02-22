@@ -1,4 +1,4 @@
-// app/components/ui/MainFooter.tsx
+﻿// app/components/ui/MainFooter.tsx
 
 import Link from "next/link";
 
@@ -8,7 +8,7 @@ export default function MainFooter() {
   return (
     <footer className="border-t border-slate-200 bg-white/80 backdrop-blur mt-10">
       <div className="max-w-6xl mx-auto px-4 py-4 flex flex-col md:flex-row items-center justify-between gap-2 text-xs text-slate-600">
-        <span>© {year} AuctionMyCamera.co.uk. All rights reserved.</span>
+        <span>Â© {year} AuctionMyCamera.co.uk. All rights reserved.</span>
 
         <div className="flex flex-wrap gap-4">
           <Link href="/terms" className="hover:underline">

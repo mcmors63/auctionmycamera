@@ -1,4 +1,6 @@
+// app/components/ui/Toast.tsx
 "use client";
+
 import { useEffect, useState } from "react";
 
 type ToastProps = {
@@ -8,17 +10,16 @@ type ToastProps = {
 };
 
 export default function Toast({ message, type = "info", onClose }: ToastProps) {
-  const [visible, setVisible] = useState(true);
+  const [closing, setClosing] = useState(false);
 
   useEffect(() => {
-    const timer = setTimeout(() => {
-      setVisible(false);
-      setTimeout(onClose, 300); // small delay for fade-out animation
+    const timer = window.setTimeout(() => {
+      setClosing(true);
+      window.setTimeout(onClose, 250); // match transition duration
     }, 3000);
-    return () => clearTimeout(timer);
-  }, [onClose]);
 
-  if (!visible) return null;
+    return () => window.clearTimeout(timer);
+  }, [onClose]);
 
   const bg =
     type === "success"
@@ -29,7 +30,14 @@ export default function Toast({ message, type = "info", onClose }: ToastProps) {
 
   return (
     <div
-      className={`fixed bottom-6 right-6 text-white px-5 py-3 rounded-lg shadow-lg ${bg} transition-all duration-300 animate-fade-in`}
+      role="status"
+      aria-live="polite"
+      className={[
+        "fixed bottom-6 right-6 z-50 text-white px-5 py-3 rounded-lg shadow-lg",
+        bg,
+        "transition-opacity transition-transform duration-250",
+        closing ? "opacity-0 translate-y-2" : "opacity-100 translate-y-0",
+      ].join(" ")}
     >
       {message}
     </div>

@@ -1,7 +1,7 @@
 // app/current-listings/AuctionTimer.tsx
 "use client";
 
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { getAuctionWindow } from "@/lib/getAuctionWindow";
 
 type Props = {
@@ -11,38 +11,28 @@ type Props = {
 };
 
 export default function AuctionTimer({ mode, endTime }: Props) {
-  const [now, setNow] = useState(Date.now());
+  const [now, setNow] = useState(() => Date.now());
 
   // Tick every second
   useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(id);
+    const id = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(id);
   }, []);
 
-  // Compute target + label ONCE per render
   const { target, label } = useMemo(() => {
-    const { currentStart, currentEnd, nextStart, now: windowNow } =
-      getAuctionWindow();
-
-    const nowTime = windowNow.getTime();
+    const { currentStart, currentEnd, nextStart } = getAuctionWindow();
 
     // -------------------------
-    // COMING MODE – unchanged
+    // COMING MODE
     // -------------------------
     if (mode === "coming") {
       // If we haven't reached currentStart yet → count to currentStart
-      if (nowTime < currentStart.getTime()) {
-        return {
-          target: currentStart,
-          label: "Auction starts in",
-        };
+      if (now < currentStart.getTime()) {
+        return { target: currentStart, label: "Auction starts in" };
       }
 
       // Otherwise → count to nextStart
-      return {
-        target: nextStart,
-        label: "Auction starts in",
-      };
+      return { target: nextStart, label: "Auction starts in" };
     }
 
     // -------------------------
@@ -52,23 +42,16 @@ export default function AuctionTimer({ mode, endTime }: Props) {
     if (endTime) {
       const parsed = new Date(endTime);
       if (!isNaN(parsed.getTime())) {
-        return {
-          target: parsed,
-          label: "Auction ends in",
-        };
+        return { target: parsed, label: "Auction ends in" };
       }
     }
 
-    // Fallback: use weekly auction window end (old behaviour)
-    return {
-      target: currentEnd,
-      label: "Auction ends in",
-    };
-  }, [mode, endTime]);
-
-  if (!target) return null;
+    // Fallback: use weekly auction window end
+    return { target: currentEnd, label: "Auction ends in" };
+  }, [mode, endTime, now]);
 
   const diff = target.getTime() - now;
+
   if (diff <= 0) {
     return (
       <p className="text-xs font-semibold text-green-700">

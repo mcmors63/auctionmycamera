@@ -6,17 +6,25 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { Client, Account } from "appwrite";
 
-const client = new Client()
-  .setEndpoint(process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT!)
-  .setProject(process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID!);
-
-const account = new Account(client);
-
 type User = {
   $id: string;
   email: string;
   name?: string;
 };
+
+// ----------------------------------------------------
+// Appwrite client (guarded)
+// ----------------------------------------------------
+const APPWRITE_ENDPOINT = process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT;
+const APPWRITE_PROJECT_ID = process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID;
+
+const appwriteReady = !!APPWRITE_ENDPOINT && !!APPWRITE_PROJECT_ID;
+
+const client = appwriteReady
+  ? new Client().setEndpoint(APPWRITE_ENDPOINT!).setProject(APPWRITE_PROJECT_ID!)
+  : null;
+
+const account = client ? new Account(client) : null;
 
 export default function Navbar() {
   const router = useRouter();
@@ -33,6 +41,15 @@ export default function Navbar() {
     let alive = true;
 
     const load = async () => {
+      // If Appwrite isn't configured, behave as logged out (and don't crash UI)
+      if (!account) {
+        if (!alive) return;
+        setUser(null);
+        loadedOnceRef.current = true;
+        setLoadingUser(false);
+        return;
+      }
+
       try {
         if (!loadedOnceRef.current) setLoadingUser(true);
         const current = await account.get();
@@ -91,7 +108,9 @@ export default function Navbar() {
 
   const handleLogout = async () => {
     try {
-      await account.deleteSession("current");
+      if (account) {
+        await account.deleteSession("current");
+      }
     } catch {
       // ignore
     }
@@ -277,6 +296,13 @@ export default function Navbar() {
                 </>
               )}
             </div>
+
+            {/* Optional: tiny hint if Appwrite env isn't set (hidden by default) */}
+            {/* {!appwriteReady && (
+              <p className="text-[11px] text-muted-foreground">
+                Auth is unavailable: missing NEXT_PUBLIC_APPWRITE_ENDPOINT / NEXT_PUBLIC_APPWRITE_PROJECT_ID.
+              </p>
+            )} */}
           </div>
         </div>
       )}
