@@ -41,24 +41,31 @@ function getSiteUrl() {
 
 const SITE_URL = getSiteUrl();
 
+// -----------------------------
 // Appwrite (server/admin)
+// -----------------------------
 const endpoint =
-  process.env.APPWRITE_ENDPOINT || process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT!;
-const projectId = process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID!;
-const apiKey = process.env.APPWRITE_API_KEY!;
+  process.env.APPWRITE_ENDPOINT ||
+  process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT ||
+  "";
 
-// ✅ Listings DB/collection (supports new names, falls back to legacy "PLATES" envs)
+const projectId =
+  process.env.APPWRITE_PROJECT_ID ||
+  process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID ||
+  "";
+
+const apiKey = process.env.APPWRITE_API_KEY || "";
+
+// ✅ LISTINGS ONLY (no legacy PLATES fallbacks)
 const LISTINGS_DB_ID =
   process.env.APPWRITE_LISTINGS_DATABASE_ID ||
   process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID ||
-  process.env.APPWRITE_PLATES_DATABASE_ID ||
-  process.env.NEXT_PUBLIC_APPWRITE_PLATES_DATABASE_ID!;
+  "";
 
 const LISTINGS_COLLECTION_ID =
   process.env.APPWRITE_LISTINGS_COLLECTION_ID ||
   process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_COLLECTION_ID ||
-  process.env.APPWRITE_PLATES_COLLECTION_ID ||
-  process.env.NEXT_PUBLIC_APPWRITE_PLATES_COLLECTION_ID!;
+  "";
 
 /**
  * ✅ Listing route is /listing/[id]
@@ -88,6 +95,13 @@ function buildListingUrl(id: string) {
 }
 
 async function fetchListingUrls(): Promise<MetadataRoute.Sitemap> {
+  // ✅ Fail loudly if env is not wired correctly (prevents silently using wrong DB)
+  if (!endpoint) throw new Error("[sitemap] Missing APPWRITE_ENDPOINT or NEXT_PUBLIC_APPWRITE_ENDPOINT");
+  if (!projectId) throw new Error("[sitemap] Missing APPWRITE_PROJECT_ID or NEXT_PUBLIC_APPWRITE_PROJECT_ID");
+  if (!apiKey) throw new Error("[sitemap] Missing APPWRITE_API_KEY");
+  if (!LISTINGS_DB_ID) throw new Error("[sitemap] Missing APPWRITE_LISTINGS_DATABASE_ID (or NEXT_PUBLIC_...)");
+  if (!LISTINGS_COLLECTION_ID) throw new Error("[sitemap] Missing APPWRITE_LISTINGS_COLLECTION_ID (or NEXT_PUBLIC_...)");
+
   const client = new Client()
     .setEndpoint(endpoint)
     .setProject(projectId)
@@ -102,7 +116,7 @@ async function fetchListingUrls(): Promise<MetadataRoute.Sitemap> {
 
   while (true) {
     const queries: string[] = [
-      // ✅ Include all public/indexable statuses
+      // ✅ Include all public/indexable statuses (adjust if your camera app differs)
       Query.equal("status", ["live", "queued", "sold"]),
       Query.orderAsc("$id"),
       Query.limit(100),
@@ -139,7 +153,12 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const staticRoutes: MetadataRoute.Sitemap = [
     { url: `${SITE_URL}/`, lastModified: now, changeFrequency: "daily", priority: 1 },
 
-    { url: `${SITE_URL}/current-listings`, lastModified: now, changeFrequency: "hourly", priority: 0.9 },
+    {
+      url: `${SITE_URL}/current-listings`,
+      lastModified: now,
+      changeFrequency: "hourly",
+      priority: 0.9,
+    },
 
     { url: `${SITE_URL}/how-it-works`, lastModified: now, changeFrequency: "monthly", priority: 0.7 },
     { url: `${SITE_URL}/fees`, lastModified: now, changeFrequency: "monthly", priority: 0.7 },

@@ -58,40 +58,40 @@
   --radius-xl: calc(var(--radius) + 4px);
 }
 
-/* 3️⃣ Root theme variables (LIGHT = studio / product-photography vibe) */
+/* 3️⃣ Root theme variables (LIGHT = warm studio / premium ivory) */
 :root {
   --radius: 0.75rem;
 
-  /* Studio Light: cool, clean, modern */
-  --background: oklch(0.985 0.008 255);
-  --foreground: oklch(0.18 0.02 255);
+  /* Warm studio base (stops the blue/grey feel) */
+  --background: oklch(0.99 0.01 85); /* warm ivory */
+  --foreground: oklch(0.18 0.02 60); /* warm charcoal */
 
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.18 0.02 255);
+  --card: oklch(0.998 0.004 85);
+  --card-foreground: oklch(0.18 0.02 60);
 
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.18 0.02 255);
+  --popover: oklch(0.998 0.004 85);
+  --popover-foreground: oklch(0.18 0.02 60);
 
   /* Copper accent as PRIMARY so CTAs pop */
   --primary: oklch(0.68 0.15 55);
   --primary-foreground: oklch(0.985 0 0);
 
-  /* Soft surfaces */
-  --secondary: oklch(0.965 0.01 255);
-  --secondary-foreground: oklch(0.22 0.02 255);
+  /* Soft warm surfaces */
+  --secondary: oklch(0.97 0.01 85);
+  --secondary-foreground: oklch(0.22 0.02 60);
 
-  --muted: oklch(0.965 0.01 255);
-  --muted-foreground: oklch(0.52 0.02 255);
+  --muted: oklch(0.97 0.01 85);
+  --muted-foreground: oklch(0.55 0.02 60);
 
   /* Accent used for hover surfaces etc */
-  --accent: oklch(0.955 0.012 255);
-  --accent-foreground: oklch(0.22 0.02 255);
+  --accent: oklch(0.965 0.012 85);
+  --accent-foreground: oklch(0.22 0.02 60);
 
   --destructive: oklch(0.6 0.22 27);
 
-  --border: oklch(0.92 0.01 255);
-  --input: oklch(0.92 0.01 255);
-  --ring: oklch(0.72 0.02 255);
+  --border: oklch(0.92 0.01 85);
+  --input: oklch(0.92 0.01 85);
+  --ring: oklch(0.75 0.02 85);
 
   /* Charts (fine to keep) */
   --chart-1: oklch(0.646 0.222 41.116);
@@ -101,14 +101,14 @@
   --chart-5: oklch(0.769 0.188 70.08);
 
   /* Sidebar */
-  --sidebar: oklch(0.99 0.006 255);
-  --sidebar-foreground: oklch(0.18 0.02 255);
+  --sidebar: oklch(0.99 0.008 85);
+  --sidebar-foreground: oklch(0.18 0.02 60);
   --sidebar-primary: oklch(0.68 0.15 55);
   --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.955 0.012 255);
-  --sidebar-accent-foreground: oklch(0.22 0.02 255);
-  --sidebar-border: oklch(0.92 0.01 255);
-  --sidebar-ring: oklch(0.72 0.02 255);
+  --sidebar-accent: oklch(0.965 0.012 85);
+  --sidebar-accent-foreground: oklch(0.22 0.02 60);
+  --sidebar-border: oklch(0.92 0.01 85);
+  --sidebar-ring: oklch(0.75 0.02 85);
 }
 
 /* 4️⃣ Dark mode overrides (DARK = obsidian + copper, cinematic) */

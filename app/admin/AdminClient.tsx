@@ -21,18 +21,11 @@ const ADMIN_EMAIL = (process.env.NEXT_PUBLIC_ADMIN_EMAIL || "admin@auctionmycame
   .trim()
   .toLowerCase();
 
-// ✅ Listings live in their own DB/Table (supports legacy PLATES envs)
-const LISTINGS_DB_ID =
-  process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID ||
-  process.env.NEXT_PUBLIC_APPWRITE_PLATES_DATABASE_ID ||
-  "";
+// ✅ Listings live in their own DB/Collection (LISTINGS ONLY — no legacy PLATES fallbacks)
+const LISTINGS_DB_ID = process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID || "";
+const LISTINGS_COLLECTION_ID = process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_COLLECTION_ID || "";
 
-const LISTINGS_COLLECTION_ID =
-  process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_COLLECTION_ID ||
-  process.env.NEXT_PUBLIC_APPWRITE_PLATES_COLLECTION_ID ||
-  "plates";
-
-// ✅ Transactions may be a separate DB/Table
+// ✅ Transactions may be a separate DB/Collection
 const TRANSACTIONS_DB_ID =
   process.env.NEXT_PUBLIC_APPWRITE_TRANSACTIONS_DATABASE_ID ||
   process.env.NEXT_PUBLIC_APPWRITE_TRANSACTIONS_DB_ID ||
@@ -168,9 +161,10 @@ export default function AdminClient() {
       setMessage("");
 
       try {
+        // ✅ LISTINGS env must exist — do not silently fall back to PLATES / "plates"
         if (!LISTINGS_DB_ID || !LISTINGS_COLLECTION_ID) {
           setMessage(
-            "Missing Appwrite env for listings. Set NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID and NEXT_PUBLIC_APPWRITE_LISTINGS_COLLECTION_ID (or the legacy PLATES envs)."
+            "Missing Appwrite env for listings. Set NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID and NEXT_PUBLIC_APPWRITE_LISTINGS_COLLECTION_ID in Vercel."
           );
           setListings([]);
           setTransactions([]);
@@ -214,7 +208,7 @@ export default function AdminClient() {
         }
       } catch (err) {
         console.error("Failed to load admin data:", err);
-        setMessage("Failed to load data from Appwrite (check DB/Table IDs + schema).");
+        setMessage("Failed to load data from Appwrite (check DB/Collection IDs + permissions + schema).");
       } finally {
         setLoading(false);
       }
@@ -525,7 +519,8 @@ export default function AdminClient() {
                         </p>
 
                         <p>
-                          <strong>Reserve:</strong> {formatMoney(typeof doc.reserve_price === "number" ? doc.reserve_price : 0)}
+                          <strong>Reserve:</strong>{" "}
+                          {formatMoney(typeof doc.reserve_price === "number" ? doc.reserve_price : 0)}
                         </p>
 
                         <p>
@@ -658,7 +653,9 @@ export default function AdminClient() {
                           <td className="py-2 px-2 whitespace-nowrap">{tx.seller_email || "-"}</td>
                           <td className="py-2 px-2 whitespace-nowrap">{tx.buyer_email || "-"}</td>
 
-                          <td className="py-2 px-2 whitespace-nowrap">£{(tx.sale_price ?? 0).toLocaleString("en-GB")}</td>
+                          <td className="py-2 px-2 whitespace-nowrap">
+                            £{(tx.sale_price ?? 0).toLocaleString("en-GB")}
+                          </td>
 
                           <td className="py-2 px-2 whitespace-nowrap">
                             £{(tx.commission_amount ?? 0).toLocaleString("en-GB")} ({tx.commission_rate ?? 0}%)

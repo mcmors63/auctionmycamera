@@ -1,19 +1,23 @@
 // app/about/page.tsx
-
 import type { Metadata } from "next";
 import Image from "next/image";
 import AboutContent from "./AboutContent";
 
-const SITE_URL = (process.env.NEXT_PUBLIC_SITE_URL || "https://auctionmycamera.co.uk").replace(
-  /\/+$/,
-  ""
+function normalizeBaseUrl(input: string) {
+  return (input || "").trim().replace(/\/+$/, "");
+}
+
+const SITE_URL = normalizeBaseUrl(
+  process.env.NEXT_PUBLIC_SITE_URL || "https://auctionmycamera.co.uk"
 );
 
 export const metadata: Metadata = {
+  metadataBase: new URL(SITE_URL),
   title: "About | AuctionMyCamera",
   description:
     "Learn more about AuctionMyCamera — a premium UK marketplace for cameras, lenses and photography gear, with weekly auctions and secure payments.",
   alternates: { canonical: `${SITE_URL}/about` },
+  robots: { index: true, follow: true },
   openGraph: {
     title: "About | AuctionMyCamera",
     description:

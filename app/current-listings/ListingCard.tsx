@@ -13,9 +13,9 @@ type Listing = {
   item_title?: string | null;
   brand?: string | null;
   model?: string | null;
-  gear_type?: string | null; // camera | lens | accessory | film | ...
-  era?: string | null; // modern | vintage | antique
-  condition?: string | null; // new | like_new | excellent | good | fair | parts
+  gear_type?: string | null;
+  era?: string | null;
+  condition?: string | null;
   description?: string | null;
 
   image_url?: string | null;
@@ -26,7 +26,7 @@ type Listing = {
   max_aperture?: string | null;
 
   current_bid?: number | null;
-  starting_price?: number | null; // ✅ add this so we can show “Starting price” when no bids
+  starting_price?: number | null;
   bids?: number | null;
   reserve_price?: number | null;
   reserve_met?: boolean | null;
@@ -45,7 +45,6 @@ type Listing = {
 
   listing_id?: string | null;
 
-  // legacy fallbacks if any old docs still exist
   registration?: string | null;
   reg_number?: string | null;
 };
@@ -53,8 +52,6 @@ type Listing = {
 type Props = {
   listing: Listing;
 };
-
-const ACCENT = "#d6b45f";
 
 function cap(s: string) {
   if (!s) return s;
@@ -95,7 +92,6 @@ function getMetaLine(l: Listing) {
 }
 
 function pickBuyNow(l: Listing): number | null {
-  // ✅ only accept sensible BIN values (>0)
   if (typeof l.buy_now_price === "number" && l.buy_now_price > 0) return l.buy_now_price;
   if (typeof l.buy_now === "number" && l.buy_now > 0) return l.buy_now;
   return null;
@@ -104,8 +100,6 @@ function pickBuyNow(l: Listing): number | null {
 function pickFallbackImage(l: Listing) {
   const gear = String(l.gear_type || "").toLowerCase();
   const era = String(l.era || "").toLowerCase();
-
-  // You said these exist in /public/hero
   if (era === "antique" || era === "vintage") return "/hero/antique-cameras.jpg";
   if (gear === "lens") return "/hero/modern-lens.jpg";
   return "/hero/modern-lens.jpg";
@@ -177,7 +171,6 @@ export default function ListingCard({ listing }: Props) {
 
   const startPrice = typeof starting_price === "number" && starting_price > 0 ? starting_price : null;
 
-  // ✅ If no bids yet, show starting price (if present)
   const priceToShow = !isSold && !hasBid && startPrice ? startPrice : numericCurrentBid;
   const priceSubLabel = !isSold && !hasBid && startPrice ? "Starting price" : null;
 
@@ -207,7 +200,6 @@ export default function ListingCard({ listing }: Props) {
 
   const imageSrc = String(listing.image_url || "").trim() || pickFallbackImage(listing);
 
-  // Optional extra line (camera/lens specifics)
   const gear = String(listing.gear_type || "").toLowerCase();
   const extraLine =
     gear === "camera" && typeof shutter_count === "number" && shutter_count >= 0
@@ -219,51 +211,38 @@ export default function ListingCard({ listing }: Props) {
       : "";
 
   return (
-    <div
-      className="rounded-2xl border p-4 shadow-xl transition hover:shadow-2xl"
-      style={{
-        borderColor: "rgba(255,255,255,0.10)",
-        backgroundColor: "rgba(255,255,255,0.03)",
-        color: "#e8e8e8",
-      }}
-    >
+    <div className="rounded-2xl border border-border bg-card text-card-foreground p-4 shadow-sm transition hover:shadow-md">
       {/* Header */}
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-[10px] uppercase tracking-[0.22em] text-white/45">Listing</p>
-          <p className="mt-1 font-semibold text-sm text-white truncate">{displayId}</p>
+          <p className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground">Listing</p>
+          <p className="mt-1 font-semibold text-sm truncate">{displayId}</p>
         </div>
 
         <div className="text-right min-w-0">
-          <p className="text-[10px] uppercase tracking-[0.22em] text-white/45">Item</p>
+          <p className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground">Item</p>
           <Link
             href={listingUrl}
-            className="mt-1 inline-block font-extrabold text-sm sm:text-base text-white hover:underline truncate max-w-[220px]"
+            className="mt-1 inline-block font-extrabold text-sm sm:text-base underline hover:opacity-80 truncate max-w-[220px]"
             title={title}
           >
             {title}
           </Link>
-          {metaLine ? <p className="mt-1 text-[11px] text-white/55">{metaLine}</p> : null}
+          {metaLine ? <p className="mt-1 text-[11px] text-muted-foreground">{metaLine}</p> : null}
         </div>
       </div>
 
       {/* Badges */}
       <div className="mt-3 flex flex-wrap gap-2">
         {isSold && <Badge text="SOLD" tone="danger" />}
-        {!isSold && isLive && <Badge text="LIVE" tone="accent" />}
+        {!isSold && isLive && <Badge text="LIVE" tone="primary" />}
         {!isSold && isQueued && <Badge text="COMING NEXT" tone="muted" />}
         {!isSold && auctionEnded && <Badge text="ENDED" tone="muted" />}
         {showNewBadge && <Badge text="NEW" tone="success" />}
       </div>
 
       {/* Image */}
-      <div
-        className="mt-4 rounded-2xl border overflow-hidden"
-        style={{
-          borderColor: "rgba(255,255,255,0.10)",
-          backgroundColor: "rgba(0,0,0,0.25)",
-        }}
-      >
+      <div className="mt-4 rounded-2xl border border-border overflow-hidden bg-background">
         {/* Use <img> so remote image_url never needs next/image config */}
         <img
           src={imageSrc}
@@ -274,28 +253,18 @@ export default function ListingCard({ listing }: Props) {
         />
       </div>
 
-      {extraLine ? <p className="mt-2 text-[11px] text-white/55">{extraLine}</p> : null}
+      {extraLine ? <p className="mt-2 text-[11px] text-muted-foreground">{extraLine}</p> : null}
 
       {/* Timer + price */}
       <div className="mt-4 flex flex-col gap-3">
         <div>
-          <p className="text-[10px] uppercase tracking-[0.22em] text-white/45 mb-2">{timerLabel}</p>
+          <p className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground mb-2">{timerLabel}</p>
 
-          <div
-            className="inline-block rounded-xl border px-3 py-2"
-            style={{
-              borderColor: "rgba(255,255,255,0.12)",
-              backgroundColor: "rgba(0,0,0,0.25)",
-            }}
-          >
+          <div className="inline-block rounded-xl border border-border bg-background px-3 py-2">
             {isSold ? (
-              <span className="text-xs font-semibold" style={{ color: "rgba(255,255,255,0.75)" }}>
-                Sold – bidding closed
-              </span>
+              <span className="text-xs font-semibold text-muted-foreground">Sold – bidding closed</span>
             ) : auctionEnded ? (
-              <span className="text-xs font-semibold" style={{ color: "rgba(255,255,255,0.75)" }}>
-                Auction ended
-              </span>
+              <span className="text-xs font-semibold text-muted-foreground">Auction ended</span>
             ) : isLive ? (
               <AuctionTimer mode="live" endTime={rawEnd ?? undefined} />
             ) : (
@@ -306,37 +275,37 @@ export default function ListingCard({ listing }: Props) {
 
         <div className="flex items-end justify-between gap-3">
           <div>
-            <p className="text-[10px] uppercase tracking-[0.22em] text-white/45">Current bid</p>
+            <p className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground">Current bid</p>
 
             {isSold ? (
-              <p className="mt-1 text-sm font-semibold text-white/70">Sold</p>
+              <p className="mt-1 text-sm font-semibold text-muted-foreground">Sold</p>
             ) : (
               <>
-                <p className="mt-1 text-lg font-extrabold" style={{ color: ACCENT }}>
+                <p className="mt-1 text-lg font-extrabold text-primary">
                   £{priceToShow.toLocaleString("en-GB")}
                 </p>
-                {priceSubLabel ? <p className="mt-1 text-[11px] text-white/55">{priceSubLabel}</p> : null}
+                {priceSubLabel ? <p className="mt-1 text-[11px] text-muted-foreground">{priceSubLabel}</p> : null}
               </>
             )}
 
             {hasReserve && !isSold ? (
               reserveMet ? (
-                <p className="mt-1 text-[11px] font-semibold text-emerald-300">Reserve met</p>
+                <p className="mt-1 text-[11px] font-semibold text-emerald-600">Reserve met</p>
               ) : (
-                <p className="mt-1 text-[11px] font-semibold text-white/55">Reserve not met</p>
+                <p className="mt-1 text-[11px] font-semibold text-muted-foreground">Reserve not met</p>
               )
             ) : null}
 
             {hasBuyNow && (
-              <p className="mt-1 text-[11px] font-semibold text-emerald-300">
+              <p className="mt-1 text-[11px] font-semibold text-emerald-600">
                 Buy now: £{buyNow!.toLocaleString("en-GB")}
               </p>
             )}
           </div>
 
           <div className="text-right">
-            <p className="text-[10px] uppercase tracking-[0.22em] text-white/45">Bids</p>
-            <p className="mt-1 text-sm font-semibold text-white">{bids || 0}</p>
+            <p className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground">Bids</p>
+            <p className="mt-1 text-sm font-semibold">{bids || 0}</p>
           </div>
         </div>
       </div>
@@ -345,14 +314,13 @@ export default function ListingCard({ listing }: Props) {
       <div className="mt-4 flex justify-between items-center">
         {canBid ? (
           <>
-            <Link href={listingUrl} className="text-sm underline text-white/75">
+            <Link href={listingUrl} className="text-sm underline text-muted-foreground hover:text-foreground">
               View listing
             </Link>
 
             <Link
               href={`/place_bid?id=${$id}`}
-              className="px-4 py-2 rounded-xl font-bold text-sm shadow-lg transition"
-              style={{ backgroundColor: ACCENT, color: "#0b0c10" }}
+              className="px-4 py-2 rounded-xl font-bold text-sm shadow-sm transition bg-primary text-primary-foreground hover:opacity-90"
             >
               Bid
             </Link>
@@ -360,12 +328,7 @@ export default function ListingCard({ listing }: Props) {
         ) : (
           <Link
             href={listingUrl}
-            className="ml-auto px-4 py-2 rounded-xl font-bold text-sm border transition"
-            style={{
-              borderColor: "rgba(255,255,255,0.14)",
-              backgroundColor: "rgba(255,255,255,0.04)",
-              color: "rgba(255,255,255,0.85)",
-            }}
+            className="ml-auto px-4 py-2 rounded-xl font-bold text-sm border border-border bg-background hover:bg-accent transition"
           >
             View listing
           </Link>
@@ -380,38 +343,19 @@ function Badge({
   tone,
 }: {
   text: string;
-  tone: "accent" | "muted" | "danger" | "success";
+  tone: "primary" | "muted" | "danger" | "success";
 }) {
-  const styles: Record<typeof tone, { bg: string; fg: string; border: string }> = {
-    accent: {
-      bg: "rgba(214,180,95,0.18)",
-      fg: "#ffffff",
-      border: "rgba(214,180,95,0.35)",
-    },
-    muted: {
-      bg: "rgba(255,255,255,0.06)",
-      fg: "rgba(255,255,255,0.85)",
-      border: "rgba(255,255,255,0.12)",
-    },
-    danger: {
-      bg: "rgba(239,68,68,0.18)",
-      fg: "#ffffff",
-      border: "rgba(239,68,68,0.35)",
-    },
-    success: {
-      bg: "rgba(16,185,129,0.18)",
-      fg: "#ffffff",
-      border: "rgba(16,185,129,0.35)",
-    },
-  };
-
-  const s = styles[tone];
+  const cls =
+    tone === "primary"
+      ? "border-primary/35 bg-primary/10 text-foreground"
+      : tone === "danger"
+      ? "border-destructive/35 bg-destructive/10 text-foreground"
+      : tone === "success"
+      ? "border-emerald-500/35 bg-emerald-500/10 text-foreground"
+      : "border-border bg-background text-muted-foreground";
 
   return (
-    <span
-      className="px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-[0.22em] border"
-      style={{ backgroundColor: s.bg, color: s.fg, borderColor: s.border }}
-    >
+    <span className={`px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-[0.22em] border ${cls}`}>
       {text}
     </span>
   );

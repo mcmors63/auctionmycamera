@@ -6,28 +6,37 @@ export const runtime = "nodejs";
 
 // -----------------------------
 // ENV (server-side)
+// Prefer server envs, fall back to NEXT_PUBLIC only if you truly must.
 // -----------------------------
-const endpoint = process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT!;
-const projectId = process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID!;
-const apiKey = process.env.APPWRITE_API_KEY!;
+const endpoint =
+  process.env.APPWRITE_ENDPOINT || process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT || "";
+const projectId =
+  process.env.APPWRITE_PROJECT_ID || process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID || "";
+const apiKey = process.env.APPWRITE_API_KEY || "";
 
-// Plates DB / collection
-const PLATES_DB_ID =
-  process.env.APPWRITE_PLATES_DATABASE_ID ||
-  process.env.NEXT_PUBLIC_APPWRITE_PLATES_DATABASE_ID ||
-  "690fc34a0000ce1baa63";
+// LISTINGS DB / collection (LISTINGS ONLY — no PLATES and no hardcoded IDs)
+const LISTINGS_DB_ID =
+  process.env.APPWRITE_LISTINGS_DATABASE_ID ||
+  process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID ||
+  "";
 
-const PLATES_COLLECTION_ID =
-  process.env.APPWRITE_PLATES_COLLECTION_ID ||
-  process.env.NEXT_PUBLIC_APPWRITE_PLATES_COLLECTION_ID ||
-  "plates";
+const LISTINGS_COLLECTION_ID =
+  process.env.APPWRITE_LISTINGS_COLLECTION_ID ||
+  process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_COLLECTION_ID ||
+  "";
 
-// Transactions share the same DB as plates
-const TX_DB_ID = PLATES_DB_ID;
+// Transactions DB / collection
+const TX_DB_ID =
+  process.env.APPWRITE_TRANSACTIONS_DATABASE_ID ||
+  process.env.NEXT_PUBLIC_APPWRITE_TRANSACTIONS_DATABASE_ID ||
+  LISTINGS_DB_ID;
+
 const TX_COLLECTION_ID =
-  process.env.APPWRITE_TRANSACTIONS_COLLECTION_ID || "transactions";
+  process.env.APPWRITE_TRANSACTIONS_COLLECTION_ID ||
+  process.env.NEXT_PUBLIC_APPWRITE_TRANSACTIONS_COLLECTION_ID ||
+  "";
 
-// Profiles DB / collection (used for address etc.)
+// Profiles DB / collection (Personal Details lives here in most builds)
 const PROFILES_DB_ID =
   process.env.APPWRITE_PROFILES_DATABASE_ID ||
   process.env.NEXT_PUBLIC_APPWRITE_PROFILES_DATABASE_ID ||
@@ -41,10 +50,14 @@ const PROFILES_COLLECTION_ID =
 // -----------------------------
 // Helpers
 // -----------------------------
+function requireEnv(name: string, value: string) {
+  if (!value) throw new Error(`Missing ${name}.`);
+}
+
 function getClient() {
-  if (!endpoint || !projectId || !apiKey) {
-    throw new Error("Appwrite server config missing.");
-  }
+  requireEnv("APPWRITE_ENDPOINT (or NEXT_PUBLIC_APPWRITE_ENDPOINT)", endpoint);
+  requireEnv("APPWRITE_PROJECT_ID (or NEXT_PUBLIC_APPWRITE_PROJECT_ID)", projectId);
+  requireEnv("APPWRITE_API_KEY", apiKey);
   return new Client().setEndpoint(endpoint).setProject(projectId).setKey(apiKey);
 }
 
@@ -57,13 +70,24 @@ function getUsers() {
 }
 
 function isTransactionFinished(tx: any): boolean {
-  const tStatus = (tx.transaction_status || "").toString().toLowerCase();
-  const pStatus = (tx.payment_status || "").toString().toLowerCase();
-  return (
-    tStatus === "complete" ||
-    tStatus === "completed" ||
-    pStatus === "paid"
-  );
+  const tStatus = String(tx?.transaction_status || "").toLowerCase();
+  const pStatus = String(tx?.payment_status || "").toLowerCase();
+  return tStatus === "complete" || tStatus === "completed" || pStatus === "paid";
+}
+
+function safeEmail(e: unknown) {
+  return String(e || "").trim().toLowerCase();
+}
+
+// Some projects store seller email as seller_email, others as sellerEmail.
+// We check both where possible.
+function sellerEmailQueries(email: string) {
+  return [
+    // Most common
+    Query.equal("seller_email", email),
+    // Optional fallback if schema supports it (Appwrite will error if attribute doesn't exist)
+    Query.equal("sellerEmail", email),
+  ];
 }
 
 // -----------------------------
@@ -72,31 +96,23 @@ function isTransactionFinished(tx: any): boolean {
 // -----------------------------
 export async function POST(req: NextRequest) {
   try {
-    if (!endpoint || !projectId || !apiKey) {
-      console.error("❌ DELETE-ACCOUNT: Missing Appwrite config");
-      return NextResponse.json(
-        { error: "Server Appwrite config missing." },
-        { status: 500 }
-      );
-    }
+    // Validate env required for this route
+    requireEnv("APPWRITE_ENDPOINT (or NEXT_PUBLIC_APPWRITE_ENDPOINT)", endpoint);
+    requireEnv("APPWRITE_PROJECT_ID (or NEXT_PUBLIC_APPWRITE_PROJECT_ID)", projectId);
+    requireEnv("APPWRITE_API_KEY", apiKey);
+    requireEnv("APPWRITE_LISTINGS_DATABASE_ID (or NEXT_PUBLIC_...)", LISTINGS_DB_ID);
+    requireEnv("APPWRITE_LISTINGS_COLLECTION_ID (or NEXT_PUBLIC_...)", LISTINGS_COLLECTION_ID);
 
     const body = await req.json().catch(() => null);
-
     if (!body) {
-      return NextResponse.json(
-        { error: "Invalid JSON body." },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "Invalid JSON body." }, { status: 400 });
     }
 
-    const userId = body.userId as string | undefined;
-    const email = body.email as string | undefined;
+    const userId = String(body.userId || "").trim();
+    const email = safeEmail(body.email);
 
     if (!userId || !email) {
-      return NextResponse.json(
-        { error: "userId and email are required." },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "userId and email are required." }, { status: 400 });
     }
 
     const databases = getDatabases();
@@ -105,19 +121,16 @@ export async function POST(req: NextRequest) {
     // -----------------------------
     // 1) Double-check user exists & email matches
     // -----------------------------
-    let user;
+    let user: any;
     try {
       user = await users.get(userId);
     } catch (err) {
       console.error("❌ DELETE-ACCOUNT: users.get failed", err);
-      return NextResponse.json(
-        { error: "User not found or invalid userId." },
-        { status: 404 }
-      );
+      return NextResponse.json({ error: "User not found or invalid userId." }, { status: 404 });
     }
 
-    const appwriteEmail = (user as any).email as string | undefined;
-    if (!appwriteEmail || appwriteEmail.toLowerCase() !== email.toLowerCase()) {
+    const appwriteEmail = safeEmail(user?.email);
+    if (!appwriteEmail || appwriteEmail !== email) {
       console.warn("⚠️ DELETE-ACCOUNT: Email mismatch", {
         userId,
         appwriteEmail,
@@ -130,33 +143,43 @@ export async function POST(req: NextRequest) {
     }
 
     // -----------------------------
-    // 2) Check for active plates (pending / queued / live)
+    // 2) Check for active listings (pending_approval / queued / live)
     // -----------------------------
-    let activePlateCount = 0;
+    // IMPORTANT: Your actual “pending” status is pending_approval.
+    const blockingStatuses = ["pending_approval", "queued", "live"];
+
+    let activeListingCount = 0;
+
+    // Try seller_email first; if schema doesn't have it, catch and try sellerEmail.
     try {
-      const activePlates = await databases.listDocuments(
-        PLATES_DB_ID,
-        PLATES_COLLECTION_ID,
-        [
-          Query.equal("seller_email", email),
-          // any status in this list will block deletion
-          Query.equal("status", ["pending", "queued", "live"]),
-        ]
-      );
-      activePlateCount = activePlates.total;
-    } catch (err) {
-      console.error("❌ DELETE-ACCOUNT: Failed to check plates", err);
-      return NextResponse.json(
-        { error: "Failed to check plate status. Try again later." },
-        { status: 500 }
-      );
+      const activeListings = await databases.listDocuments(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, [
+        Query.equal("seller_email", email),
+        Query.equal("status", blockingStatuses),
+        Query.limit(1),
+      ]);
+      activeListingCount = activeListings.total;
+    } catch (errA) {
+      try {
+        const activeListings = await databases.listDocuments(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, [
+          Query.equal("sellerEmail", email),
+          Query.equal("status", blockingStatuses),
+          Query.limit(1),
+        ]);
+        activeListingCount = activeListings.total;
+      } catch (errB) {
+        console.error("❌ DELETE-ACCOUNT: Failed to check listings (schema/env)", { errA, errB });
+        return NextResponse.json(
+          { error: "Failed to check listing status. Check schema + env IDs." },
+          { status: 500 }
+        );
+      }
     }
 
-    if (activePlateCount > 0) {
+    if (activeListingCount > 0) {
       return NextResponse.json(
         {
           error:
-            "You still have a plate in an active auction (pending, queued or live). " +
+            "You still have a listing in an active state (pending approval, queued, or live). " +
             "Wait until all auctions have finished before deleting your account.",
         },
         { status: 400 }
@@ -166,25 +189,24 @@ export async function POST(req: NextRequest) {
     // -----------------------------
     // 3) Check for active transactions
     // -----------------------------
-    let hasActiveTransactions = false;
-    if (TX_DB_ID && TX_COLLECTION_ID) {
+    if (!TX_DB_ID || !TX_COLLECTION_ID) {
+      // If you truly don't use transactions, this can be empty.
+      // But if you do, set envs — otherwise users could delete while deals exist.
+      console.warn("⚠️ DELETE-ACCOUNT: TX env missing; skipping transaction checks.");
+    } else {
+      let hasActiveTransactions = false;
       try {
-        // As seller
-        const txSeller = await databases.listDocuments(
-          TX_DB_ID,
-          TX_COLLECTION_ID,
-          [Query.equal("seller_email", email)]
-        );
+        const txSeller = await databases.listDocuments(TX_DB_ID, TX_COLLECTION_ID, [
+          Query.equal("seller_email", email),
+          Query.limit(200),
+        ]);
 
-        // As buyer
-        const txBuyer = await databases.listDocuments(
-          TX_DB_ID,
-          TX_COLLECTION_ID,
-          [Query.equal("buyer_email", email)]
-        );
+        const txBuyer = await databases.listDocuments(TX_DB_ID, TX_COLLECTION_ID, [
+          Query.equal("buyer_email", email),
+          Query.limit(200),
+        ]);
 
         const allTx = [...txSeller.documents, ...txBuyer.documents];
-
         hasActiveTransactions = allTx.some((tx) => !isTransactionFinished(tx));
       } catch (err) {
         console.error("❌ DELETE-ACCOUNT: Failed to check transactions", err);
@@ -193,48 +215,39 @@ export async function POST(req: NextRequest) {
           { status: 500 }
         );
       }
-    }
 
-    if (hasActiveTransactions) {
-      return NextResponse.json(
-        {
-          error:
-            "You have transactions still in progress. Once all sales and purchases are completed, you can delete your account.",
-        },
-        { status: 400 }
-      );
+      if (hasActiveTransactions) {
+        return NextResponse.json(
+          {
+            error:
+              "You have transactions still in progress. Once all sales and purchases are completed, you can delete your account.",
+          },
+          { status: 400 }
+        );
+      }
     }
 
     // -----------------------------
-    // 4) Delete / anonymise profile
+    // 4) Delete profile document (Personal Details)
     // -----------------------------
     if (PROFILES_DB_ID && PROFILES_COLLECTION_ID) {
       try {
-        const profRes = await databases.listDocuments(
-          PROFILES_DB_ID,
-          PROFILES_COLLECTION_ID,
-          [Query.equal("email", email)]
-        );
+        const profRes = await databases.listDocuments(PROFILES_DB_ID, PROFILES_COLLECTION_ID, [
+          Query.equal("email", email),
+          Query.limit(10),
+        ]);
 
-        if (profRes.total > 0) {
-          const profileDoc = profRes.documents[0];
-          await databases.deleteDocument(
-            PROFILES_DB_ID,
-            PROFILES_COLLECTION_ID,
-            profileDoc.$id
-          );
+        // If multiple docs exist (shouldn't), delete them all.
+        for (const profileDoc of profRes.documents) {
+          await databases.deleteDocument(PROFILES_DB_ID, PROFILES_COLLECTION_ID, profileDoc.$id);
           console.log("✅ DELETE-ACCOUNT: Profile deleted", profileDoc.$id);
-        } else {
-          console.log(
-            "ℹ️ DELETE-ACCOUNT: No profile document found for",
-            email
-          );
+        }
+
+        if (profRes.total === 0) {
+          console.log("ℹ️ DELETE-ACCOUNT: No profile document found for", email);
         }
       } catch (err) {
-        console.error(
-          "❌ DELETE-ACCOUNT: Failed to delete profile document",
-          err
-        );
+        console.error("❌ DELETE-ACCOUNT: Failed to delete profile document", err);
         return NextResponse.json(
           { error: "Failed to delete profile. Try again later." },
           { status: 500 }
@@ -242,48 +255,58 @@ export async function POST(req: NextRequest) {
       }
     } else {
       console.warn(
-        "⚠️ DELETE-ACCOUNT: PROFILES_DB_ID / PROFILES_COLLECTION_ID not set, skipping profile delete."
+        "⚠️ DELETE-ACCOUNT: PROFILES env missing; skipping profile delete (set APPWRITE_PROFILES_DATABASE_ID + APPWRITE_PROFILES_COLLECTION_ID)."
       );
     }
 
     // -----------------------------
-    // 5) Anonymise historical plates (optional clean-up)
-    //    We leave SOLD / COMPLETED records but strip PII.
-// -----------------------------
+    // 5) Anonymise historical listings (optional clean-up)
+    //    Keep SOLD/ENDED history but strip seller email.
+    // -----------------------------
     try {
-      const historyPlates = await databases.listDocuments(
-        PLATES_DB_ID,
-        PLATES_COLLECTION_ID,
-        [
-          Query.equal("seller_email", email),
-          Query.equal("status", ["sold", "not_sold", "completed"]),
-        ]
-      );
+      const historicalStatuses = ["sold", "not_sold", "completed", "ended"];
 
-      for (const plate of historyPlates.documents) {
+      // seller_email path
+      let historyDocs: any[] = [];
+      try {
+        const res = await databases.listDocuments(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, [
+          Query.equal("seller_email", email),
+          Query.equal("status", historicalStatuses),
+          Query.limit(200),
+        ]);
+        historyDocs = res.documents;
+      } catch (errA) {
+        // sellerEmail fallback
+        const res = await databases.listDocuments(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, [
+          Query.equal("sellerEmail", email),
+          Query.equal("status", historicalStatuses),
+          Query.limit(200),
+        ]);
+        historyDocs = res.documents;
+      }
+
+      for (const listing of historyDocs) {
         try {
-          await databases.updateDocument(
-            PLATES_DB_ID,
-            PLATES_COLLECTION_ID,
-            plate.$id,
-            {
-              seller_email: "deleted@auctionmyplate.co.uk",
-            }
-          );
-        } catch (innerErr) {
-          console.error(
-            "⚠️ DELETE-ACCOUNT: Failed to anonymise plate",
-            plate.$id,
-            innerErr
-          );
+          await databases.updateDocument(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, listing.$id, {
+            seller_email: "deleted@auctionmycamera.co.uk",
+          });
+        } catch (innerErrA) {
+          // If schema doesn't allow seller_email, try sellerEmail
+          try {
+            await databases.updateDocument(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, listing.$id, {
+              sellerEmail: "deleted@auctionmycamera.co.uk",
+            });
+          } catch (innerErrB) {
+            console.error(
+              "⚠️ DELETE-ACCOUNT: Failed to anonymise listing",
+              listing.$id,
+              { innerErrA, innerErrB }
+            );
+          }
         }
       }
     } catch (err) {
-      console.error(
-        "⚠️ DELETE-ACCOUNT: Failed to fetch historical plates for anonymisation",
-        err
-      );
-      // Not fatal – continue
+      console.error("⚠️ DELETE-ACCOUNT: Failed anonymisation step (non-fatal)", err);
     }
 
     // -----------------------------
@@ -300,9 +323,6 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // -----------------------------
-    // 7) Done
-    // -----------------------------
     return NextResponse.json({ ok: true }, { status: 200 });
   } catch (err: any) {
     console.error("❌ DELETE-ACCOUNT: Unhandled error", err);

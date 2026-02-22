@@ -16,14 +16,12 @@ const apiKey = process.env.APPWRITE_API_KEY!;
 const LISTINGS_DB_ID =
   process.env.APPWRITE_LISTINGS_DATABASE_ID ||
   process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID ||
-  process.env.NEXT_PUBLIC_APPWRITE_PLATES_DATABASE_ID || // fallback
   "";
 
 const LISTINGS_COLLECTION_ID =
   process.env.APPWRITE_LISTINGS_COLLECTION_ID ||
   process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_COLLECTION_ID ||
-  process.env.NEXT_PUBLIC_APPWRITE_PLATES_COLLECTION_ID || // fallback
-  "plates";
+  "";
 
 const SITE_URL = (process.env.NEXT_PUBLIC_SITE_URL || "https://auctionmycamera.co.uk").replace(
   /\/$/,
