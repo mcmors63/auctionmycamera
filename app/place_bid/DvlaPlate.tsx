@@ -1,15 +1,11 @@
-// app/place_bid/DvlaPlate.tsx
 "use client";
 
 import React from "react";
-import PlatePreviewStatic from "../components/ui/PlatePreviewStatic";
+import PlatePreviewStatic from "@/components/ui/PlatePreviewStatic";
 
 type DvlaPlateProps = {
-  // Accept either "registration" or "reg" so it's flexible
   registration?: string;
   reg?: string;
-
-  // What callers can pass in:
   size?: "standard" | "card" | "large";
 };
 
@@ -24,13 +20,12 @@ export default function DvlaPlate({
 }: DvlaPlateProps) {
   const actualReg = normalizeReg((registration ?? reg ?? "") || "");
 
-  // Map sizes to sensible pixel dimensions for your static preview
   const dims =
     size === "large"
       ? { width: 420, height: 95 }
       : size === "card"
       ? { width: 300, height: 70 }
-      : { width: 360, height: 80 }; // standard
+      : { width: 360, height: 80 };
 
   return (
     <PlatePreviewStatic
