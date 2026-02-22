@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import Script from "next/script";
@@ -40,7 +40,6 @@ export default function LoginClient() {
   // ---------------------------------
   // Existing session detection
   // ---------------------------------
-  const [sessionChecked, setSessionChecked] = useState(false);
   const [hasActiveSession, setHasActiveSession] = useState(false);
   const [activeEmail, setActiveEmail] = useState<string>("");
 
@@ -58,7 +57,7 @@ export default function LoginClient() {
   // Turnstile state
   // ---------------------------------
   const TURNSTILE_SITE_KEY = (process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY || "").trim();
-  const canUseTurnstile = useMemo(() => !!TURNSTILE_SITE_KEY, [TURNSTILE_SITE_KEY]);
+  const canUseTurnstile = !!TURNSTILE_SITE_KEY;
 
   const turnstileElRef = useRef<HTMLDivElement | null>(null);
   const turnstileWidgetIdRef = useRef<string | null>(null);
@@ -87,6 +86,7 @@ export default function LoginClient() {
       try {
         const me: any = await account.get();
         if (cancelled) return;
+
         if (me?.email) {
           setHasActiveSession(true);
           setActiveEmail(String(me.email));
@@ -98,8 +98,6 @@ export default function LoginClient() {
         if (cancelled) return;
         setHasActiveSession(false);
         setActiveEmail("");
-      } finally {
-        if (!cancelled) setSessionChecked(true);
       }
     };
 
@@ -279,7 +277,9 @@ export default function LoginClient() {
     if (remainingMs <= 0) return null;
 
     const remainingMin = Math.ceil(remainingMs / 60000);
-    return `Login is locked on this device for about ${remainingMin} minute${remainingMin === 1 ? "" : "s"}.`;
+    return `Login is locked on this device for about ${remainingMin} minute${
+      remainingMin === 1 ? "" : "s"
+    }.`;
   };
 
   // ---------------------------------
@@ -306,7 +306,7 @@ export default function LoginClient() {
     try {
       setSubmitting(true);
 
-      // ✅ FIX: if a session exists, clear it first so Appwrite doesn't throw
+      // ✅ If a session exists, clear it first so Appwrite doesn't throw
       try {
         await account.deleteSession("current");
       } catch {
@@ -325,9 +325,7 @@ export default function LoginClient() {
       resetTurnstile();
 
       const msg =
-        err?.message?.toLowerCase?.() ??
-        err?.toString?.().toLowerCase?.() ??
-        "";
+        err?.message?.toLowerCase?.() ?? err?.toString?.().toLowerCase?.() ?? "";
 
       if (msg.includes("invalid credentials") || msg.includes("invalid email")) {
         recordFailedAttempt();
@@ -373,9 +371,11 @@ export default function LoginClient() {
         )}
 
         {/* If already logged in, show clear options */}
-        {sessionChecked && hasActiveSession ? (
+        {hasActiveSession ? (
           <div className="mb-4 rounded-md border border-sky-700/50 bg-sky-900/20 px-3 py-3 text-xs text-sky-100">
-            <p className="font-semibold">You’re already logged in{activeEmail ? ` as ${activeEmail}` : ""}.</p>
+            <p className="font-semibold">
+              You’re already logged in{activeEmail ? ` as ${activeEmail}` : ""}.
+            </p>
             <div className="mt-3 flex flex-wrap gap-2">
               <button
                 type="button"
@@ -423,7 +423,8 @@ export default function LoginClient() {
           </div>
 
           <div className="flex justify-between items-center text-[11px] text-gray-400">
-            <Link href="/reset-password" className="text-sky-300 hover:underline">
+            {/* ✅ Correct entry point for password recovery */}
+            <Link href="/forgot-password" className="text-sky-300 hover:underline">
               Forgot your password?
             </Link>
             {attempts > 0 && attempts < 3 && <span>Failed attempts: {attempts} / 3</span>}

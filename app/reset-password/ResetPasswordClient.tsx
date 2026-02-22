@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Client, Account } from "appwrite";
 import { useSearchParams, useRouter } from "next/navigation";
 import { XCircleIcon, CheckCircleIcon } from "@heroicons/react/24/solid";
@@ -11,56 +11,61 @@ const client = new Client()
 
 const account = new Account(client);
 
+type Status = "ready" | "success" | "error";
+
 export default function ResetPasswordClient() {
   const searchParams = useSearchParams();
   const router = useRouter();
 
-  const [uid, setUid] = useState<string | null>(null);
-  const [secret, setSecret] = useState<string | null>(null);
+  const userId = useMemo(() => searchParams.get("userId"), [searchParams]);
+  const secret = useMemo(() => searchParams.get("secret"), [searchParams]);
 
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
 
-  const [status, setStatus] = useState<"ready" | "success" | "error">("ready");
+  const [status, setStatus] = useState<Status>("ready");
   const [message, setMessage] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  // Get URL params
+  // Validate URL params on load
   useEffect(() => {
-    const userId = searchParams.get("userId");
-    const sec = searchParams.get("secret");
-
-    if (!userId || !sec) {
+    if (!userId || !secret) {
       setStatus("error");
       setMessage("Invalid or expired reset link.");
       return;
     }
-
-    setUid(userId);
-    setSecret(sec);
-  }, [searchParams]);
+    setStatus("ready");
+    setMessage(null);
+  }, [userId, secret]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setMessage(null);
 
+    if (!userId || !secret) {
+      setStatus("error");
+      setMessage("Invalid or expired reset link.");
+      return;
+    }
+
     if (password.length < 8) {
-      return setMessage("Password must be at least 8 characters.");
+      setMessage("Password must be at least 8 characters.");
+      return;
     }
 
     if (password !== confirm) {
-      return setMessage("Passwords do not match.");
+      setMessage("Passwords do not match.");
+      return;
     }
 
     try {
       setLoading(true);
-
-      await account.updateRecovery(uid!, secret!, password);
+      await account.updateRecovery(userId, secret, password);
       setStatus("success");
-      setMessage("Password reset successfully.");
-    } catch (err: any) {
+      setMessage("Password reset successfully. You can now log in.");
+    } catch {
       setStatus("error");
-      setMessage("Reset failed. The link may be expired.");
+      setMessage("Reset failed. The link may be expired. Please request a new one.");
     } finally {
       setLoading(false);
     }
@@ -71,20 +76,23 @@ export default function ResetPasswordClient() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50 p-6">
       <div className="bg-white rounded-xl shadow-lg w-full max-w-md p-8 text-center">
-        <h1 className="text-2xl font-bold mb-4">Reset Password</h1>
+        <h1 className="text-2xl font-bold mb-2">Reset Password</h1>
+        <p className="text-sm text-gray-600 mb-6">
+          Choose a new password for your AuctionMyCamera account.
+        </p>
 
         {/* ERROR */}
         {status === "error" && (
-          <div className="flex items-center bg-red-100 text-red-700 p-3 rounded-md mb-4">
-            <XCircleIcon className="w-6 h-6 mr-2" />
+          <div className="flex items-center bg-red-100 text-red-700 p-3 rounded-md mb-4 text-left">
+            <XCircleIcon className="w-6 h-6 mr-2 flex-shrink-0" />
             <span>{message}</span>
           </div>
         )}
 
         {/* SUCCESS */}
         {status === "success" && (
-          <div className="flex items-center bg-green-100 text-green-700 p-3 rounded-md mb-4">
-            <CheckCircleIcon className="w-6 h-6 mr-2" />
+          <div className="flex items-center bg-green-100 text-green-700 p-3 rounded-md mb-4 text-left">
+            <CheckCircleIcon className="w-6 h-6 mr-2 flex-shrink-0" />
             <span>{message}</span>
           </div>
         )}
@@ -93,10 +101,14 @@ export default function ResetPasswordClient() {
         {showForm && (
           <form onSubmit={handleSubmit} className="space-y-4 text-left">
             <div>
-              <label className="text-sm font-medium">New Password</label>
+              <label className="text-sm font-medium" htmlFor="newPassword">
+                New Password
+              </label>
               <input
+                id="newPassword"
                 type="password"
                 required
+                autoComplete="new-password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 className="border w-full p-2 rounded-md mt-1"
@@ -104,20 +116,28 @@ export default function ResetPasswordClient() {
             </div>
 
             <div>
-              <label className="text-sm font-medium">Confirm Password</label>
+              <label className="text-sm font-medium" htmlFor="confirmPassword">
+                Confirm Password
+              </label>
               <input
+                id="confirmPassword"
                 type="password"
                 required
+                autoComplete="new-password"
                 value={confirm}
                 onChange={(e) => setConfirm(e.target.value)}
                 className="border w-full p-2 rounded-md mt-1"
               />
             </div>
 
+            {message && status === "ready" && (
+              <p className="text-sm text-red-600">{message}</p>
+            )}
+
             <button
               type="submit"
               disabled={loading}
-              className="w-full bg-yellow-500 hover:bg-yellow-600 text-white font-bold py-2 rounded-md"
+              className="w-full bg-slate-900 hover:bg-slate-800 disabled:opacity-60 disabled:hover:bg-slate-900 text-white font-bold py-2 rounded-md"
             >
               {loading ? "Resetting..." : "Reset Password"}
             </button>
@@ -127,7 +147,7 @@ export default function ResetPasswordClient() {
         {status === "success" && (
           <button
             onClick={() => router.push("/login")}
-            className="mt-4 w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 rounded-md"
+            className="mt-4 w-full bg-blue-700 hover:bg-blue-800 text-white font-semibold py-2 rounded-md"
           >
             Go to Login
           </button>
@@ -136,7 +156,7 @@ export default function ResetPasswordClient() {
         {status === "error" && (
           <button
             onClick={() => router.push("/forgot-password")}
-            className="mt-4 w-full bg-yellow-500 hover:bg-yellow-600 text-white font-semibold py-2 rounded-md"
+            className="mt-4 w-full bg-slate-900 hover:bg-slate-800 text-white font-semibold py-2 rounded-md"
           >
             Request New Reset Link
           </button>

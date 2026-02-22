@@ -3,36 +3,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { Client, Databases } from "node-appwrite";
 import nodemailer from "nodemailer";
 import { getAuctionWindow } from "@/lib/getAuctionWindow";
+import { requireAdmin } from "@/lib/requireAdmin";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 // -----------------------------
-// SIMPLE ADMIN GATE (minimal + safe)
-// Set APPROVE_LISTING_SECRET in env and send:
-// x-admin-secret: <value>
-// -----------------------------
-const APPROVE_LISTING_SECRET = (process.env.APPROVE_LISTING_SECRET || "").trim();
-
-function getAdminSecret(req: NextRequest) {
-  return (req.headers.get("x-admin-secret") || "").trim();
-}
-
-function requireAdmin(req: NextRequest) {
-  if (!APPROVE_LISTING_SECRET) {
-    // Fail closed in production
-    const isProd = process.env.NODE_ENV === "production" || process.env.VERCEL_ENV === "production";
-    if (isProd) return false;
-
-    // In dev, allow if secret not set (so you don’t brick yourself locally)
-    return true;
-  }
-  return getAdminSecret(req) === APPROVE_LISTING_SECRET;
-}
-
-// -----------------------------
-// APPWRITE CONFIG (server-safe)
-// Prefer server envs first, then NEXT_PUBLIC fallbacks (non-breaking).
+// APPWRITE CONFIG (server-safe for DB writes)
 // -----------------------------
 const endpoint =
   process.env.APPWRITE_ENDPOINT ||
@@ -66,7 +43,6 @@ const SITE_URL = (process.env.NEXT_PUBLIC_SITE_URL || "https://auctionmycamera.c
 // -----------------------------
 function getDatabases() {
   if (!endpoint || !projectId || !apiKey) return null;
-
   const client = new Client().setEndpoint(endpoint).setProject(projectId).setKey(apiKey);
   return new Databases(client);
 }
@@ -103,11 +79,13 @@ function fmtLondon(d: Date) {
 
 // -----------------------------
 // POST /api/approve-listing
+// Body: { listingId, starting_price, reserve_price, buy_now* }
 // -----------------------------
 export async function POST(req: NextRequest) {
   try {
-    // ✅ Security gate
-    if (!requireAdmin(req)) {
+    // ✅ Real admin gate: session-based
+    const admin = await requireAdmin(req);
+    if (!admin.ok) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
@@ -137,7 +115,6 @@ export async function POST(req: NextRequest) {
     }
 
     const listingId = body?.listingId;
-
     if (!listingId) {
       return NextResponse.json({ error: "listingId required" }, { status: 400 });
     }
@@ -159,9 +136,7 @@ export async function POST(req: NextRequest) {
     const start = useCurrentUpcoming ? currentStart : nextStart;
     const end = useCurrentUpcoming ? currentEnd : nextEnd;
 
-    // Build a schema-tolerant update payload:
-    // Only write fields that exist on the document to avoid "Unknown attribute" errors,
-    // and NEVER overwrite buy now to 0 just because the admin UI didn't send it.
+    // Schema-tolerant update payload
     const updateData: Record<string, any> = {
       status: "queued",
       auction_start: start.toISOString(),
@@ -188,7 +163,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // buy now (support both schemas, and only write if we actually have a value OR the field exists)
+    // buy now (only write if field exists)
     const incomingBuyNow =
       body.buy_now ??
       body.buy_now_price ??
@@ -251,10 +226,7 @@ export async function POST(req: NextRequest) {
         const itemTitle =
           String(listing.item_title || listing.title || "").trim() ||
           [listing.brand, listing.model].filter(Boolean).join(" ").trim() ||
-          String(listing.registration || "").trim() ||
           "your item";
-
-        const safeItemTitle = escapeHtml(itemTitle);
 
         await transporter.sendMail({
           from: `"AuctionMyCamera" <${fromEmail}>`,
@@ -264,7 +236,7 @@ export async function POST(req: NextRequest) {
           html: `
             <div style="font-family: Arial, sans-serif; line-height: 1.5;">
               <p>Good news!</p>
-              <p>Your listing <strong>${safeItemTitle}</strong> has been approved and queued for auction.</p>
+              <p>Your listing <strong>${escapeHtml(itemTitle)}</strong> has been approved and queued for auction.</p>
               <p>
                 <strong>Start (UK time):</strong> ${escapeHtml(fmtLondon(start))}<br/>
                 <strong>End (UK time):</strong> ${escapeHtml(fmtLondon(end))}

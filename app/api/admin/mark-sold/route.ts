@@ -2,13 +2,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { Client, Databases, ID } from "node-appwrite";
 import nodemailer from "nodemailer";
+import { requireAdmin } from "@/lib/requireAdmin";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 // -----------------------------
-// ENV (server-side)
-// Prefer server envs first, then public fallbacks (non-breaking)
+// ENV (server-side for DB writes)
 // -----------------------------
 const endpoint =
   process.env.APPWRITE_ENDPOINT ||
@@ -22,10 +22,7 @@ const projectId =
 
 const apiKey = process.env.APPWRITE_API_KEY || "";
 
-// Optional: if set, require ?token=... or header x-admin-token
-const ADMIN_MARK_SOLD_SECRET = (process.env.ADMIN_MARK_SOLD_SECRET || "").trim();
-
-// Listings (camera first, legacy fallback)
+// Listings
 const LISTINGS_DB_ID =
   process.env.APPWRITE_LISTINGS_DATABASE_ID ||
   process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID ||
@@ -38,7 +35,7 @@ const LISTINGS_COLLECTION_ID =
   process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_COLLECTION_ID ||
   "listings";
 
-// Transactions (camera first, legacy fallback)
+// Transactions
 const TX_DB_ID =
   process.env.APPWRITE_TRANSACTIONS_DATABASE_ID ||
   process.env.NEXT_PUBLIC_APPWRITE_TRANSACTIONS_DATABASE_ID ||
@@ -55,17 +52,14 @@ const TX_COLLECTION_ID =
 
 const SITE_URL = (process.env.NEXT_PUBLIC_SITE_URL || "https://auctionmycamera.co.uk").replace(/\/+$/, "");
 
-// Admin email (for summary notifications)
-const ADMIN_EMAIL = (process.env.NEXT_PUBLIC_ADMIN_EMAIL || "admin@auctionmycamera.co.uk")
-  .trim()
-  .toLowerCase();
+// Admin email (summary notifications)
+const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || "admin@auctionmycamera.co.uk").trim().toLowerCase();
 
 // -----------------------------
 // Helpers
 // -----------------------------
 function getServerDatabases() {
   if (!endpoint || !projectId || !apiKey) return null;
-
   const client = new Client().setEndpoint(endpoint).setProject(projectId).setKey(apiKey);
   return new Databases(client);
 }
@@ -118,9 +112,6 @@ function escapeHtml(input: string) {
     .replace(/'/g, "&#039;");
 }
 
-/**
- * Create a document but automatically remove unknown attributes if the schema is stricter than expected.
- */
 async function createDocSchemaTolerant(
   databases: Databases,
   dbId: string,
@@ -143,7 +134,6 @@ async function createDocSchemaTolerant(
     }
   }
 
-  // Minimal payload last resort
   return await databases.createDocument(dbId, colId, ID.unique(), {
     listing_id: payload.listing_id,
     seller_email: payload.seller_email,
@@ -154,9 +144,6 @@ async function createDocSchemaTolerant(
   });
 }
 
-/**
- * Update a document but remove unknown attributes if schema rejects them.
- */
 async function updateDocSchemaTolerant(
   databases: Databases,
   dbId: string,
@@ -180,7 +167,6 @@ async function updateDocSchemaTolerant(
     }
   }
 
-  // Minimal status-only update
   const minimal: Record<string, any> = {};
   if (has(payload, "status")) minimal.status = payload.status;
   return await databases.updateDocument(dbId, colId, docId, minimal);
@@ -188,30 +174,22 @@ async function updateDocSchemaTolerant(
 
 // -----------------------------
 // POST /api/admin/mark-sold
-// Body: { plateId, finalPrice, buyerEmail }
-// (AdminClient still sends plateId — we accept it for compatibility.)
-// Optional auth: if ADMIN_MARK_SOLD_SECRET is set, require token.
+// Body: { plateId OR listingId, finalPrice, buyerEmail }
 // -----------------------------
 export async function POST(req: NextRequest) {
   try {
+    // ✅ Real admin gate: session-based
+    const admin = await requireAdmin(req);
+    if (!admin.ok) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
     if (!endpoint || !projectId || !apiKey) {
       return NextResponse.json({ error: "Server Appwrite config missing." }, { status: 500 });
     }
 
     if (!LISTINGS_DB_ID || !LISTINGS_COLLECTION_ID || !TX_DB_ID || !TX_COLLECTION_ID) {
       return NextResponse.json({ error: "Server DB configuration incomplete." }, { status: 500 });
-    }
-
-    // Optional protection: enable by setting ADMIN_MARK_SOLD_SECRET in env
-    if (ADMIN_MARK_SOLD_SECRET) {
-      const { searchParams } = new URL(req.url);
-      const tokenFromQuery = (searchParams.get("token") || "").trim();
-      const tokenFromHeader = (req.headers.get("x-admin-token") || "").trim();
-      const token = tokenFromQuery || tokenFromHeader;
-
-      if (token !== ADMIN_MARK_SOLD_SECRET) {
-        return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
-      }
     }
 
     let body: any;
@@ -242,7 +220,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Server Appwrite client could not be initialised." }, { status: 500 });
     }
 
-    // 1) Load the listing
+    // 1) Load listing
     const listing: any = await databases.getDocument(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, listingId);
 
     const sellerEmail = String(listing?.seller_email || listing?.sellerEmail || "").trim();
@@ -255,16 +233,14 @@ export async function POST(req: NextRequest) {
       [listing?.brand, listing?.model].filter(Boolean).join(" ").trim() ||
       "your item";
 
-    // 2) Money: commission + payout (simple camera defaults)
+    // 2) Simple money defaults
     const commissionRateRaw =
       typeof listing?.commission_rate === "number" ? listing.commission_rate : undefined;
-
     const listingFeeRaw =
       typeof listing?.listing_fee === "number" ? listing.listing_fee : undefined;
 
     const commissionRate =
       typeof commissionRateRaw === "number" && commissionRateRaw >= 0 ? commissionRateRaw : 10;
-
     const listingFee =
       typeof listingFeeRaw === "number" && listingFeeRaw >= 0 ? listingFeeRaw : 0;
 
@@ -273,7 +249,7 @@ export async function POST(req: NextRequest) {
 
     const nowIso = new Date().toISOString();
 
-    // 3) Create transaction (schema-tolerant)
+    // 3) Create transaction
     const txPayload: Record<string, any> = {
       listing_id: String(listing.$id),
       seller_email: sellerEmail,
@@ -294,7 +270,7 @@ export async function POST(req: NextRequest) {
 
     const txDoc = await createDocSchemaTolerant(databases, TX_DB_ID, TX_COLLECTION_ID, txPayload);
 
-    // 4) Update listing as sold (schema-tolerant)
+    // 4) Update listing as sold
     const listingUpdate: Record<string, any> = { status: "sold" };
 
     if (has(listing, "current_bid")) listingUpdate.current_bid = salePrice;
@@ -302,9 +278,15 @@ export async function POST(req: NextRequest) {
     if (has(listing, "sold_price")) listingUpdate.sold_price = salePrice;
     if (has(listing, "soldPrice")) listingUpdate.soldPrice = salePrice;
 
-    await updateDocSchemaTolerant(databases, LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, String(listing.$id), listingUpdate);
+    await updateDocSchemaTolerant(
+      databases,
+      LISTINGS_DB_ID,
+      LISTINGS_COLLECTION_ID,
+      String(listing.$id),
+      listingUpdate
+    );
 
-    // 5) Emails (best-effort, no crashes)
+    // 5) Emails (best-effort)
     try {
       const mailer = getMailer();
       if (mailer) {
@@ -314,7 +296,6 @@ export async function POST(req: NextRequest) {
         const salePriceText = salePrice.toLocaleString("en-GB");
         const payoutText = sellerPayout.toLocaleString("en-GB");
 
-        // Seller email
         await transporter.sendMail({
           from: `"AuctionMyCamera" <${smtpUser || fromEmail}>`,
           replyTo,
@@ -339,7 +320,6 @@ export async function POST(req: NextRequest) {
           `,
         });
 
-        // Buyer email (only if supplied)
         if (buyerEmail) {
           await transporter.sendMail({
             from: `"AuctionMyCamera" <${smtpUser || fromEmail}>`,
@@ -352,9 +332,7 @@ export async function POST(req: NextRequest) {
                 <p style="font-size:15px; color:#333; line-height:1.5;">
                   Your purchase of <strong>${escapeHtml(itemTitle)}</strong> has been recorded at <strong>£${salePriceText}</strong>.
                 </p>
-                <p style="font-size:14px; color:#555;">
-                  If you need help, reply to this email.
-                </p>
+                <p style="font-size:14px; color:#555;">If you need help, reply to this email.</p>
                 <hr style="margin:20px 0;border:none;border-top:1px solid #ddd;" />
                 <p style="font-size:12px; color:#777; margin:0;">AuctionMyCamera © ${new Date().getFullYear()}</p>
               </div>
@@ -362,7 +340,6 @@ export async function POST(req: NextRequest) {
           });
         }
 
-        // Admin summary (optional)
         if (ADMIN_EMAIL) {
           await transporter.sendMail({
             from: `"AuctionMyCamera" <${smtpUser || fromEmail}>`,

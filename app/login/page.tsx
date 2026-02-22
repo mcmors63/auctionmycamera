@@ -5,7 +5,7 @@ import LoginClient from "./LoginClient";
 export const metadata: Metadata = {
   title: "Login | AuctionMyCamera",
   description: "Log in to manage your auctions and listings.",
-  robots: { index: false, follow: true },
+  robots: { index: false, follow: false },
 };
 
 export default function LoginPage() {
