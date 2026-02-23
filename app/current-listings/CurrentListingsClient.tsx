@@ -1,6 +1,6 @@
+// app/current-listings/CurrentListingsClient.tsx
 "use client";
 
-// app/current-listings/CurrentListingsClient.tsx
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import ListingCard from "./ListingCard";
@@ -41,6 +41,7 @@ type Props = {
 };
 
 type Tab = "live" | "soon";
+type SortKey = "ending" | "newest" | "az" | "priceLow" | "priceHigh";
 
 function normalizeText(input: string) {
   return (input || "").toLowerCase().replace(/\s+/g, " ").trim();
@@ -101,17 +102,35 @@ function priceForSort(l: ListingLike) {
   return 0;
 }
 
+function safeTime(value?: string | null) {
+  if (!value) return 0;
+  const t = Date.parse(value);
+  return Number.isFinite(t) ? t : 0;
+}
+
 function timeForEndingSort(l: ListingLike, tab: Tab) {
   if (tab === "live") {
-    return Date.parse(l.auction_end ?? l.end_time ?? l.auction_start ?? l.start_time ?? l.$createdAt ?? "");
+    return (
+      safeTime(l.auction_end) ||
+      safeTime(l.end_time) ||
+      safeTime(l.auction_start) ||
+      safeTime(l.start_time) ||
+      safeTime(l.$createdAt)
+    );
   }
-  return Date.parse(l.auction_start ?? l.start_time ?? l.auction_end ?? l.end_time ?? l.$createdAt ?? "");
+  return (
+    safeTime(l.auction_start) ||
+    safeTime(l.start_time) ||
+    safeTime(l.auction_end) ||
+    safeTime(l.end_time) ||
+    safeTime(l.$createdAt)
+  );
 }
 
 export default function CurrentListingsClient({ initialLive, initialSoon }: Props) {
   const [tab, setTab] = useState<Tab>("live");
   const [search, setSearch] = useState("");
-  const [sort, setSort] = useState("ending");
+  const [sort, setSort] = useState<SortKey>("ending");
 
   const source = tab === "live" ? initialLive : initialSoon;
 
@@ -127,15 +146,11 @@ export default function CurrentListingsClient({ initialLive, initialSoon }: Prop
     if (q) results = results.filter((l) => getSearchHaystack(l).includes(q));
 
     if (sort === "ending") {
-      results.sort((a, b) => {
-        const aTime = timeForEndingSort(a, tab);
-        const bTime = timeForEndingSort(b, tab);
-        return (Number.isFinite(aTime) ? aTime : 0) - (Number.isFinite(bTime) ? bTime : 0);
-      });
+      results.sort((a, b) => timeForEndingSort(a, tab) - timeForEndingSort(b, tab));
     }
 
     if (sort === "newest") {
-      results.sort((a, b) => Date.parse(b.$createdAt || "") - Date.parse(a.$createdAt || ""));
+      results.sort((a, b) => safeTime(b.$createdAt) - safeTime(a.$createdAt));
     }
 
     if (sort === "az") {
@@ -196,7 +211,11 @@ export default function CurrentListingsClient({ initialLive, initialSoon }: Prop
 
           {/* Tabs */}
           <div className="mt-6 flex flex-wrap gap-3">
-            <TabButton active={tab === "live"} onClick={() => setTab("live")} label={`Live (${counts.live})`} />
+            <TabButton
+              active={tab === "live"}
+              onClick={() => setTab("live")}
+              label={`Live (${counts.live})`}
+            />
             <TabButton
               active={tab === "soon"}
               onClick={() => setTab("soon")}
@@ -226,7 +245,7 @@ export default function CurrentListingsClient({ initialLive, initialSoon }: Prop
                 </label>
                 <select
                   value={sort}
-                  onChange={(e) => setSort(e.target.value)}
+                  onChange={(e) => setSort(e.target.value as SortKey)}
                   className="w-full px-4 py-2.5 rounded-xl bg-background border border-border text-sm focus:outline-none focus:ring-2 focus:ring-ring"
                 >
                   <option value="ending">{tab === "live" ? "Ending soon" : "Starting soon"}</option>
@@ -246,6 +265,7 @@ export default function CurrentListingsClient({ initialLive, initialSoon }: Prop
 
               {hasActiveFilters ? (
                 <button
+                  type="button"
                   onClick={() => {
                     setSearch("");
                     setSort("ending");
@@ -323,7 +343,9 @@ function TabButton({
 }) {
   return (
     <button
+      type="button"
       onClick={onClick}
+      aria-pressed={active}
       className={[
         "px-4 py-2 rounded-full text-sm font-semibold border transition",
         active ? "border-primary/40 bg-primary/10 text-foreground" : "border-border bg-card text-muted-foreground",

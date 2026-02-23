@@ -6,7 +6,10 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const WEBHOOK_SECRET = (process.env.APPWRITE_WEBHOOK_SECRET || "").trim();
-const ADMIN_EMAIL = "admin@auctionmyplate.co.uk";
+
+// ✅ Camera branding + admin inbox
+const ADMIN_EMAIL = "admin@auctionmycamera.co.uk";
+const BRAND_NAME = "AuctionMyCamera";
 
 function requiredEnv(name: string) {
   const v = (process.env[name] || "").trim();
@@ -27,7 +30,10 @@ export async function POST(req: Request) {
     }
 
     if (!secret || secret !== WEBHOOK_SECRET) {
-      return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
+      return NextResponse.json(
+        { ok: false, error: "Unauthorized" },
+        { status: 401 }
+      );
     }
 
     const body = await req.json().catch(() => null);
@@ -36,12 +42,14 @@ export async function POST(req: Request) {
     const userId = String((payload as any)?.$id || (payload as any)?.id || "").trim();
     const email = String((payload as any)?.email || "").trim();
     const name = String((payload as any)?.name || "").trim();
-    const createdAt = String((payload as any)?.$createdAt || (payload as any)?.createdAt || "").trim();
+    const createdAt = String(
+      (payload as any)?.$createdAt || (payload as any)?.createdAt || ""
+    ).trim();
 
     const subject = `👤 New user registered${email ? `: ${email}` : ""}`;
 
     const textLines = [
-      "A new user has registered on AuctionMyPlate.",
+      `A new user has registered on ${BRAND_NAME}.`,
       "",
       `Email: ${email || "(missing)"}`,
       `Name: ${name || "(missing)"}`,
@@ -52,9 +60,9 @@ export async function POST(req: Request) {
       `IP (x-forwarded-for): ${req.headers.get("x-forwarded-for") || "(missing)"}`,
     ];
 
-    const host = requiredEnv("SMTP_HOST"); // smtp.stackmail.com
-    const port = Number(requiredEnv("SMTP_PORT")); // 465
-    const secure = port === 465; // true for 465
+    const host = requiredEnv("SMTP_HOST");
+    const port = Number(requiredEnv("SMTP_PORT"));
+    const secure = port === 465;
 
     const transporter = nodemailer.createTransport({
       host,
@@ -67,7 +75,7 @@ export async function POST(req: Request) {
     });
 
     await transporter.sendMail({
-      from: `"AuctionMyPlate" <${requiredEnv("SMTP_USER")}>`,
+      from: `"${BRAND_NAME}" <${requiredEnv("SMTP_USER")}>`,
       to: ADMIN_EMAIL,
       subject,
       text: textLines.join("\n"),

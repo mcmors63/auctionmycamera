@@ -109,7 +109,7 @@ async function findProfileByEmail(databases: Databases, email: string) {
 // -----------------------------
 // POST /api/stripe/list-payment-methods
 // Auth: Authorization: Bearer <Appwrite JWT>
-// Returns: { ok, paymentMethods: Array<{id, brand, last4, exp_month, exp_year, isDefault}> }
+// Returns: { ok, paymentMethods: [{id,brand,last4,exp_month,exp_year,isDefault}] }
 // -----------------------------
 export async function POST(req: Request) {
   try {
@@ -120,7 +120,6 @@ export async function POST(req: Request) {
       );
     }
 
-    // ✅ AUTH REQUIRED
     const auth = await requireAuthedUser(req);
     if (!auth.ok) return auth.res;
 
@@ -181,7 +180,6 @@ export async function POST(req: Request) {
       else if (defPm && typeof defPm === "object") defaultPmId = defPm.id;
     }
 
-    // List cards
     const pmList = await stripe.paymentMethods.list({
       customer: customerIdUsed,
       type: "card",

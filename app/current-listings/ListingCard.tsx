@@ -128,13 +128,18 @@ export default function ListingCard({ listing }: Props) {
     max_aperture,
   } = listing;
 
+  // ⚠️ Keep these paths as-is for now (we’ll verify with searches)
   const listingUrl = `/listing/${$id}`;
 
   const lowerStatus = String(status || "").toLowerCase();
   const saleStatusLower = String(sale_status || "").toLowerCase();
 
-  const isLiveStatus = lowerStatus === "live";
-  const isQueuedStatus = lowerStatus === "queued";
+  // Be tolerant to common status naming across cloned projects
+  const LIVE_STATUSES = new Set(["live", "active"]);
+  const QUEUED_STATUSES = new Set(["queued", "upcoming", "pending"]);
+
+  const isLiveStatus = LIVE_STATUSES.has(lowerStatus);
+  const isQueuedStatus = QUEUED_STATUSES.has(lowerStatus);
 
   const isSold =
     lowerStatus === "sold" ||
@@ -268,7 +273,7 @@ export default function ListingCard({ listing }: Props) {
             ) : isLive ? (
               <AuctionTimer mode="live" endTime={rawEnd ?? undefined} />
             ) : (
-              <AuctionTimer mode="coming" endTime={rawStart ?? undefined} />
+              <AuctionTimer mode="coming" />
             )}
           </div>
         </div>
@@ -282,7 +287,7 @@ export default function ListingCard({ listing }: Props) {
             ) : (
               <>
                 <p className="mt-1 text-lg font-extrabold text-primary">
-                  £{priceToShow.toLocaleString("en-GB")}
+                  £{Number(priceToShow || 0).toLocaleString("en-GB")}
                 </p>
                 {priceSubLabel ? <p className="mt-1 text-[11px] text-muted-foreground">{priceSubLabel}</p> : null}
               </>
