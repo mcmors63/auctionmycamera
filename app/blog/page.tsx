@@ -12,20 +12,48 @@ export const runtime = "nodejs";
  */
 export const revalidate = 300;
 
-const endpoint = process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT!;
-const projectId = process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID!;
-const apiKey = process.env.APPWRITE_API_KEY!;
+function normalizeBaseUrl(input: string) {
+  const trimmed = (input || "").trim();
+  if (!trimmed) return "";
+  return trimmed.replace(/\/+$/, "");
+}
 
+// ✅ Canonical base (must match site)
+const SITE_URL = normalizeBaseUrl(
+  process.env.NEXT_PUBLIC_SITE_URL || "https://auctionmycamera.co.uk"
+);
+
+// ✅ Appwrite server-safe env (allow NEXT_PUBLIC fallback but prefer server vars)
+const endpoint =
+  process.env.APPWRITE_ENDPOINT || process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT || "";
+const projectId =
+  process.env.APPWRITE_PROJECT_ID || process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID || "";
+const apiKey = process.env.APPWRITE_API_KEY || "";
+
+// DB / Collection (keep your existing behavior)
 const DB_ID =
   process.env.APPWRITE_LISTINGS_DATABASE_ID ||
-  process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID!;
+  process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID ||
+  "";
+
 const BLOG_COLLECTION_ID =
   process.env.APPWRITE_BLOG_COLLECTION_ID || "blog_posts";
 
+// ✅ Absolute canonical for SEO clarity
+const blogCanonical = SITE_URL ? `${SITE_URL}/blog` : "/blog";
+
 export const metadata: Metadata = {
-  title: "Blog | Auction My Plate",
-  description: "Guides, tips and DVLA know-how for buying and selling cherished listings.",
-  alternates: { canonical: "/blog" },
+  title: "Blog | AuctionMyCamera",
+  description:
+    "Guides, tips and practical advice for buying and selling camera gear — lenses, bodies, accessories and more.",
+  alternates: { canonical: blogCanonical },
+  openGraph: {
+    title: "Blog | AuctionMyCamera",
+    description:
+      "Guides, tips and practical advice for buying and selling camera gear — lenses, bodies, accessories and more.",
+    url: blogCanonical,
+    type: "website",
+  },
 };
 
 type BlogPost = {
@@ -40,11 +68,13 @@ type BlogPost = {
 };
 
 async function getPosts(): Promise<BlogPost[]> {
-  const client = new Client()
-    .setEndpoint(endpoint)
-    .setProject(projectId)
-    .setKey(apiKey);
+  // Fail-safe: don't hard-crash render if env missing
+  if (!endpoint || !projectId || !apiKey || !DB_ID || !BLOG_COLLECTION_ID) {
+    console.error("[blog] Missing Appwrite env vars for blog index rendering.");
+    return [];
+  }
 
+  const client = new Client().setEndpoint(endpoint).setProject(projectId).setKey(apiKey);
   const databases = new Databases(client);
 
   const res = await databases.listDocuments(DB_ID, BLOG_COLLECTION_ID, [
@@ -66,17 +96,19 @@ export default async function BlogIndexPage() {
   }
 
   return (
-    <main className="min-h-screen bg-black text-gray-100 py-10 px-4">
-      <div className="max-w-4xl mx-auto bg-[#111111] rounded-2xl shadow-lg border border-yellow-700/60 p-8">
+    <main className="min-h-screen bg-white text-neutral-900 py-10 px-4">
+      <div className="max-w-4xl mx-auto bg-white rounded-2xl shadow-sm border border-neutral-200 p-8">
         <header className="mb-8">
-          <h1 className="text-3xl font-extrabold text-yellow-400 mb-2">Blog</h1>
-          <p className="text-sm text-gray-300">
-            Guides, tips and DVLA know-how for buying and selling cherished listings.
+          <h1 className="text-3xl font-extrabold tracking-tight text-neutral-900 mb-2">
+            Blog
+          </h1>
+          <p className="text-sm text-neutral-700">
+            Guides, tips and practical advice for buying and selling camera gear.
           </p>
         </header>
 
         {posts.length === 0 && (
-          <p className="text-gray-500 text-sm">
+          <p className="text-neutral-600 text-sm">
             No posts yet. Once you publish an article in Appwrite, it will appear here.
           </p>
         )}
@@ -98,11 +130,11 @@ export default async function BlogIndexPage() {
             return (
               <article
                 key={post.$id}
-                className="border border-neutral-700 rounded-xl p-5 bg-neutral-900 shadow-sm hover:shadow-md hover:shadow-yellow-500/10 transition-shadow"
+                className="border border-neutral-200 rounded-xl p-5 bg-white hover:shadow-sm transition-shadow"
               >
                 <div className="flex flex-col gap-3 md:flex-row md:items-start">
                   {post.imageUrl && (
-                    <div className="w-full md:w-40 h-28 overflow-hidden rounded-lg mb-2 md:mb-0 md:mr-4">
+                    <div className="w-full md:w-40 h-28 overflow-hidden rounded-lg mb-2 md:mb-0 md:mr-4 bg-neutral-100 border border-neutral-200">
                       {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img
                         src={post.imageUrl}
@@ -114,20 +146,17 @@ export default async function BlogIndexPage() {
                   )}
 
                   <div className="flex-1">
-                    <h2 className="text-xl font-semibold text-yellow-300 mb-1">
-                      <Link href={`/blog/${post.slug}`} className="hover:text-yellow-200">
+                    <h2 className="text-xl font-semibold text-neutral-900 mb-1">
+                      <Link href={`/blog/${post.slug}`} className="hover:underline">
                         {post.title}
                       </Link>
                     </h2>
 
-                    {dateLabel && <p className="text-xs text-gray-400 mb-2">{dateLabel}</p>}
+                    {dateLabel && <p className="text-xs text-neutral-500 mb-2">{dateLabel}</p>}
 
-                    {preview ? <p className="text-sm text-gray-200 mb-3">{preview}</p> : null}
+                    {preview ? <p className="text-sm text-neutral-800 mb-3">{preview}</p> : null}
 
-                    <Link
-                      href={`/blog/${post.slug}`}
-                      className="text-xs font-semibold text-yellow-400 hover:underline"
-                    >
+                    <Link href={`/blog/${post.slug}`} className="text-xs font-semibold hover:underline">
                       Read more →
                     </Link>
                   </div>

@@ -1,4 +1,6 @@
+// app/how-it-works/page.tsx
 import type { Metadata } from "next";
+import Link from "next/link";
 
 const SITE_URL = (process.env.NEXT_PUBLIC_SITE_URL || "https://auctionmycamera.co.uk").replace(
   /\/+$/,
@@ -6,6 +8,7 @@ const SITE_URL = (process.env.NEXT_PUBLIC_SITE_URL || "https://auctionmycamera.c
 );
 
 export const metadata: Metadata = {
+  metadataBase: new URL(SITE_URL),
   title: "How It Works | AuctionMyCamera",
   description:
     "Learn how AuctionMyCamera.co.uk works for buyers and sellers of cameras, lenses and photography gear. Auctions, bidding rules, fees, dispatch, buyer confirmation and what happens after you win.",
@@ -41,31 +44,29 @@ export default function HowItWorksPage() {
 
         {/* Quick actions */}
         <div className="flex flex-col sm:flex-row gap-3 mb-8">
-          <a
+          <Link
             href="/sell"
             className="inline-block bg-gold hover:opacity-90 text-black font-semibold px-5 py-3 rounded-md text-sm md:text-base text-center"
           >
             Sell your gear
-          </a>
-          <a
+          </Link>
+          <Link
             href="/dashboard"
             className="inline-block border border-gold/60 hover:border-gold text-gold hover:text-yellow-200 font-semibold px-5 py-3 rounded-md text-sm md:text-base text-center"
           >
             Go to dashboard
-          </a>
-          <a
+          </Link>
+          <Link
             href="/fees"
             className="inline-block border border-gray-700 hover:border-gray-500 text-gray-100 font-semibold px-5 py-3 rounded-md text-sm md:text-base text-center"
           >
             View fees
-          </a>
+          </Link>
         </div>
 
         {/* On-page navigation */}
         <nav className="mb-10 rounded-xl border border-gray-800 bg-black/30 p-4">
-          <p className="text-xs md:text-sm text-gray-300 mb-2 font-semibold">
-            Jump to:
-          </p>
+          <p className="text-xs md:text-sm text-gray-300 mb-2 font-semibold">Jump to:</p>
           <div className="flex flex-wrap gap-x-4 gap-y-2 text-sm md:text-base">
             <a href="#basics" className="text-gold hover:text-yellow-200 underline">
               The basics
@@ -107,14 +108,15 @@ export default function HowItWorksPage() {
               Auctions may use a <strong>soft close</strong> to reduce last-second sniping (details below).
             </li>
             <li>
-              Payments are processed securely via our payment provider (e.g. <strong>Stripe</strong>). We do not store full card details on our servers.
+              Payments are processed securely via our payment provider (e.g. <strong>Stripe</strong>). We do not store
+              full card details on our servers.
             </li>
           </ul>
 
           <div className="mt-4 rounded-xl border border-gray-800 bg-black/30 p-4">
             <p className="text-gray-200 text-sm md:text-base">
-              This marketplace is designed to reduce time-wasting and protect both parties: dispatch steps, tracking where available,
-              and buyer receipt confirmation are part of the flow.
+              This marketplace is designed to reduce time-wasting and protect both parties: dispatch steps, tracking
+              where available, and buyer receipt confirmation are part of the flow.
             </p>
           </div>
         </section>
@@ -126,16 +128,19 @@ export default function HowItWorksPage() {
               <strong>Create an account</strong> and verify your email. You can then browse and bid on live auctions.
             </li>
             <li>
-              <strong>Browse listings</strong> and read the condition notes carefully. Check photos, included accessories and any faults.
+              <strong>Browse listings</strong> and read the condition notes carefully. Check photos, included
+              accessories and any faults.
             </li>
             <li>
-              <strong>Place a bid.</strong> When you bid, you’re making a <strong>binding offer</strong> to buy if you win.
+              <strong>Place a bid.</strong> When you bid, you’re making a <strong>binding offer</strong> to buy if you
+              win.
             </li>
             <li>
               <strong>Watch for outbids</strong> and bid again if you want to stay in.
             </li>
             <li>
-              <strong>Pay securely</strong> when required by the flow (and/or via an authorised saved payment method where enabled).
+              <strong>Pay securely</strong> when required by the flow (and/or via an authorised saved payment method
+              where enabled).
             </li>
             <li>
               After dispatch, you <strong>confirm receipt</strong> in your dashboard so the seller can be paid.
@@ -144,7 +149,8 @@ export default function HowItWorksPage() {
 
           <div className="mt-5 rounded-xl border border-gray-800 bg-black/30 p-4">
             <p className="text-gray-200 text-sm md:text-base">
-              You’ll see any buyer-facing charges clearly (for example delivery cost where the listing includes shipping).
+              You’ll see any buyer-facing charges clearly (for example delivery cost where the listing includes
+              shipping).
             </p>
           </div>
         </section>
@@ -153,10 +159,12 @@ export default function HowItWorksPage() {
           <h2 className="text-xl font-semibold text-gold mb-3">3. Selling – Step by Step</h2>
           <ol className="list-decimal ml-5 space-y-3 text-sm md:text-base text-gray-100 leading-relaxed">
             <li>
-              <strong>Register and complete your profile.</strong> We need contact details for marketplace operations and support.
+              <strong>Register and complete your profile.</strong> We need contact details for marketplace operations
+              and support.
             </li>
             <li>
-              <strong>List your gear from your dashboard.</strong> Add accurate condition notes, clear photos, and what’s included.
+              <strong>List your gear from your dashboard.</strong> Add accurate condition notes, clear photos, and what’s
+              included.
             </li>
             <li>
               <strong>Approval where required.</strong> Some listings may be reviewed before going live.
@@ -165,13 +173,16 @@ export default function HowItWorksPage() {
               <strong>Auction goes live.</strong> Your listing runs for its scheduled window.
             </li>
             <li>
-              <strong>Sale completes.</strong> If you have a winning bid, the buyer completes payment and a deal is created.
+              <strong>Sale completes.</strong> If you have a winning bid, the buyer completes payment and a deal is
+              created.
             </li>
             <li>
-              <strong>Dispatch &amp; tracking.</strong> You dispatch within the stated window and add tracking/proof where available.
+              <strong>Dispatch &amp; tracking.</strong> You dispatch within the stated window and add tracking/proof
+              where available.
             </li>
             <li>
-              <strong>Payout.</strong> Once the buyer confirms receipt (or the platform flow completes per the Terms), payout is released minus any applicable fees.
+              <strong>Payout.</strong> Once the buyer confirms receipt (or the platform flow completes per the Terms),
+              payout is released minus any applicable fees.
             </li>
           </ol>
         </section>
@@ -183,13 +194,15 @@ export default function HowItWorksPage() {
           </p>
           <ul className="list-disc ml-5 space-y-2 text-sm md:text-base text-gray-100 leading-relaxed">
             <li>
-              <strong>Soft close:</strong> bids placed near the end may extend the end time to reduce last-second sniping.
+              <strong>Soft close:</strong> bids placed near the end may extend the end time to reduce last-second
+              sniping.
             </li>
             <li>
               <strong>Binding bids:</strong> when you bid, you’re committing to complete the purchase if you win.
             </li>
             <li>
-              <strong>Anti-abuse:</strong> suspected shill bidding, collusion or manipulation may lead to voided sales and account restrictions.
+              <strong>Anti-abuse:</strong> suspected shill bidding, collusion or manipulation may lead to voided sales
+              and account restrictions.
             </li>
           </ul>
         </section>
@@ -198,25 +211,28 @@ export default function HowItWorksPage() {
           <h2 className="text-xl font-semibold text-gold mb-3">5. Fees &amp; Charges</h2>
           <ul className="list-disc ml-5 space-y-2 text-sm md:text-base text-gray-100 leading-relaxed">
             <li>
-              <strong>Listing fees:</strong> may be free during promotional periods. Any listing fee is shown clearly before you publish.
+              <strong>Listing fees:</strong> may be free during promotional periods. Any listing fee is shown clearly
+              before you publish.
             </li>
             <li>
-              <strong>Commission:</strong> may be deducted from the seller’s proceeds on successful sales. The rate is shown in the seller flow/dashboard.
+              <strong>Commission:</strong> may be deducted from the seller’s proceeds on successful sales. The rate is
+              shown in the seller flow/dashboard.
             </li>
             <li>
-              <strong>Delivery costs:</strong> if shipping is offered, the delivery cost (if any) is shown on the listing and forms part of the deal terms.
+              <strong>Delivery costs:</strong> if shipping is offered, the delivery cost (if any) is shown on the
+              listing and forms part of the deal terms.
             </li>
           </ul>
 
           <p className="text-xs md:text-sm text-gray-400 mt-3">
             For full details (and examples), see{" "}
-            <a href="/fees" className="text-gold underline hover:text-yellow-200">
+            <Link href="/fees" className="text-gold underline hover:text-yellow-200">
               Fees
-            </a>{" "}
+            </Link>{" "}
             and our{" "}
-            <a href="/terms" className="text-gold underline hover:text-yellow-200">
+            <Link href="/terms" className="text-gold underline hover:text-yellow-200">
               Terms &amp; Conditions
-            </a>
+            </Link>
             .
           </p>
         </section>
@@ -224,18 +240,13 @@ export default function HowItWorksPage() {
         <section id="after" className="mb-8">
           <h2 className="text-xl font-semibold text-gold mb-3">6. What Happens After You Win?</h2>
           <ol className="list-decimal ml-5 space-y-3 text-sm md:text-base text-gray-100 leading-relaxed">
+            <li>You receive confirmation in your dashboard (and usually by email) that you won.</li>
+            <li>Payment is completed/collected via the marketplace flow.</li>
             <li>
-              You receive confirmation in your dashboard (and usually by email) that you won.
+              The seller dispatches (or arranges collection) within the stated window and provides tracking/proof
+              where available.
             </li>
-            <li>
-              Payment is completed/collected via the marketplace flow.
-            </li>
-            <li>
-              The seller dispatches (or arranges collection) within the stated window and provides tracking/proof where available.
-            </li>
-            <li>
-              You confirm receipt through your dashboard so the deal can complete.
-            </li>
+            <li>You confirm receipt through your dashboard so the deal can complete.</li>
           </ol>
 
           <div className="mt-5 rounded-xl border border-gray-800 bg-black/30 p-4">
@@ -248,22 +259,19 @@ export default function HowItWorksPage() {
         <section id="delivery" className="mb-8">
           <h2 className="text-xl font-semibold text-gold mb-3">7. Dispatch, Receipt &amp; Disputes</h2>
           <ul className="list-disc ml-5 space-y-2 text-sm md:text-base text-gray-100 leading-relaxed">
+            <li>Sellers must dispatch within the platform’s dispatch window (or the listing’s stated terms).</li>
+            <li>Buyers should confirm receipt promptly after delivery.</li>
             <li>
-              Sellers must dispatch within the platform’s dispatch window (or the listing’s stated terms).
-            </li>
-            <li>
-              Buyers should confirm receipt promptly after delivery.
-            </li>
-            <li>
-              If there’s a genuine issue (non-delivery, damage in transit, or material misdescription), raise it promptly via the platform flow.
+              If there’s a genuine issue (non-delivery, damage in transit, or material misdescription), raise it
+              promptly via the platform flow.
             </li>
           </ul>
 
           <p className="text-xs md:text-sm text-gray-400 mt-3">
             Full rules and time windows are defined in the{" "}
-            <a href="/terms" className="text-gold underline hover:text-yellow-200">
+            <Link href="/terms" className="text-gold underline hover:text-yellow-200">
               Terms &amp; Conditions
-            </a>
+            </Link>
             .
           </p>
         </section>
@@ -282,15 +290,13 @@ export default function HowItWorksPage() {
           </p>
 
           <div className="mt-8 border-t border-gray-700 pt-6 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-            <p className="text-gray-200 text-sm md:text-base">
-              Ready to list your gear?
-            </p>
-            <a
+            <p className="text-gray-200 text-sm md:text-base">Ready to list your gear?</p>
+            <Link
               href="/sell"
               className="inline-block bg-gold hover:opacity-90 text-black font-semibold px-6 py-3 rounded-md text-sm md:text-base"
             >
               Sell your gear
-            </a>
+            </Link>
           </div>
         </section>
       </div>
