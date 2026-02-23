@@ -12,21 +12,35 @@ function formatRemaining(ms: number) {
 
   const pad = (n: number) => String(n).padStart(2, "0");
 
-  // If you want it shorter, remove days formatting — but this is clear.
   return days > 0
     ? `${days}d ${pad(hours)}:${pad(mins)}:${pad(secs)}`
     : `${pad(hours)}:${pad(mins)}:${pad(secs)}`;
 }
 
+type UseAuctionTimerOptions = {
+  endedLabel?: string;
+  /**
+   * Optional override for "now" (ms) - mainly for testing.
+   * If not provided, uses Date.now().
+   */
+  nowMs?: () => number;
+};
+
 /**
  * useAuctionTimer
  * - Pass an ISO-ish date string (e.g. "2025-12-28T23:00:00.000Z")
  * - Returns either a countdown string like "01:23:45" / "2d 03:04:05"
- *   or "Auction Ended".
+ *   or "Auction Ended" (configurable).
  *
- * IMPORTANT: This hook *re-initialises* properly when auctionEnd changes.
+ * IMPORTANT: This hook re-initialises properly when auctionEnd changes.
  */
-export function useAuctionTimer(auctionEnd?: string | null) {
+export function useAuctionTimer(
+  auctionEnd?: string | null,
+  options?: UseAuctionTimerOptions
+) {
+  const endedLabel = options?.endedLabel ?? "Auction Ended";
+  const now = options?.nowMs ?? Date.now;
+
   const [timeLeft, setTimeLeft] = useState<string>("—");
 
   const endMs = useMemo(() => {
@@ -36,23 +50,22 @@ export function useAuctionTimer(auctionEnd?: string | null) {
   }, [auctionEnd]);
 
   useEffect(() => {
-    // Missing/invalid date = treat as ended (prevents "Invalid Date" issues)
     if (!auctionEnd || Number.isNaN(endMs)) {
-      setTimeLeft("Auction Ended");
+      setTimeLeft(endedLabel);
       return;
     }
 
     const tick = () => {
-      const diff = endMs - Date.now();
-      if (diff <= 0) setTimeLeft("Auction Ended");
+      const diff = endMs - now();
+      if (diff <= 0) setTimeLeft(endedLabel);
       else setTimeLeft(formatRemaining(diff));
     };
 
-    tick(); // immediate update (critical when the end time is updated/relisted)
+    tick();
     const id = setInterval(tick, 1000);
 
     return () => clearInterval(id);
-  }, [auctionEnd, endMs]);
+  }, [auctionEnd, endMs, endedLabel, now]);
 
   return timeLeft;
 }

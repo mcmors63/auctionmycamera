@@ -15,13 +15,8 @@ const client = new Client()
 const databases = new Databases(client);
 
 // Client-side envs must be NEXT_PUBLIC_*
-const DATABASE_ID =
-  process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID ||
-  process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID!;
-
-const LISTINGS_COLLECTION_ID =
-  process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_COLLECTION_ID ||
-  process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_COLLECTION_ID!;
+const DATABASE_ID = process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID!;
+const LISTINGS_COLLECTION_ID = process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_COLLECTION_ID!;
 
 // ✅ Storage bucket for camera images (still used for sanity checks)
 const CAMERA_IMAGES_BUCKET_ID =
@@ -157,12 +152,11 @@ function isUpdateEvent(events: string[] | undefined) {
   return events.some((e) => typeof e === "string" && e.endsWith(".update"));
 }
 
-// ✅ NEW: Serve images via OUR domain so it works even if bucket is private
+// ✅ Serve images via OUR domain so it works even if bucket is private
 function buildLocalImageProxyUrl(fileId: string) {
   const id = String(fileId || "").trim();
   if (!id) return null;
 
-  // If you haven't set the bucket ID, don't pretend images will work
   if (!CAMERA_IMAGES_BUCKET_ID) return null;
 
   return `/api/camera-image/${encodeURIComponent(id)}`;
@@ -199,6 +193,13 @@ export default function ListingDetailsClient({ initial }: { initial: Listing }) 
   useEffect(() => {
     listingRef.current = listing;
   }, [listing]);
+
+  // ✅ FIX: hooks must run before any early return
+  const imgSrc = useMemo(() => {
+    if (listing) return pickImageSrc(listing);
+    // fallback if listing missing (rare)
+    return pickFallbackImage(initial);
+  }, [listing, initial]);
 
   // Best-effort client refresh
   useEffect(() => {
@@ -302,8 +303,6 @@ export default function ListingDetailsClient({ initial }: { initial: Listing }) 
 
   const metaBits = [niceEnum(anyL.gear_type), niceEnum(anyL.condition), niceEnum(anyL.era)].filter(Boolean);
   const metaLine = metaBits.join(" • ");
-
-  const imgSrc = useMemo(() => pickImageSrc(listing), [listing]);
 
   const rawEndStr = String(anyL.auction_end ?? anyL.end_time ?? "");
   const rawStartStr = String(anyL.auction_start ?? anyL.start_time ?? "");

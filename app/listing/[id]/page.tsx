@@ -43,33 +43,57 @@ function getSiteUrl() {
 
 const SITE_URL = getSiteUrl();
 
-const endpointRaw = process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT!;
-const endpoint = endpointRaw.replace(/\/+$/, "");
-const projectId = process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID!;
-const apiKey = process.env.APPWRITE_API_KEY!;
+function getServerAppwriteConfig() {
+  const endpointRaw =
+    process.env.APPWRITE_ENDPOINT ||
+    process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT ||
+    "";
 
-// ✅ Listings DB/collection (supports new names, falls back to legacy "LISTINGS" envs)
-const DATABASE_ID =
-  process.env.APPWRITE_LISTINGS_DATABASE_ID ||
-  process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID ||
-  process.env.APPWRITE_LISTINGS_DATABASE_ID ||
-  process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID!;
+  const endpoint = normalizeBaseUrl(endpointRaw);
 
-const LISTINGS_COLLECTION_ID =
-  process.env.APPWRITE_LISTINGS_COLLECTION_ID ||
-  process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_COLLECTION_ID ||
-  process.env.APPWRITE_LISTINGS_COLLECTION_ID ||
-  process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_COLLECTION_ID!;
+  const projectId =
+    process.env.APPWRITE_PROJECT_ID ||
+    process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID ||
+    "";
+
+  const apiKey = process.env.APPWRITE_API_KEY || "";
+
+  const databaseId =
+    process.env.APPWRITE_LISTINGS_DATABASE_ID ||
+    process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID ||
+    "";
+
+  const collectionId =
+    process.env.APPWRITE_LISTINGS_COLLECTION_ID ||
+    process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_COLLECTION_ID ||
+    "";
+
+  return { endpoint, projectId, apiKey, databaseId, collectionId };
+}
 
 function serverDatabases() {
+  const { endpoint, projectId, apiKey } = getServerAppwriteConfig();
+
+  // Don’t crash the whole route at import time; fail when called.
+  if (!endpoint || !projectId || !apiKey) {
+    throw new Error("Server Appwrite config missing (endpoint/projectId/apiKey).");
+  }
+
   const client = new Client().setEndpoint(endpoint).setProject(projectId).setKey(apiKey);
   return new Databases(client);
 }
 
 async function fetchListing(id: string): Promise<Listing | null> {
+  const { databaseId, collectionId, endpoint, projectId, apiKey } = getServerAppwriteConfig();
+
+  if (!endpoint || !projectId || !apiKey || !databaseId || !collectionId) {
+    // In previews/dev, missing envs should just behave like “not found”
+    return null;
+  }
+
   try {
     const db = serverDatabases();
-    const doc = await db.getDocument(DATABASE_ID, LISTINGS_COLLECTION_ID, id);
+    const doc = await db.getDocument(databaseId, collectionId, id);
     return doc as unknown as Listing;
   } catch {
     return null;
@@ -108,8 +132,8 @@ function getListingName(l: Listing) {
   return "Camera gear listing";
 }
 
-function isIndexableStatus(status?: string) {
-  // ✅ Public statuses only
+function isPublicStatus(status?: string) {
+  // ✅ Public statuses only (and indexable)
   return status === "live" || status === "queued" || status === "sold";
 }
 
@@ -158,8 +182,7 @@ export async function generateMetadata({
   // ✅ Canonical always anchored to SITE_URL logic (prod = real domain)
   const canonical = `${SITE_URL}/listing/${anyL.$id}`;
 
-  // Robots: don’t index non-public statuses
-  const indexable = isIndexableStatus(status);
+  const indexable = isPublicStatus(status);
 
   return {
     title: titleBase,
@@ -195,13 +218,12 @@ export default async function ListingDetailsPage({
 
   // If it’s in a non-public state (pending/rejected/etc), don’t expose it
   const status = String(anyL.status || "");
-  if (!isIndexableStatus(status)) return notFound();
+  if (!isPublicStatus(status)) return notFound();
 
   const name = getListingName(listing);
   const buyNow = pickBuyNow(listing);
   const canonical = `${SITE_URL}/listing/${anyL.$id}`;
 
-  // Choose a sensible price for schema
   const schemaPrice =
     typeof buyNow === "number"
       ? buyNow
@@ -209,11 +231,26 @@ export default async function ListingDetailsPage({
       ? anyL.current_bid
       : typeof anyL.starting_price === "number"
       ? anyL.starting_price
-      : undefined;
+      : null;
 
-  const schemaDesc =
-    String(anyL.description || "").trim() ||
-    `Camera gear listing: ${name}.`;
+  const schemaDesc = String(anyL.description || "").trim() || `Camera gear listing: ${name}.`;
+
+  const offer: any = {
+    "@type": "Offer",
+    priceCurrency: "GBP",
+    availability:
+      status === "sold"
+        ? "https://schema.org/SoldOut"
+        : status === "queued"
+        ? "https://schema.org/PreOrder"
+        : "https://schema.org/InStock",
+    url: canonical,
+  };
+
+  // Only include price if we have one (cleaner JSON-LD)
+  if (typeof schemaPrice === "number") {
+    offer.price = schemaPrice;
+  }
 
   const jsonLd = {
     "@context": "https://schema.org",
@@ -223,18 +260,7 @@ export default async function ListingDetailsPage({
     sku: String(anyL.listing_id || anyL.$id),
     url: canonical,
     brand: { "@type": "Brand", name: "AuctionMyCamera" },
-    offers: {
-      "@type": "Offer",
-      priceCurrency: "GBP",
-      price: schemaPrice,
-      availability:
-        status === "sold"
-          ? "https://schema.org/SoldOut"
-          : status === "queued"
-          ? "https://schema.org/PreOrder"
-          : "https://schema.org/InStock",
-      url: canonical,
-    },
+    offers: offer,
   };
 
   return (

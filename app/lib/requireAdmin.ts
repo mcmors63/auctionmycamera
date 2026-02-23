@@ -14,12 +14,14 @@ function normalizeEmail(v: string) {
  * Appwrite sets session cookies named like:
  * - a_session_<PROJECT_ID>
  * - a_session_<PROJECT_ID>_legacy
+ * - a_session_<PROJECT_ID>_v2   (some setups)
  * Some setups may also use "a_session" (older).
  */
 function getAppwriteSessionFromCookies(req: NextRequest, projectId: string) {
   const names = [
     `a_session_${projectId}`,
     `a_session_${projectId}_legacy`,
+    `a_session_${projectId}_v2`,
     "a_session",
   ];
 
@@ -48,11 +50,17 @@ export async function requireAdmin(req: NextRequest): Promise<AdminCheckResult> 
   const adminEmail = normalizeEmail(process.env.ADMIN_EMAIL || "");
 
   if (!endpoint || !projectId) {
-    return { ok: false, error: "Server Appwrite config missing (endpoint/projectId)." };
+    return {
+      ok: false,
+      error: "Server Appwrite config missing (endpoint/projectId).",
+    };
   }
 
   if (!adminEmail) {
-    return { ok: false, error: "ADMIN_EMAIL is not set on the server (Vercel env)." };
+    return {
+      ok: false,
+      error: "ADMIN_EMAIL is not set on the server (Vercel env).",
+    };
   }
 
   const session = getAppwriteSessionFromCookies(req, projectId);
@@ -70,7 +78,9 @@ export async function requireAdmin(req: NextRequest): Promise<AdminCheckResult> 
     const me: any = await account.get();
 
     const email = normalizeEmail(me?.email || "");
-    if (!email) return { ok: false, error: "Session is invalid (no email)." };
+    if (!email) {
+      return { ok: false, error: "Session is invalid (no email)." };
+    }
 
     if (email !== adminEmail) {
       return { ok: false, error: "Not authorized as admin." };
@@ -78,6 +88,9 @@ export async function requireAdmin(req: NextRequest): Promise<AdminCheckResult> 
 
     return { ok: true, email };
   } catch (err: any) {
-    return { ok: false, error: err?.message || "Admin session check failed." };
+    return {
+      ok: false,
+      error: err?.message || "Admin session check failed.",
+    };
   }
 }
