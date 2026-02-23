@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import type { FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { Client, Account } from "appwrite";
 
@@ -11,7 +12,7 @@ const client = new Client()
 
 const account = new Account(client);
 
-// ✅ Single source of truth for admin email
+// ✅ Single source of truth for admin email (UI gating only)
 const ADMIN_EMAIL = (process.env.NEXT_PUBLIC_ADMIN_EMAIL || "admin@auctionmycamera.co.uk")
   .trim()
   .toLowerCase();
@@ -47,7 +48,7 @@ export default function AdminLoginClient() {
     };
   }, [router]);
 
-  const handleLogin = async (e: React.FormEvent) => {
+  const handleLogin = async (e: FormEvent) => {
     e.preventDefault();
     setError("");
     setLoading(true);
@@ -112,7 +113,8 @@ export default function AdminLoginClient() {
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             required
-            className="w-full border border-neutral-300 rounded-md p-3 focus:ring-2 focus:ring-orange-500 outline-none"
+            disabled={loading}
+            className="w-full border border-neutral-300 rounded-md p-3 focus:ring-2 focus:ring-orange-500 outline-none disabled:opacity-60"
           />
 
           <button
