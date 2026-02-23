@@ -5,21 +5,46 @@ import nodemailer from "nodemailer";
 import { calculateSettlement } from "@/lib/calculateSettlement";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 // -----------------------------
-// ENV: Appwrite
+// ENV: Appwrite (server-safe first, then fallbacks)
 // -----------------------------
-const endpoint = process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT!;
-const project = process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID!;
-const apiKey = process.env.APPWRITE_API_KEY!;
+const endpoint =
+  process.env.APPWRITE_ENDPOINT ||
+  process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT ||
+  "";
+
+const project =
+  process.env.APPWRITE_PROJECT_ID ||
+  process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID ||
+  "";
+
+const apiKey = process.env.APPWRITE_API_KEY || "";
 
 // Listings
-const listingsDbId = process.env.APPWRITE_LISTINGS_DATABASE_ID!;
-const listingsCollectionId = process.env.APPWRITE_LISTINGS_COLLECTION_ID || "listings";
+const listingsDbId =
+  process.env.APPWRITE_LISTINGS_DATABASE_ID ||
+  process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID ||
+  "";
+
+// Keep your default, but allow override
+const listingsCollectionId =
+  process.env.APPWRITE_LISTINGS_COLLECTION_ID ||
+  process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_COLLECTION_ID ||
+  "listings";
 
 // Transactions
-const txDbId = process.env.APPWRITE_TRANSACTIONS_DATABASE_ID!;
-const txCollectionId = process.env.APPWRITE_TRANSACTIONS_COLLECTION_ID || "transactions";
+const txDbId =
+  process.env.APPWRITE_TRANSACTIONS_DATABASE_ID ||
+  process.env.NEXT_PUBLIC_APPWRITE_TRANSACTIONS_DATABASE_ID ||
+  "";
+
+// Keep your default, but allow override
+const txCollectionId =
+  process.env.APPWRITE_TRANSACTIONS_COLLECTION_ID ||
+  process.env.NEXT_PUBLIC_APPWRITE_TRANSACTIONS_COLLECTION_ID ||
+  "transactions";
 
 // -----------------------------
 // ENV: SMTP / Site
@@ -28,31 +53,26 @@ const smtpHost = process.env.SMTP_HOST || "";
 const smtpPort = Number(process.env.SMTP_PORT || "465");
 const smtpUser = process.env.SMTP_USER || "";
 const smtpPass = process.env.SMTP_PASS || "";
-const siteUrl = (process.env.NEXT_PUBLIC_SITE_URL || "https://auctionmyplate.co.uk").replace(
+
+const siteUrl = (process.env.NEXT_PUBLIC_SITE_URL || "https://auctionmycamera.co.uk").replace(
   /\/+$/,
   ""
 );
-const adminEmail = process.env.ADMIN_EMAIL || "admin@auctionmyplate.co.uk";
 
-// -----------------------------
-// DVLA policy
-// -----------------------------
-const DVLA_FEE_GBP = 80;
-
-/**
- * IMPORTANT:
- * These are the TWO legacy listings that must remain "buyer pays £80".
- * These must be the Appwrite document IDs (listing $id values).
- */
-const LEGACY_BUYER_PAYS_IDS = new Set<string>([
-  "696ea3d0001a45280a16",
-  "697bccfd001325add473",
-]);
+const adminEmail =
+  (process.env.ADMIN_EMAIL ||
+    process.env.NEXT_PUBLIC_ADMIN_EMAIL ||
+    "admin@auctionmycamera.co.uk"
+  )
+    .trim()
+    .toLowerCase();
 
 // -----------------------------
 // Helpers
 // -----------------------------
 function getAppwriteClient() {
+  if (!endpoint || !project || !apiKey) return null;
+
   const client = new Client();
   client.setEndpoint(endpoint);
   client.setProject(project);
@@ -70,11 +90,17 @@ function getTransporter() {
     host: smtpHost,
     port: smtpPort,
     secure: smtpPort === 465,
-    auth: {
-      user: smtpUser,
-      pass: smtpPass,
-    },
+    auth: { user: smtpUser, pass: smtpPass },
   });
+}
+
+function escapeHtml(input: any) {
+  return String(input ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
 }
 
 /**
@@ -110,20 +136,117 @@ async function safeSendMail(
   return { ok: true, sentTo: finalTo };
 }
 
+function has(obj: any, key: string) {
+  return obj && Object.prototype.hasOwnProperty.call(obj, key);
+}
+
+/**
+ * Create a document but automatically remove unknown attributes if the schema is stricter than expected.
+ */
+async function createDocSchemaTolerant(
+  databases: Databases,
+  dbId: string,
+  colId: string,
+  payload: Record<string, any>
+) {
+  const data: Record<string, any> = { ...payload };
+
+  for (let i = 0; i < 12; i++) {
+    try {
+      return await databases.createDocument(dbId, colId, ID.unique(), data);
+    } catch (err: any) {
+      const msg = String(err?.message || "");
+      const m = msg.match(/Unknown attribute:\s*([A-Za-z0-9_]+)/i);
+      if (m?.[1]) {
+        delete data[m[1]];
+        continue;
+      }
+      throw err;
+    }
+  }
+
+  // minimal fallback
+  return await databases.createDocument(dbId, colId, ID.unique(), {
+    listing_id: payload.listing_id,
+    seller_email: payload.seller_email,
+    buyer_email: payload.buyer_email,
+    sale_price: payload.sale_price,
+    payment_status: payload.payment_status || "pending",
+    transaction_status: payload.transaction_status || "pending",
+    created_at: payload.created_at,
+    updated_at: payload.updated_at,
+  });
+}
+
+/**
+ * Update a document but remove unknown attributes if schema rejects them.
+ */
+async function updateDocSchemaTolerant(
+  databases: Databases,
+  dbId: string,
+  colId: string,
+  docId: string,
+  payload: Record<string, any>
+) {
+  const data: Record<string, any> = { ...payload };
+
+  for (let i = 0; i < 12; i++) {
+    try {
+      return await databases.updateDocument(dbId, colId, docId, data);
+    } catch (err: any) {
+      const msg = String(err?.message || "");
+      const m = msg.match(/Unknown attribute:\s*([A-Za-z0-9_]+)/i);
+      if (m?.[1]) {
+        delete data[m[1]];
+        continue;
+      }
+      throw err;
+    }
+  }
+
+  // minimal fallback
+  const minimal: Record<string, any> = {};
+  if (has(payload, "status")) minimal.status = payload.status;
+  return await databases.updateDocument(dbId, colId, docId, minimal);
+}
+
+function getListingTitle(listing: any) {
+  const itemTitle = String(listing?.item_title || listing?.title || "").trim();
+  if (itemTitle) return itemTitle;
+
+  const brand = String(listing?.brand || "").trim();
+  const model = String(listing?.model || "").trim();
+  const bm = [brand, model].filter(Boolean).join(" ").trim();
+  if (bm) return bm;
+
+  const legacyReg = String(listing?.registration || listing?.reg_number || "").trim();
+  if (legacyReg) return legacyReg;
+
+  const gearType = String(listing?.gear_type || listing?.type || "").trim();
+  if (gearType) return `${gearType} listing`;
+
+  return "your item";
+}
+
 /**
  * Body:
  * {
  *   listingId: string;   // listings doc $id
  *   buyerEmail: string;
- *   finalPrice: number;  // plate-only price, e.g. 12500 for £12,500
+ *   finalPrice: number;  // e.g. 1250 for £1,250
  * }
  */
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json();
+    let body: any;
+    try {
+      body = await req.json();
+    } catch {
+      return NextResponse.json({ error: "Invalid JSON body." }, { status: 400 });
+    }
 
     const listingId = body.listingId as string | undefined;
-    const buyerEmail = body.buyerEmail as string | undefined;
+    const buyerEmail = String(body.buyerEmail || "").trim();
     const finalPrice = Number(body.finalPrice);
 
     console.log("[create-from-sale] Incoming", { listingId, buyerEmail, finalPrice });
@@ -140,60 +263,71 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "finalPrice must be a positive number" }, { status: 400 });
     }
 
-    const client = getAppwriteClient();
-    const databases = new Databases(client);
-
-    // 1) Load the listing from listings
-    const listing = await databases.getDocument(listingsDbId, listingsCollectionId, listingId);
-
-    const reg = ((listing as any).registration as string) || "Unknown";
-    const sellerEmail = (listing as any).seller_email as string | undefined;
-
-    const buyerPaysTransferFee = LEGACY_BUYER_PAYS_IDS.has(String(listing.$id));
-
-    console.log("[create-from-sale] Loaded listing", {
-      listingId: listing.$id,
-      reg,
-      sellerEmail,
-      buyerPaysTransferFee,
-    });
-
-    if (!sellerEmail) {
-      console.warn(
-        "[create-from-sale] Listing has no seller_email, emails to seller will be skipped."
+    if (!listingsDbId || !txDbId) {
+      return NextResponse.json(
+        {
+          error:
+            "Server DB env missing. Set APPWRITE_LISTINGS_DATABASE_ID and APPWRITE_TRANSACTIONS_DATABASE_ID (or NEXT_PUBLIC fallbacks).",
+        },
+        { status: 500 }
       );
     }
 
-    // 2) Work out commission etc
-    // calculateSettlement() matches your NEW default: seller covers DVLA fee (deducted from payout)
-    const settlement = calculateSettlement(finalPrice);
+    const client = getAppwriteClient();
+    if (!client) {
+      return NextResponse.json(
+        { error: "Server Appwrite config missing (endpoint/project/apiKey)." },
+        { status: 500 }
+      );
+    }
 
-    // Always record DVLA fee as £80
-    const dvlaFee = DVLA_FEE_GBP;
+    const databases = new Databases(client);
 
-    // For legacy listings, buyer pays DVLA fee separately — so seller payout should NOT be reduced by £80.
-    // If calculateSettlement deducted it, we add it back.
-    const sellerPayout =
-      buyerPaysTransferFee ? Math.max(0, settlement.sellerPayout + dvlaFee) : settlement.sellerPayout;
+    // 1) Load listing
+    const listing: any = await databases.getDocument(listingsDbId, listingsCollectionId, listingId);
+
+    const itemTitle = getListingTitle(listing);
+    const sellerEmail = String(listing?.seller_email || listing?.sellerEmail || "").trim();
+
+    console.log("[create-from-sale] Loaded listing", {
+      listingId: listing?.$id,
+      itemTitle,
+      sellerEmail: sellerEmail || null,
+    });
+
+    // 2) Settlement (CAMERA POLICY: no DVLA fee)
+    // We still use calculateSettlement() because it gives commission tiers + payout.
+    // But we must force dvlaFeeOverride to 0 and fee payer to seller so nothing extra is deducted/added.
+    const settlement = calculateSettlement(finalPrice, {
+      listingId: String(listing?.$id || ""),
+      dvlaFeeOverride: 0,
+      dvlaFeePayer: "seller",
+      // listingFee could be wired later if you add it to camera listings
+    });
 
     const commissionRate = settlement.commissionRate;
     const commissionAmount = settlement.commissionAmount;
+    const sellerPayout = Math.max(0, settlement.sellerPayout);
 
     const nowIso = new Date().toISOString();
 
-    // 3) Create transaction row in Transactions collection
-    const txDoc = await databases.createDocument(txDbId, txCollectionId, ID.unique(), {
-      listing_id: listing.$id,
-      registration: reg,
+    // 3) Create transaction (schema-tolerant)
+    const txDoc = await createDocSchemaTolerant(databases, txDbId, txCollectionId, {
+      listing_id: String(listing.$id),
+      item_title: itemTitle,
+
       seller_email: sellerEmail || null,
       buyer_email: buyerEmail,
-      sale_price: finalPrice, // plate-only
+
+      sale_price: finalPrice,
       commission_rate: commissionRate,
       commission_amount: commissionAmount,
       seller_payout: sellerPayout,
-      dvla_fee: dvlaFee,
+
       payment_status: "pending",
       transaction_status: "awaiting_payment",
+
+      // optional fields (will be dropped automatically if schema doesn't support them)
       documents: [],
       created_at: nowIso,
       updated_at: nowIso,
@@ -201,11 +335,20 @@ export async function POST(req: NextRequest) {
 
     console.log("[create-from-sale] Created transaction", { txId: txDoc.$id });
 
-    // 4) Mark listing as sold (if not already done)
-    await databases.updateDocument(listingsDbId, listingsCollectionId, listing.$id, {
-      status: "sold",
-      sold_price: finalPrice,
-    });
+    // 4) Mark listing as sold (schema-tolerant)
+    const listingUpdate: Record<string, any> = { status: "sold" };
+    if (has(listing, "sold_price")) listingUpdate.sold_price = finalPrice;
+    if (has(listing, "soldPrice")) listingUpdate.soldPrice = finalPrice;
+    if (has(listing, "current_bid")) listingUpdate.current_bid = finalPrice;
+    if (has(listing, "currentBid")) listingUpdate.currentBid = finalPrice;
+
+    await updateDocSchemaTolerant(
+      databases,
+      listingsDbId,
+      listingsCollectionId,
+      String(listing.$id),
+      listingUpdate
+    );
 
     // 5) Emails (buyer, seller, admin) – best effort, non-fatal
     const transporter = getTransporter();
@@ -224,58 +367,46 @@ export async function POST(req: NextRequest) {
         style: "currency",
         currency: "GBP",
       });
-      const prettyDvla = dvlaFee.toLocaleString("en-GB", {
-        style: "currency",
-        currency: "GBP",
-      });
 
       const dashboardUrl = `${siteUrl}/dashboard?tab=transactions`;
-
-      const dvlaBuyerLine = buyerPaysTransferFee
-        ? `This is a legacy listing: an additional DVLA paperwork fee of ${prettyDvla} applies at checkout.`
-        : `No additional DVLA paperwork fee is added at checkout (transfer handling is included seller-side).`;
-
-      const dvlaSellerLine = buyerPaysTransferFee
-        ? `DVLA assignment fee (paid by buyer): ${prettyDvla}`
-        : `DVLA assignment fee (covered seller-side): ${prettyDvla}`;
 
       // Buyer email
       try {
         await safeSendMail(
           transporter,
           {
-            from: `"AuctionMyPlate" <${smtpUser}>`,
+            from: `"AuctionMyCamera" <${smtpUser}>`,
             to: buyerEmail,
-            subject: `Next steps for ${reg} on AuctionMyPlate`,
+            subject: `Next steps for your purchase on AuctionMyCamera`,
             text: [
               `Thank you — your purchase is now in progress.`,
               ``,
-              `Registration: ${reg}`,
-              `Price (plate): ${prettyPrice}`,
-              `${dvlaBuyerLine}`,
+              `Item: ${itemTitle}`,
+              `Final price: ${prettyPrice}`,
               ``,
-              `We will now guide you through the DVLA transfer. If we need any further information we will contact you by email.`,
+              `We’ll guide you through the next steps and notify you when dispatch/tracking is available.`,
               ``,
-              `You can view this transaction in your dashboard:`,
+              `View this transaction in your dashboard:`,
               dashboardUrl,
               ``,
-              `AuctionMyPlate.co.uk`,
+              `AuctionMyCamera.co.uk`,
             ].join("\n"),
             html: `
-              <p>Thank you — your purchase is now in progress.</p>
-              <p><strong>Registration:</strong> ${reg}<br/>
-                 <strong>Price (plate):</strong> ${prettyPrice}<br/>
-                 <strong>${dvlaBuyerLine}</strong>
-              </p>
-              <p>
-                We will now guide you through the DVLA transfer.<br/>
-                If we need any further information we will contact you by email.
-              </p>
-              <p>
-                You can view this transaction in your dashboard:<br/>
-                <a href="${dashboardUrl}">${dashboardUrl}</a>
-              </p>
-              <p>AuctionMyPlate.co.uk</p>
+              <div style="font-family: Arial, sans-serif; line-height: 1.5;">
+                <p>Thank you — your purchase is now in progress.</p>
+                <p>
+                  <strong>Item:</strong> ${escapeHtml(itemTitle)}<br/>
+                  <strong>Final price:</strong> ${escapeHtml(prettyPrice)}
+                </p>
+                <p>
+                  We’ll guide you through the next steps and notify you when dispatch/tracking is available.
+                </p>
+                <p>
+                  View this transaction in your dashboard:<br/>
+                  <a href="${dashboardUrl}">${dashboardUrl}</a>
+                </p>
+                <p>AuctionMyCamera.co.uk</p>
+              </div>
             `,
           },
           "buyer"
@@ -290,42 +421,40 @@ export async function POST(req: NextRequest) {
           await safeSendMail(
             transporter,
             {
-              from: `"AuctionMyPlate" <${smtpUser}>`,
+              from: `"AuctionMyCamera" <${smtpUser}>`,
               to: sellerEmail,
-              subject: `Your plate ${reg} has sold on AuctionMyPlate`,
+              subject: `Sold: ${itemTitle} on AuctionMyCamera`,
               text: [
                 `Good news!`,
                 ``,
-                `Your registration ${reg} has sold on AuctionMyPlate for ${prettyPrice}.`,
+                `Your item has sold on AuctionMyCamera.`,
                 ``,
+                `Item: ${itemTitle}`,
+                `Final price: ${prettyPrice}`,
                 `Our commission (${commissionRate}%): ${prettyCommission}`,
-                `${dvlaSellerLine}`,
-                `Amount due to you (subject to transfer): ${prettyPayout}`,
+                `Expected payout (subject to completion): ${prettyPayout}`,
                 ``,
-                `We will process the DVLA transfer. Payment to you is usually made once the transfer is complete and all documents are received.`,
-                ``,
-                `You can upload your documents and track this sale here:`,
+                `Track this sale and next steps in your dashboard:`,
                 dashboardUrl,
                 ``,
-                `AuctionMyPlate.co.uk`,
+                `AuctionMyCamera.co.uk`,
               ].join("\n"),
               html: `
-                <p>Good news!</p>
-                <p>Your registration <strong>${reg}</strong> has sold on AuctionMyPlate for <strong>${prettyPrice}</strong>.</p>
-                <p>
-                  Our commission (${commissionRate}%): <strong>${prettyCommission}</strong><br/>
-                  ${dvlaSellerLine}<br/>
-                  Amount due to you (subject to transfer): <strong>${prettyPayout}</strong>
-                </p>
-                <p>
-                  We will process the DVLA transfer.<br/>
-                  Payment to you is usually made <strong>once the transfer is complete</strong> and all documents are received.
-                </p>
-                <p>
-                  Track this sale in your dashboard:<br/>
-                  <a href="${dashboardUrl}">${dashboardUrl}</a>
-                </p>
-                <p>AuctionMyPlate.co.uk</p>
+                <div style="font-family: Arial, sans-serif; line-height: 1.5;">
+                  <p>Good news!</p>
+                  <p>Your item has sold on AuctionMyCamera.</p>
+                  <p>
+                    <strong>Item:</strong> ${escapeHtml(itemTitle)}<br/>
+                    <strong>Final price:</strong> ${escapeHtml(prettyPrice)}<br/>
+                    <strong>Our commission (${commissionRate}%):</strong> ${escapeHtml(prettyCommission)}<br/>
+                    <strong>Expected payout (subject to completion):</strong> ${escapeHtml(prettyPayout)}
+                  </p>
+                  <p>
+                    Track this sale in your dashboard:<br/>
+                    <a href="${dashboardUrl}">${dashboardUrl}</a>
+                  </p>
+                  <p>AuctionMyCamera.co.uk</p>
+                </div>
               `,
             },
             "seller"
@@ -339,30 +468,30 @@ export async function POST(req: NextRequest) {
 
       // Admin email
       try {
-        await safeSendMail(
-          transporter,
-          {
-            from: `"AuctionMyPlate" <${smtpUser}>`,
-            to: adminEmail,
-            subject: `New sale created: ${reg}`,
-            text: [
-              `A sale transaction has been created.`,
-              ``,
-              `Registration: ${reg}`,
-              `Sale price (plate-only): ${prettyPrice}`,
-              `Commission (${commissionRate}%): ${prettyCommission}`,
-              `DVLA fee recorded: ${prettyDvla}`,
-              `DVLA model: ${buyerPaysTransferFee ? "legacy_buyer_pays" : "new_seller_pays"}`,
-              `Seller payout (expected): ${prettyPayout}`,
-              ``,
-              `Seller: ${sellerEmail || "N/A"}`,
-              `Buyer: ${buyerEmail}`,
-              ``,
-              `Transaction ID: ${txDoc.$id}`,
-            ].join("\n"),
-          },
-          "admin"
-        );
+        if (adminEmail) {
+          await safeSendMail(
+            transporter,
+            {
+              from: `"AuctionMyCamera" <${smtpUser}>`,
+              to: adminEmail,
+              subject: `New sale created: ${itemTitle}`,
+              text: [
+                `A sale transaction has been created.`,
+                ``,
+                `Item: ${itemTitle}`,
+                `Sale price: ${prettyPrice}`,
+                `Commission (${commissionRate}%): ${prettyCommission}`,
+                `Seller payout (expected): ${prettyPayout}`,
+                ``,
+                `Seller: ${sellerEmail || "N/A"}`,
+                `Buyer: ${buyerEmail}`,
+                ``,
+                `Transaction ID: ${txDoc.$id}`,
+              ].join("\n"),
+            },
+            "admin"
+          );
+        }
       } catch (adminErr) {
         console.error("[create-from-sale] Admin email failed:", adminErr);
       }
@@ -371,6 +500,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ success: true, transactionId: txDoc.$id }, { status: 200 });
   } catch (err: any) {
     console.error("[create-from-sale] error:", err);
-    return NextResponse.json({ error: err?.message || "Failed to create transaction" }, { status: 500 });
+    return NextResponse.json(
+      { error: err?.message || "Failed to create transaction" },
+      { status: 500 }
+    );
   }
 }
