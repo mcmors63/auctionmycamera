@@ -17,15 +17,15 @@ const client = new Client()
 const db = new Databases(client);
 const account = new Account(client);
 
-// ✅ Listings envs ONLY (no listings fallback)
+// ✅ Listings envs ONLY (with safe fallbacks for clones)
 const LISTINGS_DB =
   process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID ||
-  process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID || // keep ONLY if you still have legacy envs locally
+  process.env.NEXT_PUBLIC_APPWRITE_DATABASE_ID || // fallback if you still use a generic DB env
   "";
 
 const LISTINGS_COLLECTION =
   process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_COLLECTION_ID ||
-  process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_COLLECTION_ID || // keep ONLY if you still have legacy envs locally
+  process.env.NEXT_PUBLIC_APPWRITE_COLLECTION_ID || // fallback if you still use a generic collection env
   "";
 
 // ----------------------------------------------------
@@ -115,7 +115,11 @@ function LocalAuctionTimer({
   if (!Number.isFinite(targetMs)) return <span className="font-mono text-sm">—</span>;
 
   const diff = targetMs - now;
-  return <span className="font-mono text-sm">{diff <= 0 ? "00:00:00" : formatRemaining(diff)}</span>;
+  return (
+    <span className="font-mono text-sm">
+      {diff <= 0 ? "00:00:00" : formatRemaining(diff)}
+    </span>
+  );
 }
 
 // ----------------------------------------------------
@@ -138,6 +142,13 @@ function pickBuyNow(listing: Listing): number | null {
     (listing.buy_now as number | null | undefined) ??
     null;
   return typeof raw === "number" && raw > 0 ? raw : null;
+}
+
+function parseGBPWholePounds(input: string): number | null {
+  const n = Number(String(input || "").trim());
+  if (!Number.isFinite(n)) return null;
+  // Auctions + increments here are whole pounds
+  return Math.round(n);
 }
 
 // ----------------------------------------------------
@@ -304,7 +315,9 @@ export default function PlaceBidPage() {
     return (
       <div className="min-h-screen flex items-center justify-center bg-black px-4">
         <div className="max-w-2xl w-full">
-          <p className="text-red-400 text-xl whitespace-pre-line">{error || "Listing not found."}</p>
+          <p className="text-red-400 text-xl whitespace-pre-line">
+            {error || "Listing not found."}
+          </p>
           <div className="mt-6">
             <Link href="/auctions" className="text-sm text-[#d6b45f] underline">
               ← Back to auctions
@@ -390,8 +403,8 @@ export default function PlaceBidPage() {
       return;
     }
 
-    const amount = parseFloat(bidAmount);
-    if (!Number.isFinite(amount)) {
+    const amount = parseGBPWholePounds(bidAmount);
+    if (amount === null) {
       setError("Enter a valid number.");
       return;
     }
@@ -411,8 +424,12 @@ export default function PlaceBidPage() {
           Authorization: `Bearer ${jwtToken}`,
         },
         body: JSON.stringify({
+          // ✅ Send both shapes (safe across cloned codebases)
           listingId: listing.$id,
+          plateId: listing.$id,
+
           amount,
+          bidAmount: amount,
         }),
       });
 
@@ -474,7 +491,11 @@ export default function PlaceBidPage() {
       return;
     }
 
-    if (!window.confirm(`Use Buy Now for £${buyNowPrice.toLocaleString("en-GB")}?\n\nThis ends the auction immediately.`))
+    if (
+      !window.confirm(
+        `Use Buy Now for £${buyNowPrice.toLocaleString("en-GB")}?\n\nThis ends the auction immediately.`
+      )
+    )
       return;
 
     try {
@@ -547,7 +568,14 @@ export default function PlaceBidPage() {
 
       <div className="max-w-4xl mx-auto mb-6">
         <div className="relative w-full max-w-3xl mx-auto rounded-xl overflow-hidden shadow-lg bg-black border border-white/10">
-          <Image src={heroImg} alt={title} width={1600} height={900} className="w-full h-[280px] object-cover" priority />
+          <Image
+            src={heroImg}
+            alt={title}
+            width={1600}
+            height={900}
+            className="w-full h-[280px] object-cover"
+            priority
+          />
           <div className="absolute inset-0 bg-black/35" />
           <div className="absolute left-0 bottom-0 p-5">
             <p className="text-xs text-white/70">Listing ID: {displayId}</p>
@@ -558,7 +586,9 @@ export default function PlaceBidPage() {
 
       <div className="max-w-4xl mx-auto bg-[#111111] rounded-2xl border border-white/10 shadow-lg p-6 sm:p-8 space-y-8">
         <div className="flex justify-end gap-2">
-          {isSoldForDisplay && <span className="px-4 py-1 bg-red-700 text-white rounded-full font-bold text-sm">SOLD</span>}
+          {isSoldForDisplay && (
+            <span className="px-4 py-1 bg-red-700 text-white rounded-full font-bold text-sm">SOLD</span>
+          )}
           {!isSoldForDisplay && canBidOrBuyNow && (
             <span className="px-4 py-1 bg-[#d6b45f] border border-black rounded-full font-bold text-sm text-black">
               LIVE
@@ -636,7 +666,10 @@ export default function PlaceBidPage() {
                 <div className="bg-yellow-900 text-yellow-50 border border-yellow-600 p-3 rounded text-xs">
                   <p className="font-semibold">Action needed</p>
                   <p className="mt-1">Before you can bid or use Buy Now, you must add a payment method.</p>
-                  <Link href={paymentMethodHref} className="mt-2 inline-block text-xs font-semibold text-yellow-200 underline">
+                  <Link
+                    href={paymentMethodHref}
+                    className="mt-2 inline-block text-xs font-semibold text-yellow-200 underline"
+                  >
                     Add / manage payment method
                   </Link>
                 </div>
@@ -649,10 +682,16 @@ export default function PlaceBidPage() {
               <p className="font-semibold text-[#d6b45f]">Log in to bid</p>
               <p className="text-sm text-gray-200">You need an account to place bids and use Buy Now.</p>
               <div className="flex flex-wrap gap-3 mt-2">
-                <Link href={loginHref} className="px-5 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold text-sm">
+                <Link
+                  href={loginHref}
+                  className="px-5 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold text-sm"
+                >
                   Login
                 </Link>
-                <Link href="/register" className="px-5 py-2 rounded-lg border border-blue-400 text-blue-200 hover:bg-blue-950 font-semibold text-sm">
+                <Link
+                  href="/register"
+                  className="px-5 py-2 rounded-lg border border-blue-400 text-blue-200 hover:bg-blue-950 font-semibold text-sm"
+                >
                   Register
                 </Link>
               </div>
@@ -662,15 +701,24 @@ export default function PlaceBidPage() {
               <p className="font-semibold text-red-100">
                 {isSoldForDisplay ? "This listing has been sold." : "Auction has already ended."}
               </p>
-              <p className="text-sm text-red-200">No further bids or Buy Now purchases can be made on this listing.</p>
+              <p className="text-sm text-red-200">
+                No further bids or Buy Now purchases can be made on this listing.
+              </p>
             </div>
           ) : (
             <>
-              {error && <p className="bg-red-950 text-red-100 border border-red-700 p-3 rounded whitespace-pre-line">{error}</p>}
-              {success && <p className="bg-green-950 text-green-100 border border-green-700 p-3 rounded">{success}</p>}
+              {error && (
+                <p className="bg-red-950 text-red-100 border border-red-700 p-3 rounded whitespace-pre-line">
+                  {error}
+                </p>
+              )}
+              {success && (
+                <p className="bg-green-950 text-green-100 border border-green-700 p-3 rounded">{success}</p>
+              )}
 
               <p className="text-sm text-gray-200">
-                Minimum bid: <strong>£{minimumAllowed.toLocaleString("en-GB")}</strong>
+                Minimum bid: <strong>£{minimumAllowed.toLocaleString("en-GB")}</strong>{" "}
+                <span className="text-xs text-gray-400">(increments of £{bidIncrement})</span>
               </p>
 
               <input
@@ -678,6 +726,8 @@ export default function PlaceBidPage() {
                 value={bidAmount}
                 onChange={(e) => setBidAmount(e.target.value)}
                 min={minimumAllowed}
+                step={bidIncrement}
+                inputMode="numeric"
                 placeholder={`£${minimumAllowed.toLocaleString("en-GB")}`}
                 className="w-full border border-white/10 rounded-lg p-3 text-lg text-center bg-black text-gray-100"
               />
@@ -693,7 +743,9 @@ export default function PlaceBidPage() {
                   }}
                   disabled={!canBidOrBuyNow || submitting || checkingPaymentMethod}
                   className={`flex-1 rounded-lg py-3 text-lg font-semibold text-white ${
-                    canBidOrBuyNow && !checkingPaymentMethod ? "bg-blue-600 hover:bg-blue-700" : "bg-gray-600 cursor-not-allowed"
+                    canBidOrBuyNow && !checkingPaymentMethod
+                      ? "bg-blue-600 hover:bg-blue-700"
+                      : "bg-gray-600 cursor-not-allowed"
                   }`}
                 >
                   {canBidOrBuyNow

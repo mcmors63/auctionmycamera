@@ -2,6 +2,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import type { FormEvent } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { loadStripe } from "@stripe/stripe-js";
@@ -128,7 +129,7 @@ function PaymentMethodForm({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authToken]);
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setError(null);
     setSuccess(null);
@@ -334,7 +335,10 @@ export default function PaymentMethodPage() {
             <Link href="/login" className="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-semibold">
               Login
             </Link>
-            <Link href="/register" className="px-4 py-2 rounded-lg border border-blue-600 text-blue-700 text-sm font-semibold">
+            <Link
+              href="/register"
+              className="px-4 py-2 rounded-lg border border-blue-600 text-blue-700 text-sm font-semibold"
+            >
               Register
             </Link>
           </div>

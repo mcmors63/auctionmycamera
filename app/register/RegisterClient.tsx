@@ -1,3 +1,4 @@
+// app/register/RegisterClient.tsx
 "use client";
 
 import Link from "next/link";
@@ -90,17 +91,23 @@ export default function RegisterClient() {
   const [turnstileToken, setTurnstileToken] = useState("");
   const [turnstileError, setTurnstileError] = useState("");
 
-  const canUseTurnstile = useMemo(() => !!TURNSTILE_SITE_KEY, [TURNSTILE_SITE_KEY]);
+  const canUseTurnstile = useMemo(
+    () => !!TURNSTILE_SITE_KEY,
+    [TURNSTILE_SITE_KEY]
+  );
 
   const resetTurnstile = () => {
     setTurnstileToken("");
     setTurnstileError("");
     try {
       if (window.turnstile) {
-        if (turnstileWidgetIdRef.current) window.turnstile.reset(turnstileWidgetIdRef.current);
+        if (turnstileWidgetIdRef.current)
+          window.turnstile.reset(turnstileWidgetIdRef.current);
         else window.turnstile.reset();
       }
-    } catch {}
+    } catch {
+      // ignore
+    }
   };
 
   useEffect(() => {
@@ -136,13 +143,17 @@ export default function RegisterClient() {
           },
           "error-callback": () => {
             setTurnstileToken("");
-            setTurnstileError("Turnstile failed to load — please refresh and try again.");
+            setTurnstileError(
+              "Turnstile failed to load — please refresh and try again."
+            );
           },
         });
 
         turnstileWidgetIdRef.current = widgetId;
       } catch {
-        setTurnstileError("Turnstile failed to initialise — please refresh and try again.");
+        setTurnstileError(
+          "Turnstile failed to initialise — please refresh and try again."
+        );
       }
     };
 
@@ -154,7 +165,9 @@ export default function RegisterClient() {
         if (window.turnstile && turnstileWidgetIdRef.current) {
           window.turnstile.remove(turnstileWidgetIdRef.current);
         }
-      } catch {}
+      } catch {
+        // ignore
+      }
       turnstileWidgetIdRef.current = null;
     };
   }, [canUseTurnstile, TURNSTILE_SITE_KEY]);
@@ -199,9 +212,11 @@ export default function RegisterClient() {
       if (!parsed || !parsed.isValid()) errors.phone = "Invalid UK number";
     }
 
-    if (!/^\S+@\S+\.\S+$/.test(formData.email)) errors.email = "Invalid email address";
+    if (!/^\S+@\S+\.\S+$/.test(formData.email))
+      errors.email = "Invalid email address";
     if (formData.password.length < 8) errors.password = "Minimum 8 characters";
-    if (formData.password !== formData.confirm) errors.confirm = "Passwords do not match";
+    if (formData.password !== formData.confirm)
+      errors.confirm = "Passwords do not match";
     if (!formData.agree) errors.agree = "You must agree to the Terms";
 
     if (canUseTurnstile && !turnstileToken) {
@@ -243,11 +258,11 @@ export default function RegisterClient() {
 
       if (!res.ok) {
         console.error("Address lookup error:", data);
-        setError(data.error || "Failed to find address.");
+        setError((data as any).error || "Failed to find address.");
         return;
       }
 
-      const cleaned = (data.addresses || [])
+      const cleaned = ((data as any).addresses || [])
         .map((addr: string) =>
           addr
             .split(",")
@@ -301,8 +316,10 @@ export default function RegisterClient() {
       });
 
       const data = await res.json().catch(() => ({}));
-      if (!res.ok || !data?.ok) {
-        setTurnstileError(data?.error || "Turnstile verification failed — please try again.");
+      if (!res.ok || !(data as any)?.ok) {
+        setTurnstileError(
+          (data as any)?.error || "Turnstile verification failed — please try again."
+        );
         resetTurnstile();
         return false;
       }
@@ -348,6 +365,7 @@ export default function RegisterClient() {
         (process.env.NEXT_PUBLIC_SITE_URL || "").trim().replace(/\/+$/, "") ||
         window.location.origin.replace(/\/+$/, "");
 
+      // ✅ confirmed route exists: app/verified
       const verifyUrl = `${base}/verified`;
       await account.createVerification(verifyUrl);
 
@@ -368,7 +386,10 @@ export default function RegisterClient() {
           email: formData.email,
           agree_to_terms: true,
         },
-        [Permission.read(Role.user(createdUser.$id)), Permission.write(Role.user(createdUser.$id))]
+        [
+          Permission.read(Role.user(createdUser.$id)),
+          Permission.write(Role.user(createdUser.$id)),
+        ]
       );
 
       setSuccessMsg(
@@ -403,7 +424,12 @@ export default function RegisterClient() {
     }
   };
 
-  const renderInput = (name: string, placeholder: string, type = "text", toggle = false) => {
+  const renderInput = (
+    name: string,
+    placeholder: string,
+    type = "text",
+    toggle = false
+  ) => {
     const value = (formData as any)[name];
     const err = fieldErrors[name];
     const isPassword = type === "password";
@@ -450,7 +476,9 @@ export default function RegisterClient() {
         {value && !err && (
           <CheckCircleIcon className="w-5 h-5 text-green-600 absolute right-2 top-2.5" />
         )}
-        {err && <XCircleIcon className="w-5 h-5 text-red-500 absolute right-2 top-2.5" />}
+        {err && (
+          <XCircleIcon className="w-5 h-5 text-red-500 absolute right-2 top-2.5" />
+        )}
 
         {toggle && (
           <button
@@ -458,7 +486,11 @@ export default function RegisterClient() {
             onClick={toggleFn}
             className="absolute right-8 top-2.5 text-gray-600 cursor-pointer"
           >
-            {visible ? <EyeSlashIcon className="w-5 h-5" /> : <EyeIcon className="w-5 h-5" />}
+            {visible ? (
+              <EyeSlashIcon className="w-5 h-5" />
+            ) : (
+              <EyeIcon className="w-5 h-5" />
+            )}
           </button>
         )}
 
@@ -476,8 +508,9 @@ export default function RegisterClient() {
         />
       ) : null}
 
-      <div className="w-full max-w-lg bg-[#111111] shadow-lg rounded-2xl border border-yellow-700/60 p-8">
-        <h1 className="text-2xl font-extrabold text-yellow-400 text-center mb-1">
+      {/* ✅ swapped plate-yellow styling -> camera sky styling */}
+      <div className="w-full max-w-lg bg-[#111111] shadow-lg rounded-2xl border border-sky-700/60 p-8">
+        <h1 className="text-2xl font-extrabold text-sky-300 text-center mb-1">
           Create your AuctionMyCamera account
         </h1>
 
@@ -512,7 +545,7 @@ export default function RegisterClient() {
                     type="button"
                     onClick={handleFindAddress}
                     disabled={addressLoading}
-                    className="bg-yellow-500 hover:bg-yellow-600 text-black px-4 py-2 rounded-md text-xs font-semibold whitespace-nowrap disabled:opacity-60"
+                    className="bg-sky-500 hover:bg-sky-600 text-black px-4 py-2 rounded-md text-xs font-semibold whitespace-nowrap disabled:opacity-60"
                   >
                     {addressLoading ? "Searching…" : "Find"}
                   </button>
@@ -534,7 +567,7 @@ export default function RegisterClient() {
                 )}
 
                 <p
-                  className="text-xs text-yellow-300 underline cursor-pointer text-center mt-1"
+                  className="text-xs text-sky-300 underline cursor-pointer text-center mt-1"
                   onClick={() => setManualEntry(true)}
                 >
                   Can&apos;t find your address? Enter manually
@@ -552,7 +585,7 @@ export default function RegisterClient() {
 
                 {manualEntry && (
                   <p
-                    className="text-xs text-yellow-300 underline cursor-pointer text-center"
+                    className="text-xs text-sky-300 underline cursor-pointer text-center"
                     onClick={() => setManualEntry(false)}
                   >
                     Use postcode lookup instead
@@ -591,18 +624,18 @@ export default function RegisterClient() {
                 I agree to the{" "}
                 <Link
                   href="/terms"
-                  className="text-yellow-300 underline"
+                  className="text-sky-300 underline"
                   target="_blank"
-                  rel="noreferrer"
+                  rel="noopener noreferrer"
                 >
                   Terms &amp; Conditions
                 </Link>{" "}
                 and{" "}
                 <Link
                   href="/privacy"
-                  className="text-yellow-300 underline"
+                  className="text-sky-300 underline"
                   target="_blank"
-                  rel="noreferrer"
+                  rel="noopener noreferrer"
                 >
                   Privacy Policy
                 </Link>
@@ -614,10 +647,7 @@ export default function RegisterClient() {
 
             {canUseTurnstile ? (
               <div className="mt-2">
-                <div
-                  ref={turnstileElRef}
-                  className="min-h-[65px] flex items-center justify-center"
-                />
+                <div ref={turnstileElRef} className="min-h-[65px] flex items-center justify-center" />
                 {turnstileError ? (
                   <p className="text-xs text-red-300 mt-2 text-center">{turnstileError}</p>
                 ) : null}
@@ -626,7 +656,7 @@ export default function RegisterClient() {
                 ) : null}
               </div>
             ) : (
-              <p className="text-[11px] text-yellow-200/80 text-center">
+              <p className="text-[11px] text-sky-200/80 text-center">
                 Turnstile not configured yet (NEXT_PUBLIC_TURNSTILE_SITE_KEY missing).
               </p>
             )}
@@ -634,14 +664,14 @@ export default function RegisterClient() {
             <button
               type="submit"
               disabled={loading || (canUseTurnstile && !turnstileToken)}
-              className="w-full mt-2 bg-yellow-500 hover:bg-yellow-600 text-black py-2.5 rounded-md font-semibold text-sm disabled:opacity-60"
+              className="w-full mt-2 bg-sky-500 hover:bg-sky-600 text-black py-2.5 rounded-md font-semibold text-sm disabled:opacity-60"
             >
               {loading ? "Creating your account…" : "Create account"}
             </button>
 
             <p className="text-[11px] text-gray-400 text-center mt-2">
               Already registered?{" "}
-              <Link href="/login" className="text-yellow-300 underline font-semibold">
+              <Link href="/login" className="text-sky-300 underline font-semibold">
                 Login here
               </Link>
               .

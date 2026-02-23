@@ -33,7 +33,10 @@ export default function Head({
   const rawId = searchParams?.id;
   const id = Array.isArray(rawId) ? rawId[0] : rawId;
 
-  const canonical = id ? `${SITE_URL}/listing/${id}` : `${SITE_URL}/auctions`;
+  // ✅ Canonical should point to THIS utility page (don’t guess your public listing route here)
+  const canonical = id
+    ? `${SITE_URL}/place_bid?id=${encodeURIComponent(id)}`
+    : `${SITE_URL}/place_bid`;
 
   return (
     <>
@@ -42,8 +45,9 @@ export default function Head({
         name="description"
         content="Place a bid on a camera or gear listing. Secure checkout and smooth post-sale handover."
       />
-      <meta name="robots" content="noindex, nofollow" />
-      <meta name="googlebot" content="noindex, nofollow" />
+      {/* ✅ Utility step: keep out of search, but allow link discovery */}
+      <meta name="robots" content="noindex, follow" />
+      <meta name="googlebot" content="noindex, follow" />
       <link rel="canonical" href={canonical} />
     </>
   );
