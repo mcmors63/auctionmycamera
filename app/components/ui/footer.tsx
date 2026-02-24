@@ -82,7 +82,22 @@ export default function Footer() {
                     Contact
                   </Link>
                 </li>
-                {/* ✅ Blog removed */}
+                <li>
+                  <Link
+                    href="/blog"
+                    className="underline hover:text-white transition"
+                  >
+                    Blog
+                  </Link>
+                </li>
+                <li>
+                  <Link
+                    href="/faq"
+                    className="underline hover:text-white transition"
+                  >
+                    FAQ
+                  </Link>
+                </li>
               </ul>
             </div>
 

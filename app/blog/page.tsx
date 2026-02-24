@@ -30,12 +30,13 @@ const projectId =
   process.env.APPWRITE_PROJECT_ID || process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID || "";
 const apiKey = process.env.APPWRITE_API_KEY || "";
 
-// DB / Collection (keep your existing behavior)
-const DB_ID =
-  process.env.APPWRITE_LISTINGS_DATABASE_ID ||
-  process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID ||
+// ✅ Blog DB must be the Database ID for your “blog_posts” database in Appwrite
+const BLOG_DB_ID =
+  process.env.APPWRITE_BLOG_DATABASE_ID ||
+  process.env.NEXT_PUBLIC_APPWRITE_BLOG_DATABASE_ID ||
   "";
 
+// Collection inside that DB
 const BLOG_COLLECTION_ID =
   process.env.APPWRITE_BLOG_COLLECTION_ID || "blog_posts";
 
@@ -53,6 +54,13 @@ export const metadata: Metadata = {
       "Guides, tips and practical advice for buying and selling camera gear — lenses, bodies, accessories and more.",
     url: blogCanonical,
     type: "website",
+    siteName: "AuctionMyCamera",
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "Blog | AuctionMyCamera",
+    description:
+      "Guides, tips and practical advice for buying and selling camera gear — lenses, bodies, accessories and more.",
   },
 };
 
@@ -69,15 +77,19 @@ type BlogPost = {
 
 async function getPosts(): Promise<BlogPost[]> {
   // Fail-safe: don't hard-crash render if env missing
-  if (!endpoint || !projectId || !apiKey || !DB_ID || !BLOG_COLLECTION_ID) {
-    console.error("[blog] Missing Appwrite env vars for blog index rendering.");
+  if (!endpoint || !projectId || !apiKey || !BLOG_DB_ID || !BLOG_COLLECTION_ID) {
+    console.warn("[blog] Blog env not configured (missing endpoint/project/apiKey/BLOG_DB_ID).");
     return [];
   }
 
-  const client = new Client().setEndpoint(endpoint).setProject(projectId).setKey(apiKey);
+  const client = new Client()
+    .setEndpoint(endpoint)
+    .setProject(projectId)
+    .setKey(apiKey);
+
   const databases = new Databases(client);
 
-  const res = await databases.listDocuments(DB_ID, BLOG_COLLECTION_ID, [
+  const res = await databases.listDocuments(BLOG_DB_ID, BLOG_COLLECTION_ID, [
     Query.equal("status", "published"),
     Query.orderDesc("publishedAt"),
     Query.limit(50),
@@ -92,23 +104,21 @@ export default async function BlogIndexPage() {
   try {
     posts = await getPosts();
   } catch (err) {
-    console.error("Failed to load blog posts:", err);
+    console.error("[blog] Failed to load blog posts:", err);
   }
 
   return (
-    <main className="min-h-screen bg-white text-neutral-900 py-10 px-4">
-      <div className="max-w-4xl mx-auto bg-white rounded-2xl shadow-sm border border-neutral-200 p-8">
+    <main className="min-h-screen bg-background text-foreground py-10 px-4">
+      <div className="max-w-4xl mx-auto rounded-2xl shadow-sm border border-border bg-card p-6 sm:p-8">
         <header className="mb-8">
-          <h1 className="text-3xl font-extrabold tracking-tight text-neutral-900 mb-2">
-            Blog
-          </h1>
-          <p className="text-sm text-neutral-700">
+          <h1 className="text-3xl font-extrabold tracking-tight mb-2">Blog</h1>
+          <p className="text-sm text-muted-foreground">
             Guides, tips and practical advice for buying and selling camera gear.
           </p>
         </header>
 
         {posts.length === 0 && (
-          <p className="text-neutral-600 text-sm">
+          <p className="text-muted-foreground text-sm">
             No posts yet. Once you publish an article in Appwrite, it will appear here.
           </p>
         )}
@@ -130,11 +140,11 @@ export default async function BlogIndexPage() {
             return (
               <article
                 key={post.$id}
-                className="border border-neutral-200 rounded-xl p-5 bg-white hover:shadow-sm transition-shadow"
+                className="border border-border rounded-xl p-5 bg-background hover:shadow-sm transition-shadow"
               >
                 <div className="flex flex-col gap-3 md:flex-row md:items-start">
                   {post.imageUrl && (
-                    <div className="w-full md:w-40 h-28 overflow-hidden rounded-lg mb-2 md:mb-0 md:mr-4 bg-neutral-100 border border-neutral-200">
+                    <div className="w-full md:w-40 h-28 overflow-hidden rounded-lg mb-2 md:mb-0 md:mr-4 bg-muted border border-border">
                       {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img
                         src={post.imageUrl}
@@ -146,17 +156,24 @@ export default async function BlogIndexPage() {
                   )}
 
                   <div className="flex-1">
-                    <h2 className="text-xl font-semibold text-neutral-900 mb-1">
-                      <Link href={`/blog/${post.slug}`} className="hover:underline">
+                    <h2 className="text-xl font-semibold mb-1">
+                      <Link href={`/blog/${post.slug}`} className="underline hover:opacity-80">
                         {post.title}
                       </Link>
                     </h2>
 
-                    {dateLabel && <p className="text-xs text-neutral-500 mb-2">{dateLabel}</p>}
+                    {dateLabel && (
+                      <p className="text-xs text-muted-foreground mb-2">{dateLabel}</p>
+                    )}
 
-                    {preview ? <p className="text-sm text-neutral-800 mb-3">{preview}</p> : null}
+                    {preview ? (
+                      <p className="text-sm text-foreground/90 mb-3">{preview}</p>
+                    ) : null}
 
-                    <Link href={`/blog/${post.slug}`} className="text-xs font-semibold hover:underline">
+                    <Link
+                      href={`/blog/${post.slug}`}
+                      className="text-xs font-semibold underline hover:opacity-80"
+                    >
                       Read more →
                     </Link>
                   </div>
