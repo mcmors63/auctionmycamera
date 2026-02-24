@@ -1,3 +1,4 @@
+// app/sell/SellClient.tsx
 "use client";
 
 import type React from "react";
@@ -46,6 +47,26 @@ function safeFilename(name: string) {
   return clean || "photo";
 }
 
+function normalizeBaseUrl(input: string) {
+  const trimmed = (input || "").trim();
+  if (!trimmed) return "";
+  return trimmed.replace(/\/+$/, "");
+}
+
+function getSiteUrl() {
+  const explicit = normalizeBaseUrl(process.env.NEXT_PUBLIC_SITE_URL || "");
+  if (explicit) return explicit;
+
+  const vercel = normalizeBaseUrl(
+    process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : ""
+  );
+  if (vercel) return vercel;
+
+  return typeof window !== "undefined"
+    ? normalizeBaseUrl(window.location.origin)
+    : "";
+}
+
 function formatLondon(dt: Date) {
   // Always show UK time regardless of the visitor’s locale/timezone.
   return dt.toLocaleString("en-GB", {
@@ -90,7 +111,9 @@ export default function SellClient() {
         setUser(null);
 
         // Direct them to register/login before they can sell
-        router.replace(`/login-or-register?next=${encodeURIComponent("/sell")}`);
+        router.replace(
+          `/login-or-register?next=${encodeURIComponent("/sell")}`
+        );
       } finally {
         if (!alive) return;
         setLoadingUser(false);
@@ -106,10 +129,15 @@ export default function SellClient() {
   async function resendVerificationEmail() {
     setVerifyMsg("");
     setVerifySending(true);
+
     try {
-      // Safe redirect target (doesn't require a special page)
-      const redirectUrl = `${window.location.origin}/`;
+      // ✅ IMPORTANT: use your real verification handler (server route)
+      // Appwrite will append ?userId=...&secret=...
+      const base = getSiteUrl();
+      const redirectUrl = `${base || window.location.origin}/api/verify`;
+
       await account.createVerification(redirectUrl);
+
       setVerifyMsg("✅ Verification email sent. Check your inbox (and spam).");
     } catch (err) {
       console.error("Failed to send verification email:", err);
@@ -331,7 +359,11 @@ export default function SellClient() {
       setGearType("camera");
     } catch (error: any) {
       console.error("Error submitting listing:", error);
-      alert(`❌ Failed to submit listing.\n\n${String(error?.message || "Please try again.")}`);
+      alert(
+        `❌ Failed to submit listing.\n\n${String(
+          error?.message || "Please try again."
+        )}`
+      );
     } finally {
       setSubmitting(false);
     }
@@ -386,20 +418,26 @@ export default function SellClient() {
       <div className="mb-6">
         <h1 className="text-3xl font-extrabold tracking-tight">Sell camera gear</h1>
         <p className="mt-2 text-sm text-muted-foreground">
-          Modern and antique cameras welcome — plus lenses and accessories. Listings are reviewed and then queued for the next
-          weekly auction.
+          Modern and antique cameras welcome — plus lenses and accessories.
+          Listings are reviewed and then queued for the next weekly auction.
         </p>
 
         <div className="mt-3 rounded-2xl border border-border bg-card p-4">
           <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-            {previewWindow.isLive ? "Current auction window (UK time)" : "Upcoming auction window (UK time)"}
+            {previewWindow.isLive
+              ? "Current auction window (UK time)"
+              : "Upcoming auction window (UK time)"}
           </p>
           <p className="mt-1 text-sm">
             <span className="font-semibold">Starts:</span>{" "}
-            <span className="text-muted-foreground">{formatLondon(previewWindow.start)}</span>
+            <span className="text-muted-foreground">
+              {formatLondon(previewWindow.start)}
+            </span>
             <br />
             <span className="font-semibold">Ends:</span>{" "}
-            <span className="text-muted-foreground">{formatLondon(previewWindow.end)}</span>
+            <span className="text-muted-foreground">
+              {formatLondon(previewWindow.end)}
+            </span>
           </p>
         </div>
 
@@ -409,9 +447,12 @@ export default function SellClient() {
 
         {!user.emailVerification && (
           <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 p-4">
-            <p className="text-sm font-semibold text-amber-900">Verify your email to list items</p>
+            <p className="text-sm font-semibold text-amber-900">
+              Verify your email to list items
+            </p>
             <p className="mt-1 text-xs text-amber-800">
-              You’re logged in, but your email isn’t verified yet. Verify it first, then come back here to submit your listing.
+              You’re logged in, but your email isn’t verified yet. Verify it first,
+              then come back here to submit your listing.
             </p>
 
             <div className="mt-3 flex flex-wrap gap-3">
@@ -452,15 +493,8 @@ export default function SellClient() {
         {/* ✅ Photo upload */}
         <div>
           <label className={labelBase}>Photo (optional)</label>
-          <input
-            name="photo"
-            type="file"
-            accept="image/*"
-            className={inputBase}
-          />
-          <p className={hintBase}>
-            Add one clear photo (front/angle). You can add more later.
-          </p>
+          <input name="photo" type="file" accept="image/*" className={inputBase} />
+          <p className={hintBase}>Add one clear photo (front/angle). You can add more later.</p>
         </div>
 
         <div className="grid sm:grid-cols-2 gap-4">
@@ -568,12 +602,28 @@ export default function SellClient() {
         <div className="grid sm:grid-cols-2 gap-4">
           <div>
             <label className={labelBase}>Starting price (£)</label>
-            <input name="starting_price" type="number" placeholder="0" className={inputBase} required min={0} step="1" />
+            <input
+              name="starting_price"
+              type="number"
+              placeholder="0"
+              className={inputBase}
+              required
+              min={0}
+              step="1"
+            />
           </div>
 
           <div>
             <label className={labelBase}>Reserve price (£)</label>
-            <input name="reserve_price" type="number" placeholder="0" className={inputBase} required min={0} step="1" />
+            <input
+              name="reserve_price"
+              type="number"
+              placeholder="0"
+              className={inputBase}
+              required
+              min={0}
+              step="1"
+            />
             <p className={hintBase}>Minimum you’re happy to accept.</p>
           </div>
         </div>
