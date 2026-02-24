@@ -10,6 +10,10 @@ const SITE_URL = (process.env.NEXT_PUBLIC_SITE_URL || "https://auctionmycamera.c
   ""
 );
 
+// ✅ Sister sites (keep as constants to avoid typos)
+const PLATE_URL = "https://auctionmyplate.co.uk";
+const SEALABID_URL = "https://sealabid.com";
+
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
   title: "AuctionMyCamera | UK Camera & Photography Gear Auctions",
@@ -345,6 +349,53 @@ export default function HomePage() {
 
       <section className="border-b border-border">
         <HomeBannerCarousel />
+      </section>
+
+      {/* ✅ NEW: Sister marketplaces (subtle, premium, non-spammy) */}
+      <section className="border-b border-border bg-background">
+        <div className="max-w-6xl mx-auto px-6 py-10">
+          <div className="rounded-3xl border border-border bg-card p-6 sm:p-7 shadow-sm">
+            <p className="text-[11px] font-semibold tracking-[0.22em] text-muted-foreground uppercase">
+              Also by the same team
+            </p>
+
+            <div className="mt-3 flex flex-col md:flex-row md:items-center md:justify-between gap-5">
+              <div>
+                <h2 className="text-xl sm:text-2xl font-extrabold leading-tight">
+                  Selling something else?
+                  <span className="block text-primary">
+                    Plates on AuctionMyPlate · Premium goods on Sealabid
+                  </span>
+                </h2>
+
+                <p className="mt-2 text-sm text-muted-foreground max-w-2xl leading-relaxed">
+                  We run specialist marketplaces with clear rules, secure payments, and a weekly rhythm
+                  where it makes sense.
+                </p>
+              </div>
+
+              <div className="flex flex-wrap gap-3">
+                <a
+                  href={PLATE_URL}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="px-5 py-3 rounded-xl font-semibold text-sm text-center transition border border-border bg-background hover:bg-accent focus:outline-none focus:ring-2 focus:ring-ring"
+                >
+                  Visit AuctionMyPlate
+                </a>
+
+                <a
+                  href={SEALABID_URL}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="px-5 py-3 rounded-xl font-semibold text-sm text-center shadow-sm transition bg-primary text-primary-foreground hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-ring"
+                >
+                  Visit Sealabid
+                </a>
+              </div>
+            </div>
+          </div>
+        </div>
       </section>
 
       <section className="relative border-b border-border bg-background overflow-hidden">
