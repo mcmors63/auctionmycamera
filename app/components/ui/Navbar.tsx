@@ -155,13 +155,22 @@ export default function Navbar() {
           </span>
 
           <span className="leading-tight">
-            <span className="block text-[15px] md:text-base font-extrabold tracking-tight text-foreground">
-              AuctionMy<span className="text-primary">Camera</span>
-            </span>
-            <span className="block text-[11px] md:text-xs text-muted-foreground">
-              Auctions for cameras & gear
-            </span>
-          </span>
+  <span className="block text-[15px] md:text-base font-extrabold tracking-tight text-foreground">
+    AuctionMy<span className="text-primary">Camera</span>
+  </span>
+
+  <span className="block text-[11px] md:text-xs text-muted-foreground">
+    Auctions for cameras & gear
+  </span>
+
+  <Link
+    href="/our-marketplace-network"
+    className="mt-1 inline-flex w-fit items-center rounded-full border border-border bg-card px-2.5 py-1 text-[10px] font-semibold text-muted-foreground transition hover:text-foreground hover:bg-accent"
+    title="Learn about our specialist marketplace network"
+  >
+    Part of the Specialist Auction Network
+  </Link>
+</span>
         </Link>
 
         {/* DESKTOP NAV LINKS */}
