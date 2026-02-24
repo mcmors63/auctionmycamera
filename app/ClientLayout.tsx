@@ -1,54 +1,69 @@
+// app/ClientLayout.tsx
 "use client";
 
-import { useEffect } from "react";
+import type React from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { Client, Account } from "appwrite";
 import Navbar from "./components/ui/Navbar";
 import Footer from "./components/ui/footer";
 
-export default function ClientLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
+export default function ClientLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
 
-  // ✅ Appwrite setup
-  const client = new Client()
-    .setEndpoint(process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT!)
-    .setProject(process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID!);
+  // ✅ Create Appwrite client/account once (not on every render)
+  const account = useMemo(() => {
+    const endpoint = process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT;
+    const projectId = process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID;
 
-  const account = new Account(client);
+    if (!endpoint || !projectId) {
+      // Don’t throw in client runtime—just keep it safe.
+      console.warn("[ClientLayout] Missing Appwrite env vars.");
+      // Return a dummy account-shaped object to avoid crashes if env is missing.
+      // But realistically, your env should be set.
+      const dummyClient = new Client();
+      return new Account(dummyClient);
+    }
+
+    const client = new Client().setEndpoint(endpoint).setProject(projectId);
+    return new Account(client);
+  }, []);
+
+  // ✅ Browser-safe timer type
+  const inactivityTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    let inactivityTimer: NodeJS.Timeout;
+    const logoutAfterMs = 10 * 60 * 1000; // 10 minutes
 
-    const resetTimer = () => {
-      clearTimeout(inactivityTimer);
-      inactivityTimer = setTimeout(async () => {
+    const clearTimer = () => {
+      if (inactivityTimerRef.current) clearTimeout(inactivityTimerRef.current);
+      inactivityTimerRef.current = null;
+    };
+
+    const startTimer = () => {
+      clearTimer();
+      inactivityTimerRef.current = setTimeout(async () => {
         try {
           await account.deleteSession("current");
-          console.log("User logged out after 5 minutes of inactivity");
+          console.log("[ClientLayout] User logged out after inactivity.");
           router.push("/login");
         } catch (err) {
-          console.error("Auto logout failed:", err);
+          console.error("[ClientLayout] Auto logout failed:", err);
         }
-      }, 5 * 60 * 1000); // 5 minutes
+      }, logoutAfterMs);
     };
 
     // 👂 Listen for user activity
-    const events = ["mousemove", "keydown", "scroll", "touchstart"];
-    events.forEach((event) => window.addEventListener(event, resetTimer));
+    const events: Array<keyof WindowEventMap> = ["mousemove", "keydown", "scroll", "touchstart"];
+    events.forEach((event) => window.addEventListener(event, startTimer, { passive: true }));
 
-    resetTimer(); // start timer
+    startTimer(); // start timer
 
     return () => {
-      clearTimeout(inactivityTimer);
-      events.forEach((event) =>
-        window.removeEventListener(event, resetTimer)
-      );
+      clearTimer();
+      events.forEach((event) => window.removeEventListener(event, startTimer));
     };
-  }, [router]);
+  }, [account, router]);
 
   return (
     <>
