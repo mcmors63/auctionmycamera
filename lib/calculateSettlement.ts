@@ -4,31 +4,65 @@
 // Purpose:
 // - Provide a single place to calculate commission tiers + seller payout.
 // - Keep existing imports working: import { calculateSettlement } from "@/lib/calculateSettlement"
+//
+// IMPORTANT (units):
+// - This function expects salePrice in whole pounds (e.g. 250 not 25000).
+// - It returns whole pounds (integers).
+// - If you want pence-based settlement, create a separate calculateSettlementPence()
+//   so we don't silently break existing behaviour.
 
 export type Settlement = {
-  commissionRate: number;      // %
-  commissionAmount: number;    // £ integer
-  sellerPayout: number;        // £ integer
+  commissionRate: number; // %
+  commissionAmount: number; // £ integer
+  sellerPayout: number; // £ integer
 
   // For consistent UI/email reporting
-  listingFeeApplied: number;   // £ integer
+  listingFeeApplied: number; // £ integer
 };
+
+function assertWholePounds(name: string, value: number) {
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new Error(`Invalid ${name} for settlement.`);
+  }
+  if (!Number.isInteger(value)) {
+    throw new Error(
+      `Invalid ${name}: expected whole pounds integer (e.g. 250), got ${value}.`
+    );
+  }
+
+  // Heuristic guard: if someone accidentally passes pence (e.g. 25000),
+  // this will at least shout when the number looks suspiciously large.
+  if (value >= 100000) {
+    throw new Error(
+      `Invalid ${name}: value looks like pence (${value}). Pass whole pounds (e.g. 250) instead.`
+    );
+  }
+}
 
 export function calculateSettlement(
   salePrice: number,
   opts?: {
-    listingFee?: number;              // optional listing fee charged to seller (£)
-    commissionRateOverride?: number;  // optional fixed commission rate (%)
+    listingFee?: number; // optional listing fee charged to seller (£, whole pounds)
+    commissionRateOverride?: number; // optional fixed commission rate (%)
   }
 ): Settlement {
-  if (!Number.isFinite(salePrice) || salePrice <= 0) {
-    throw new Error("Invalid sale price for settlement.");
-  }
+  assertWholePounds("salePrice", salePrice);
+
+  const listingFeeRaw = opts?.listingFee;
 
   const listingFee =
-    typeof opts?.listingFee === "number" && opts.listingFee >= 0
-      ? Math.round(opts.listingFee)
+    typeof listingFeeRaw === "number" && Number.isFinite(listingFeeRaw)
+      ? listingFeeRaw
       : 0;
+
+  if (listingFee < 0) {
+    throw new Error("Invalid listingFee: must be >= 0.");
+  }
+  if (!Number.isInteger(listingFee)) {
+    throw new Error(
+      `Invalid listingFee: expected whole pounds integer (e.g. 10), got ${listingFee}.`
+    );
+  }
 
   let commissionRate: number;
 
@@ -40,8 +74,7 @@ export function calculateSettlement(
   ) {
     commissionRate = opts.commissionRateOverride;
   } else {
-    // Default tiering (you can tweak these later)
-    // Keep it simple + predictable.
+    // Default tiering (tweak later if needed)
     if (salePrice <= 499) {
       commissionRate = 12;
     } else if (salePrice <= 999) {
@@ -55,6 +88,7 @@ export function calculateSettlement(
     }
   }
 
+  // In whole pounds; rounding is OK because salePrice is integer pounds.
   const commissionAmount = Math.round(salePrice * (commissionRate / 100));
   const sellerPayout = Math.max(0, salePrice - commissionAmount - listingFee);
 

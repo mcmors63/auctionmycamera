@@ -61,6 +61,13 @@ const siteUrl = (process.env.NEXT_PUBLIC_SITE_URL || "https://auctionmycamera.co
 const adminEmail = (process.env.ADMIN_EMAIL || process.env.NEXT_PUBLIC_ADMIN_EMAIL || "admin@auctionmycamera.co.uk")
   .trim();
 
+// ✅ Prefer an explicit from address if you have one
+const fromEmail =
+  (process.env.FROM_EMAIL ||
+    process.env.CONTACT_FROM_EMAIL ||
+    smtpUser ||
+    "admin@auctionmycamera.co.uk").trim();
+
 // -----------------------------
 // Helpers
 // -----------------------------
@@ -105,6 +112,12 @@ function getListingTitle(listing: any) {
   if (bm) return bm;
 
   return "your item";
+}
+
+function toWholePoundsNonNegative(value: unknown, fallback = 0) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+  if (value < 0) return fallback;
+  return Math.round(value);
 }
 
 // Schema-tolerant create/update so Appwrite schema differences don't brick the route.
@@ -173,7 +186,7 @@ async function updateDocSchemaTolerant(
  * {
  *   listingId: string;    // listings doc $id
  *   buyerEmail: string;
- *   finalPrice: number;   // £ amount
+ *   finalPrice: number;   // £ amount (whole pounds integer)
  * }
  */
 export async function POST(req: NextRequest) {
@@ -209,6 +222,13 @@ export async function POST(req: NextRequest) {
     if (!Number.isFinite(finalPrice) || finalPrice <= 0) {
       return NextResponse.json({ error: "finalPrice must be a positive number" }, { status: 400 });
     }
+    // ✅ Settlement logic expects whole pounds; enforce it at the boundary.
+    if (!Number.isInteger(finalPrice)) {
+      return NextResponse.json(
+        { error: "finalPrice must be a whole pounds integer (e.g. 250)" },
+        { status: 400 }
+      );
+    }
 
     const client = getAppwriteClient();
     const databases = new Databases(client);
@@ -224,11 +244,12 @@ export async function POST(req: NextRequest) {
     const itemTitle = getListingTitle(listing);
 
     // 2) Settlement (camera logic)
-    const listingFee =
-      typeof listing?.listing_fee === "number" && listing.listing_fee >= 0 ? listing.listing_fee : 0;
+    const listingFee = toWholePoundsNonNegative(listing?.listing_fee, 0);
 
     const commissionRateOverride =
-      typeof listing?.commission_rate === "number" && listing.commission_rate >= 0 ? listing.commission_rate : undefined;
+      typeof listing?.commission_rate === "number" && Number.isFinite(listing.commission_rate) && listing.commission_rate >= 0
+        ? listing.commission_rate
+        : undefined;
 
     const settlement = calculateSettlement(finalPrice, {
       listingFee,
@@ -288,7 +309,7 @@ export async function POST(req: NextRequest) {
       // Buyer email
       try {
         await transporter.sendMail({
-          from: `"AuctionMyCamera" <${smtpUser}>`,
+          from: `"AuctionMyCamera" <${fromEmail}>`,
           to: buyerEmail,
           subject: `Next steps for your purchase on AuctionMyCamera`,
           text: [
@@ -323,7 +344,7 @@ export async function POST(req: NextRequest) {
       try {
         if (sellerEmail) {
           await transporter.sendMail({
-            from: `"AuctionMyCamera" <${smtpUser}>`,
+            from: `"AuctionMyCamera" <${fromEmail}>`,
             to: sellerEmail,
             subject: `Sold: ${itemTitle} on AuctionMyCamera`,
             text: [
@@ -365,7 +386,7 @@ export async function POST(req: NextRequest) {
       try {
         if (adminEmail) {
           await transporter.sendMail({
-            from: `"AuctionMyCamera" <${smtpUser}>`,
+            from: `"AuctionMyCamera" <${fromEmail}>`,
             to: adminEmail,
             subject: `New sale created: ${itemTitle}`,
             text: [

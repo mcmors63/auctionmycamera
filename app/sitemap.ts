@@ -56,7 +56,7 @@ const projectId =
 
 const apiKey = process.env.APPWRITE_API_KEY || "";
 
-// ✅ LISTINGS ONLY (no legacy LISTING fallbacks)
+// ✅ LISTINGS ONLY
 const LISTINGS_DB_ID =
   process.env.APPWRITE_LISTINGS_DATABASE_ID ||
   process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID ||
@@ -68,17 +68,21 @@ const LISTINGS_COLLECTION_ID =
   "";
 
 /**
- * ✅ Listing route is /listing/[id]
- * Guard against mistakes like NEXT_PUBLIC_LISTING_URL_PATTERN=listing
+ * ✅ Listing route base.
+ * Default to /listings/{id}. You can override with NEXT_PUBLIC_LISTING_URL_PATTERN.
+ *
+ * Accepts patterns like:
+ * - /listings/{id}
+ * - /listing/{id}
  */
 function getListingPattern() {
   const raw = (process.env.NEXT_PUBLIC_LISTING_URL_PATTERN || "").trim();
 
-  // If env is missing, use the correct default
-  if (!raw) return "/listing/{id}";
+  // Default: most common in this codebase
+  if (!raw) return "/listings/{id}";
 
-  // If someone sets "listing" (or anything not starting with /listing), ignore it
-  if (!raw.startsWith("/listing")) return "/listing/{id}";
+  // Must start with /listing or /listings
+  if (!raw.startsWith("/listing")) return "/listings/{id}";
 
   return raw;
 }
@@ -93,6 +97,9 @@ function buildListingUrl(id: string) {
   const cleanPath = path.startsWith("/") ? path : `/${path}`;
   return `${SITE_URL}${cleanPath}`;
 }
+
+// ✅ Only include statuses that are truly public/indexable (edit if your app differs)
+const PUBLIC_LISTING_STATUSES = ["active", "ended", "sold"];
 
 async function fetchListingUrls(): Promise<MetadataRoute.Sitemap> {
   // ✅ Fail loudly if env is not wired correctly (prevents silently using wrong DB)
@@ -116,8 +123,7 @@ async function fetchListingUrls(): Promise<MetadataRoute.Sitemap> {
 
   while (true) {
     const queries: string[] = [
-      // ✅ Include all public/indexable statuses (adjust if your camera app differs)
-      Query.equal("status", ["live", "queued", "sold"]),
+      Query.equal("status", PUBLIC_LISTING_STATUSES),
       Query.orderAsc("$id"),
       Query.limit(100),
     ];
@@ -133,7 +139,7 @@ async function fetchListingUrls(): Promise<MetadataRoute.Sitemap> {
       urls.push({
         url: buildListingUrl(id),
         lastModified,
-        changeFrequency: "hourly",
+        changeFrequency: "daily",
         priority: 0.8,
       });
     }

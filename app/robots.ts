@@ -22,11 +22,17 @@ export default function robots(): MetadataRoute.Robots {
     rules: [
       {
         userAgent: "*",
-        // ✅ Allow the site generally
-        allow: ["/", "/admin-login", "/reset-password"],
-        // ✅ Block admin area + API endpoints
-        // NOTE: Disallow "/admin" would also match "/admin-login", so we explicitly allow "/admin-login" above.
-        disallow: ["/admin", "/api/"],
+        // ✅ Block private/account/admin surfaces + API
+        disallow: [
+          "/admin",
+          "/api/",
+          "/dashboard",
+          "/login",
+          "/register",
+          "/login-or-register",
+          "/verify",
+          "/reset-password",
+        ],
       },
     ],
     sitemap: `${PROD_SITE_URL}/sitemap.xml`,

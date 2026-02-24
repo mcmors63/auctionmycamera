@@ -1,18 +1,26 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 export function useAuctionTimer(auctionEnd: string | Date) {
-  const [timeLeft, setTimeLeft] = useState("");
+  const [timeLeft, setTimeLeft] = useState("—");
+
+  // Parse once per input change (not every second)
+  const targetMs = useMemo(() => {
+    if (!auctionEnd) return NaN;
+    const ms = new Date(auctionEnd).getTime();
+    return Number.isFinite(ms) ? ms : NaN;
+  }, [auctionEnd]);
 
   useEffect(() => {
-    if (!auctionEnd) return;
-
-    const target = new Date(auctionEnd).getTime();
+    if (!Number.isFinite(targetMs)) {
+      setTimeLeft("—");
+      return;
+    }
 
     const update = () => {
-      const now = new Date().getTime();
-      const diff = target - now;
+      const now = Date.now();
+      const diff = targetMs - now;
 
       if (diff <= 0) {
         setTimeLeft("Auction Ended");
@@ -33,11 +41,11 @@ export function useAuctionTimer(auctionEnd: string | Date) {
       setTimeLeft(formatted);
     };
 
-    update(); // Run immediately
-    const timer = setInterval(update, 1000);
+    update();
+    const timer = window.setInterval(update, 1000);
 
-    return () => clearInterval(timer);
-  }, [auctionEnd]);
+    return () => window.clearInterval(timer);
+  }, [targetMs]);
 
   return timeLeft;
 }
