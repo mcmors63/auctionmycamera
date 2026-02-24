@@ -1,4 +1,5 @@
-﻿"use client";
+﻿// app/components/ui/HomeBannerCarousel.tsx
+"use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
@@ -12,8 +13,7 @@ type BannerItem = {
 const BANNERS: BannerItem[] = [
   {
     title: "Free to list. Pay only when your item sells.",
-    subtitle:
-      "No subscriptions â€” just a success fee when the auction completes.",
+    subtitle: "No subscriptions — just a success fee when the auction completes.",
     tag: "SELL WITH CLARITY",
   },
   {
@@ -25,14 +25,14 @@ const BANNERS: BannerItem[] = [
   {
     title: "Weekly auctions, run on a fixed schedule.",
     subtitle:
-      "Auctions run Monday 01:00 to Sunday 23:00 (UK time) â€” buyers know when to bid and sellers know when it ends.",
+      "Auctions run Monday 01:00 to Sunday 23:00 (UK time) — buyers know when to bid and sellers know when it ends.",
     tag: "WEEKLY AUCTIONS",
   },
   {
-    title: "Straightforward handover after sale.",
+    title: "Straightforward selling process.",
     subtitle:
-      "Seller confirms dispatch/collection details, buyer confirms receipt â€” we keep both sides updated until complete.",
-    tag: "AFTER SALE",
+      "List your camera gear, get approved, then it’s queued into the next weekly auction window.",
+    tag: "HOW IT WORKS",
   },
 ];
 
@@ -54,8 +54,8 @@ export default function HomeBannerCarousel() {
 
   const goTo = (i: number) => {
     if (count <= 0) return;
-    const next = ((i % count) + count) % count;
-    setIndex(next);
+    const nextIdx = ((i % count) + count) % count;
+    setIndex(nextIdx);
   };
 
   const next = () => goTo(index + 1);
@@ -84,8 +84,7 @@ export default function HomeBannerCarousel() {
   // Pause when tab is hidden; resume when visible again
   useEffect(() => {
     const onVis = () => {
-      if (document.hidden) setPaused(true);
-      else setPaused(false);
+      setPaused(document.hidden);
     };
     document.addEventListener("visibilitychange", onVis);
     return () => document.removeEventListener("visibilitychange", onVis);
@@ -97,10 +96,13 @@ export default function HomeBannerCarousel() {
         {/* Left label / badge */}
         <div className="w-full md:w-1/3">
           <span className="inline-flex items-center gap-2 rounded-full border border-border bg-card px-3 py-1 text-[10px] sm:text-xs font-semibold tracking-[0.25em] text-primary uppercase">
-            <span className="text-primary">â—</span> Key details
+            <span className="text-primary" aria-hidden="true">
+              ●
+            </span>{" "}
+            Key details
           </span>
           <p className="mt-2 text-xs sm:text-sm text-muted-foreground max-w-xs leading-relaxed">
-            The essentials â€” clear, factual, and consistent with how the platform works.
+            The essentials — clear, factual, and consistent with how the platform works.
           </p>
         </div>
 
@@ -112,6 +114,9 @@ export default function HomeBannerCarousel() {
             onMouseLeave={() => setPaused(false)}
             onFocusCapture={() => setPaused(true)}
             onBlurCapture={() => setPaused(false)}
+            role="region"
+            aria-roledescription="carousel"
+            aria-label="Key details carousel"
           >
             {/* subtle top glow */}
             <div className="pointer-events-none absolute inset-0 bg-gradient-to-br from-primary/10 via-transparent to-transparent" />
@@ -121,18 +126,18 @@ export default function HomeBannerCarousel() {
               <button
                 type="button"
                 onClick={prev}
-                aria-label="Previous banner"
+                aria-label="Previous message"
                 className="rounded-lg border border-border bg-background/60 px-2.5 py-1.5 text-foreground/80 hover:text-foreground hover:bg-accent transition"
               >
-                â€¹
+                ‹
               </button>
               <button
                 type="button"
                 onClick={next}
-                aria-label="Next banner"
+                aria-label="Next message"
                 className="rounded-lg border border-border bg-background/60 px-2.5 py-1.5 text-foreground/80 hover:text-foreground hover:bg-accent transition"
               >
-                â€º
+                ›
               </button>
             </div>
 
@@ -169,7 +174,7 @@ export default function HomeBannerCarousel() {
                       key={i}
                       type="button"
                       onClick={() => goTo(i)}
-                      aria-label={`Show banner ${i + 1} of ${count}`}
+                      aria-label={`Show message ${i + 1} of ${count}`}
                       {...(active ? { "aria-current": "true" } : {})}
                       className={[
                         "h-2 rounded-full transition-all",
@@ -183,7 +188,7 @@ export default function HomeBannerCarousel() {
               {/* tiny status */}
               <p className="text-[10px] sm:text-xs text-muted-foreground">
                 {index + 1}/{count}
-                {paused ? " â€¢ paused" : ""}
+                {paused ? " • paused" : ""}
               </p>
             </div>
 

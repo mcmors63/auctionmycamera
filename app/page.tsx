@@ -1,18 +1,17 @@
 // app/page.tsx
-import type React from "react";
 import type { Metadata } from "next";
-import Script from "next/script";
 import Link from "next/link";
 import Image from "next/image";
 import HomeBannerCarousel from "@/components/ui/HomeBannerCarousel";
+import type { ReactNode } from "react";
 
-const SITE_URL =
-  (process.env.NEXT_PUBLIC_SITE_URL || "https://auctionmycamera.co.uk").replace(
-    /\/+$/,
-    ""
-  );
+const SITE_URL = (process.env.NEXT_PUBLIC_SITE_URL || "https://auctionmycamera.co.uk").replace(
+  /\/+$/,
+  ""
+);
 
 export const metadata: Metadata = {
+  metadataBase: new URL(SITE_URL),
   title: "AuctionMyCamera | UK Camera & Photography Gear Auctions",
   description:
     "List your camera, lens, or photography gear for free. Weekly auctions, secure Stripe payments, optional free auto-relist until sold, and a clear step-by-step selling process.",
@@ -115,23 +114,19 @@ export default function HomePage() {
   return (
     <div className="min-h-screen bg-background text-foreground">
       {/* Structured data (SEO) */}
-      <Script
-        id="ld-org"
+      <script
         type="application/ld+json"
         dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLdOrg) }}
       />
-      <Script
-        id="ld-website"
+      <script
         type="application/ld+json"
         dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLdWebsite) }}
       />
-      <Script
-        id="ld-webpage"
+      <script
         type="application/ld+json"
         dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLdWebPage) }}
       />
-      <Script
-        id="ld-faq"
+      <script
         type="application/ld+json"
         dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLdFaq) }}
       />
@@ -183,17 +178,11 @@ export default function HomePage() {
 
               <p className="mt-3 text-sm text-muted-foreground max-w-xl">
                 New here? Start with{" "}
-                <Link
-                  href="/how-it-works"
-                  className="text-foreground underline hover:opacity-80"
-                >
+                <Link href="/how-it-works" className="text-foreground underline hover:opacity-80">
                   how it works
                 </Link>{" "}
                 and{" "}
-                <Link
-                  href="/fees"
-                  className="text-foreground underline hover:opacity-80"
-                >
+                <Link href="/fees" className="text-foreground underline hover:opacity-80">
                   fees
                 </Link>
                 .
@@ -316,11 +305,7 @@ export default function HomePage() {
                   />
                   <InfoRow
                     label="If it doesn’t sell"
-                    value={
-                      <span className="text-muted-foreground">
-                        Optional free auto-relist.
-                      </span>
-                    }
+                    value={<span className="text-muted-foreground">Optional free auto-relist.</span>}
                   />
                 </div>
 
@@ -385,26 +370,14 @@ export default function HomePage() {
           </p>
 
           <div className="mt-10 grid md:grid-cols-4 gap-7">
-            <StepCard
-              step={1}
-              title="Create your listing"
-              body="Add details and upload clear photos of your item."
-            />
+            <StepCard step={1} title="Create your listing" body="Add details and upload clear photos of your item." />
             <StepCard
               step={2}
               title="We approve & queue it"
               body="Approved listings are placed into the next weekly auction window."
             />
-            <StepCard
-              step={3}
-              title="Auction runs"
-              body="Bidders compete Monday 01:00 to Sunday 23:00."
-            />
-            <StepCard
-              step={4}
-              title="Sold → confirm → payout"
-              body="Buyer pays securely. You follow the next steps and payout is arranged."
-            />
+            <StepCard step={3} title="Auction runs" body="Bidders compete Monday 01:00 to Sunday 23:00." />
+            <StepCard step={4} title="Sold → confirm → payout" body="Buyer pays securely. You follow the next steps and payout is arranged." />
           </div>
 
           <div className="mt-10 flex justify-center">
@@ -427,18 +400,9 @@ export default function HomePage() {
           </p>
 
           <div className="mt-7 grid sm:grid-cols-3 gap-3 text-left">
-            <TrustItem
-              title="Clear steps"
-              body="Simple seller flow with approval before listings go live."
-            />
-            <TrustItem
-              title="Secure payments"
-              body="Stripe-powered checkout with straightforward confirmation steps."
-            />
-            <TrustItem
-              title="Practical selling options"
-              body="Hidden reserves supported and optional free auto-relist until sold."
-            />
+            <TrustItem title="Clear steps" body="Simple seller flow with approval before listings go live." />
+            <TrustItem title="Secure payments" body="Stripe-powered checkout with straightforward confirmation steps." />
+            <TrustItem title="Practical selling options" body="Hidden reserves supported and optional free auto-relist until sold." />
           </div>
 
           <div className="mt-8 flex flex-wrap justify-center gap-4">
@@ -515,7 +479,7 @@ function Benefit({ title, body }: { title: string; body: string }) {
   );
 }
 
-function MiniPoint({ children }: { children: React.ReactNode }) {
+function MiniPoint({ children }: { children: ReactNode }) {
   return (
     <div className="rounded-xl px-3 py-2 border border-border text-xs text-muted-foreground bg-background">
       {children}
@@ -523,12 +487,10 @@ function MiniPoint({ children }: { children: React.ReactNode }) {
   );
 }
 
-function InfoRow({ label, value }: { label: string; value: React.ReactNode }) {
+function InfoRow({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div className="flex items-start justify-between gap-4">
-      <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-        {label}
-      </p>
+      <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{label}</p>
       <div className="text-sm text-right">{value}</div>
     </div>
   );
@@ -543,15 +505,7 @@ function TrustItem({ title, body }: { title: string; body: string }) {
   );
 }
 
-function StepCard({
-  step,
-  title,
-  body,
-}: {
-  step: number;
-  title: string;
-  body: string;
-}) {
+function StepCard({ step, title, body }: { step: number; title: string; body: string }) {
   return (
     <div className="relative rounded-2xl p-7 border border-border bg-card shadow-sm">
       <div className="absolute -top-5 left-6 h-10 w-10 rounded-full flex items-center justify-center font-extrabold text-lg shadow-sm bg-primary text-primary-foreground">
@@ -564,7 +518,7 @@ function StepCard({
   );
 }
 
-function QuickLink({ href, children }: { href: string; children: React.ReactNode }) {
+function QuickLink({ href, children }: { href: string; children: ReactNode }) {
   return (
     <Link
       href={href}
@@ -575,7 +529,7 @@ function QuickLink({ href, children }: { href: string; children: React.ReactNode
   );
 }
 
-function FAQItem({ q, children }: { q: string; children: React.ReactNode }) {
+function FAQItem({ q, children }: { q: string; children: ReactNode }) {
   return (
     <details className="rounded-2xl border border-border p-5 bg-card">
       <summary className="cursor-pointer font-semibold">{q}</summary>
