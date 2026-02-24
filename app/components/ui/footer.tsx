@@ -66,6 +66,14 @@ export default function Footer() {
                     About
                   </Link>
                 </li>
+                <li>
+                  <Link
+                    href="/our-marketplace-network"
+                    className="underline hover:text-white transition"
+                  >
+                    Our Marketplace Network
+                  </Link>
+                </li>
               </ul>
             </div>
 
