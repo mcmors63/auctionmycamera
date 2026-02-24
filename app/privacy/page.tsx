@@ -50,7 +50,7 @@ export default function PrivacyPage() {
 
         <p className="text-sm text-muted-foreground mb-6">
           This Policy should be read together with our{" "}
-          <Link href="/cookies" className="underline font-semibold text-primary hover:opacity-80">
+          <Link href="/cookie-policy" className="underline font-semibold text-primary hover:opacity-80">
             Cookie Policy
           </Link>{" "}
           and{" "}
@@ -217,7 +217,7 @@ export default function PrivacyPage() {
               <li>
                 <strong className="text-foreground">Consent:</strong> where required for non-essential
                 cookies and analytics. You can manage these via our{" "}
-                <Link href="/cookies" className="underline text-primary hover:opacity-80">
+                <Link href="/cookie-policy" className="underline text-primary hover:opacity-80">
                   Cookie Policy
                 </Link>
                 .
@@ -279,7 +279,7 @@ export default function PrivacyPage() {
             <p className="mt-2">
               For full details of the cookies we use and how to control them,
               please see our{" "}
-              <Link href="/cookies" className="underline text-primary hover:opacity-80">
+              <Link href="/cookie-policy" className="underline text-primary hover:opacity-80">
                 Cookie Policy
               </Link>
               .

@@ -109,7 +109,7 @@ export default function Footer() {
                 </li>
                 <li>
                   <Link
-                    href="/cookies"
+                    href="/cookie-policy"
                     className="underline hover:text-white transition"
                   >
                     Cookie Policy

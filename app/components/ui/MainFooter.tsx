@@ -17,7 +17,7 @@ export default function MainFooter() {
           <Link href="/privacy" className="hover:underline">
             Privacy Policy
           </Link>
-          <Link href="/cookies" className="hover:underline">
+          <Link href="/cookie-policy" className="hover:underline">
             Cookie Policy
           </Link>
           <a
