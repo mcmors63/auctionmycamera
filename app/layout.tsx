@@ -14,7 +14,8 @@ const PROD_SITE_URL = "https://auctionmycamera.co.uk";
 
 const BRAND_NAME = "AuctionMyCamera";
 const BRAND_TEMPLATE = "%s | AuctionMyCamera";
-const BRAND_DESCRIPTION = "Buy and sell cameras, lenses and photography gear through weekly auctions.";
+const BRAND_DESCRIPTION =
+  "Buy and sell cameras, lenses and photography gear through weekly auctions.";
 
 function isProdEnv() {
   if (process.env.VERCEL_ENV) return process.env.VERCEL_ENV === "production";
@@ -33,7 +34,6 @@ function getCanonicalSiteUrl() {
   const isProd = isProdEnv();
 
   if (isProd) return PROD_SITE_URL;
-
   if (explicit) return explicit;
 
   const vercelUrl = normalizeBaseUrl(
@@ -72,7 +72,9 @@ export const metadata: Metadata = {
     description: BRAND_DESCRIPTION,
   },
 
-  ...(GOOGLE_VERIFICATION ? { verification: { google: GOOGLE_VERIFICATION } } : {}),
+  ...(GOOGLE_VERIFICATION
+    ? { verification: { google: GOOGLE_VERIFICATION } }
+    : {}),
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
@@ -81,6 +83,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body className="min-h-screen bg-background text-foreground antialiased flex flex-col">
         <Navbar />
 
+        {/* Still global. If you only want this on /dashboard,/sell,/admin, we’ll move it next. */}
         <AutoLogout />
 
         <GoogleAdsLoader />

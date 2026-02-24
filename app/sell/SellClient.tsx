@@ -135,8 +135,7 @@ export default function SellClient() {
       // Appwrite will append ?userId=...&secret=...
       const base = getSiteUrl();
       const redirectUrl = `${base || window.location.origin}/api/verify`;
-       await account.createVerification(redirectUrl);
-
+  
       setVerifyMsg("✅ Verification email sent. Check your inbox (and spam).");
     } catch (err) {
       console.error("Failed to send verification email:", err);

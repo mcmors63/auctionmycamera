@@ -10,8 +10,8 @@ const client = new Client()
 
 const account = new Account(client);
 
-// Auto-logout after 5 minutes of inactivity
-const INACTIVITY_LIMIT = 5 * 60 * 1000;
+// Auto-logout after 10 minutes of inactivity
+const INACTIVITY_LIMIT = 10 * 60 * 1000;
 
 export default function AutoLogout() {
   const router = useRouter();
