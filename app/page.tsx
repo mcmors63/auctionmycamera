@@ -364,7 +364,7 @@ export default function HomePage() {
                 <h2 className="text-xl sm:text-2xl font-extrabold leading-tight">
                   Selling something else?
                   <span className="block text-primary">
-                    Plates on AuctionMyPlate · Premium goods on Sealabid
+                    Number Plates on AuctionMyPlate · Premium goods on Sealabid
                   </span>
                 </h2>
 
