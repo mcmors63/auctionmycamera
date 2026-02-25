@@ -42,6 +42,11 @@ const TRANSACTIONS_COLLECTION_ID =
   process.env.NEXT_PUBLIC_APPWRITE_TRANSACTIONS_COLLECTION_ID ||
   "";
 
+  const PROFILES_COLLECTION_ID =
+  process.env.APPWRITE_PROFILES_COLLECTION_ID ||
+  process.env.NEXT_PUBLIC_APPWRITE_PROFILES_COLLECTION_ID ||
+  "";
+  
 function getDatabases() {
   if (!endpoint || !projectId || !apiKey) return null;
   if (!DB_ID || !LISTINGS_COLLECTION_ID) return null;
@@ -255,8 +260,17 @@ async function createTransactionForWinner(params: {
   winnerEmail: string;
   winnerUserId: string | null;
   paymentIntentId: string;
+  buyerProfile?: any;
 }) {
-  const { databases, listing, finalBidAmount, winnerEmail, winnerUserId, paymentIntentId } = params;
+  const {
+    databases,
+    listing,
+    finalBidAmount,
+    winnerEmail,
+    winnerUserId,
+    paymentIntentId,
+    buyerProfile,
+  } = params;
 
   if (!TRANSACTIONS_COLLECTION_ID) {
     console.warn("No TRANSACTIONS_COLLECTION_ID configured; skipping transaction creation.");
@@ -275,6 +289,18 @@ async function createTransactionForWinner(params: {
 
   const commissionAmount = Math.round(commissionRate > 0 ? (salePrice * commissionRate) / 100 : 0);
   const sellerPayout = Math.max(0, salePrice - commissionAmount - EXTRA_FEE_GBP);
+
+  // Snapshot delivery fields (safe if schema doesn't include them)
+  const delivery = {
+    delivery_first_name: buyerProfile?.first_name || "",
+    delivery_surname: buyerProfile?.surname || "",
+    delivery_house: buyerProfile?.house || "",
+    delivery_street: buyerProfile?.street || "",
+    delivery_town: buyerProfile?.town || "",
+    delivery_county: buyerProfile?.county || "",
+    delivery_postcode: buyerProfile?.postcode || "",
+    delivery_phone: buyerProfile?.phone || "",
+  };
 
   const data: Record<string, any> = {
     listing_id: listingId,
@@ -299,6 +325,8 @@ async function createTransactionForWinner(params: {
 
     registration: label,
     stripe_payment_intent_id: paymentIntentId,
+
+    ...delivery,
 
     // Optional future flags (safe to ignore if schema doesn’t include them)
     seller_dispatch_status: "pending",
@@ -739,15 +767,39 @@ End:   ${fmtLondon(end)}
           console.error(`Failed to update listing doc for ${lid} after charge`, updateErr);
         }
 
+        // Load buyer profile snapshot
+let buyerProfile: any = null;
+
+if (winnerUserId && PROFILES_COLLECTION_ID) {
+  try {
+    buyerProfile = await databases.getDocument(
+      DB_ID,
+      PROFILES_COLLECTION_ID,
+      winnerUserId
+    );
+  } catch {
+    // fallback: try by email
+    try {
+      const found = await databases.listDocuments(DB_ID, PROFILES_COLLECTION_ID, [
+        Query.equal("email", winnerEmail),
+        Query.limit(1),
+      ]);
+      buyerProfile = found.documents[0] || null;
+    } catch {
+      buyerProfile = null;
+    }
+  }
+}
         // Create transaction (pipeline starts) — only after succeeded
         const tx = await createTransactionForWinner({
-          databases,
-          listing,
-          finalBidAmount,
-          winnerEmail,
-          winnerUserId,
-          paymentIntentId: intent.id,
-        });
+  databases,
+  listing,
+  finalBidAmount,
+  winnerEmail,
+  winnerUserId,
+  paymentIntentId: intent.id,
+  buyerProfile,
+});
 
         // Emails (best-effort; do not fail cron) — only after succeeded
         try {
