@@ -141,28 +141,20 @@ export default function Navbar() {
   return (
     <header className="sticky top-0 z-40 border-b border-border bg-background/80 backdrop-blur supports-[backdrop-filter]:bg-background/70">
       <nav className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3 md:py-4">
-        {/* LOGO */}
-        <Link
-          href="/"
-          className="flex items-center gap-3"
-          aria-label="AuctionMyCamera home"
-        >
-          {/* Simple “lens” mark */}
-          <span className="inline-flex h-9 w-9 items-center justify-center rounded-xl border border-border bg-card shadow-sm">
-            <span className="relative h-4 w-4 rounded-full bg-primary/30">
-              <span className="absolute inset-0 m-auto h-2 w-2 rounded-full bg-primary/70" />
-            </span>
-          </span>
+       {/* LOGO */}
+<div className="flex items-center gap-3">
+  <Link
+    href="/"
+    className="flex items-center gap-3"
+    aria-label="AuctionMyCamera home"
+  >
+    {/* keep your existing logo/icon bits EXACTLY as they were, inside here */}
+    <span className="leading-tight">
+      {/* keep your existing site name text spans here */}
+    </span>
+  </Link>
 
-          <span className="leading-tight">
-  <span className="block text-[15px] md:text-base font-extrabold tracking-tight text-foreground">
-    AuctionMy<span className="text-primary">Camera</span>
-  </span>
-
-  <span className="block text-[11px] md:text-xs text-muted-foreground">
-    Auctions for cameras & gear
-  </span>
-
+  {/* ✅ MUST be a sibling, not inside the home Link */}
   <Link
     href="/our-marketplace-network"
     className="mt-1 inline-flex w-fit items-center rounded-full border border-border bg-card px-2.5 py-1 text-[10px] font-semibold text-muted-foreground transition hover:text-foreground hover:bg-accent"
@@ -170,8 +162,7 @@ export default function Navbar() {
   >
     Part of the Specialist Auction Network
   </Link>
-</span>
-        </Link>
+</div>
 
         {/* DESKTOP NAV LINKS */}
         <div className="hidden lg:flex items-center gap-1">
