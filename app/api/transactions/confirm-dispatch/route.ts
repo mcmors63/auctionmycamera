@@ -1,4 +1,4 @@
-// app/api/transactions/confirm-received/route.ts
+// app/api/transactions/confirm-dispatch/route.ts
 import { NextResponse } from "next/server";
 import { Client as AppwriteClient, Account, Databases } from "node-appwrite";
 
@@ -24,7 +24,6 @@ const APPWRITE_PROJECT = (
 
 const APPWRITE_API_KEY = (process.env.APPWRITE_API_KEY || "").trim();
 
-// Transactions DB/collection
 const TX_DB_ID =
   process.env.APPWRITE_TRANSACTIONS_DATABASE_ID ||
   process.env.NEXT_PUBLIC_APPWRITE_TRANSACTIONS_DATABASE_ID ||
@@ -87,7 +86,7 @@ function lower(v: any) {
   return safeStr(v).toLowerCase();
 }
 
-// Schema-tolerant update
+// Schema-tolerant update (same pattern as your confirm-received)
 async function updateDocSchemaTolerant(
   databases: Databases,
   dbId: string,
@@ -113,14 +112,14 @@ async function updateDocSchemaTolerant(
 
   const minimal: Record<string, any> = {};
   if (payload.transaction_status) minimal.transaction_status = payload.transaction_status;
-  if (payload.buyer_receipt_status) minimal.buyer_receipt_status = payload.buyer_receipt_status;
+  if (payload.seller_dispatch_status) minimal.seller_dispatch_status = payload.seller_dispatch_status;
   return await databases.updateDocument(dbId, colId, docId, minimal);
 }
 
 // -----------------------------
-// POST /api/transactions/confirm-received
+// POST /api/transactions/confirm-dispatch
 // Auth: Bearer <Appwrite JWT>
-// Body: { txId?: string, transactionId?: string }
+// Body: { txId?: string, transactionId?: string, carrier?: string, tracking?: string }
 // -----------------------------
 export async function POST(req: Request) {
   try {
@@ -134,21 +133,22 @@ export async function POST(req: Request) {
     let body: any = {};
     try {
       body = await req.json();
-    } catch {
-      // allow empty
-    }
+    } catch {}
 
     const txId = safeStr(body?.txId || body?.transactionId);
     if (!txId) {
       return NextResponse.json({ ok: false, error: "txId (or transactionId) is required." }, { status: 400 });
     }
 
+    const carrier = safeStr(body?.carrier);
+    const tracking = safeStr(body?.tracking);
+
     const tx: any = await databases.getDocument(TX_DB_ID, TX_COLLECTION_ID, txId);
 
-    // Must be buyer
-    const buyerEmail = lower(tx?.buyer_email);
-    if (!buyerEmail || buyerEmail !== email) {
-      return NextResponse.json({ ok: false, error: "Forbidden (buyer only)." }, { status: 403 });
+    // Must be seller
+    const sellerEmail = lower(tx?.seller_email);
+    if (!sellerEmail || sellerEmail !== email) {
+      return NextResponse.json({ ok: false, error: "Forbidden (seller only)." }, { status: 403 });
     }
 
     // Block deleted
@@ -160,24 +160,19 @@ export async function POST(req: Request) {
     const paymentStatus = lower(tx?.payment_status);
     if (paymentStatus !== "paid") {
       return NextResponse.json(
-        { ok: false, error: "Cannot confirm receipt until payment is marked as paid." },
+        { ok: false, error: "Cannot dispatch until payment is marked as paid." },
         { status: 409 }
       );
     }
 
-    // Require correct stage (allow idempotent)
+    // Must be dispatch_pending (idempotent if already dispatched)
     const stage = lower(tx?.transaction_status);
-
-    // ✅ Buyer can only confirm once seller has dispatched (or a receipt stage exists)
-    const allowed = ["receipt_pending", "dispatch_sent"];
-
-    if (stage && !allowed.includes(stage)) {
-      // If already complete, return ok (idempotent)
-      if (stage === "complete" || stage === "completed") {
-        return NextResponse.json({ ok: true, transaction: tx }, { status: 200 });
-      }
+    if (stage === "dispatch_sent" || stage === "receipt_pending") {
+      return NextResponse.json({ ok: true, transaction: tx }, { status: 200 });
+    }
+    if (stage && stage !== "dispatch_pending") {
       return NextResponse.json(
-        { ok: false, error: `Cannot confirm receipt from status "${tx?.transaction_status}".` },
+        { ok: false, error: `Cannot confirm dispatch from status "${tx?.transaction_status}".` },
         { status: 409 }
       );
     }
@@ -185,18 +180,20 @@ export async function POST(req: Request) {
     const nowIso = new Date().toISOString();
 
     const updatePayload: Record<string, any> = {
-      transaction_status: "complete",
+      transaction_status: "dispatch_sent",
+      seller_dispatch_status: "sent",
+      seller_dispatched_at: nowIso,
 
-      buyer_receipt_status: "confirmed",
-      buyer_received_at: nowIso,
+      // optional details
+      dispatch_carrier: carrier || undefined,
+      dispatch_tracking: tracking || undefined,
 
-      // Optional payout flag (if your schema has it)
-      payout_status: "ready",
+      // optional: move buyer into receipt waiting stage
+      buyer_receipt_status: "pending",
 
       updated_at: nowIso,
     };
 
-    // Strip undefined keys
     for (const k of Object.keys(updatePayload)) {
       if (updatePayload[k] === undefined) delete updatePayload[k];
     }
@@ -207,8 +204,8 @@ export async function POST(req: Request) {
   } catch (err: any) {
     const msg = String(err?.message || "");
     const status = /Not authenticated|Invalid session|auth/i.test(msg) ? 401 : 500;
-    console.error("[transactions/confirm-received] error:", err);
-    return NextResponse.json({ ok: false, error: msg || "Failed to confirm receipt." }, { status });
+    console.error("[transactions/confirm-dispatch] error:", err);
+    return NextResponse.json({ ok: false, error: msg || "Failed to confirm dispatch." }, { status });
   }
 }
 
