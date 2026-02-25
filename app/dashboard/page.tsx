@@ -1784,13 +1784,11 @@ async function postTxAction(path: string, body: any) {
           </div>
         )}
 
-            {/* TRANSACTIONS TAB */}
+                    {/* TRANSACTIONS TAB */}
         {activeTab === "transactions" && (
           <div className="space-y-4">
             <h2 className={`text-xl font-bold mb-2 ${accentText}`}>Transactions</h2>
-            <p className="text-sm text-neutral-300 mb-2">
-              Active sales and purchases still in progress.
-            </p>
+            <p className="text-sm text-neutral-300 mb-2">Active sales and purchases still in progress.</p>
 
             <div className="flex flex-wrap gap-3 text-xs text-neutral-200 mb-2">
               <span className="px-3 py-1 rounded-full bg-neutral-950/60 border border-neutral-800">
@@ -1812,11 +1810,17 @@ async function postTxAction(path: string, body: any) {
                 {activeTransactions.map((tx) => {
                   const statusLabel = tx.transaction_status || tx.payment_status || "pending";
                   const txStatusLower = String(tx.transaction_status || "").toLowerCase();
-                  const buyerEmailLower = String(tx.buyer_email || "").toLowerCase();
-                  const userEmailLower = String(userEmail || "").toLowerCase();
 
-                  const isBuyer = buyerEmailLower && userEmailLower && buyerEmailLower === userEmailLower;
+                  const isBuyer =
+                    String(tx.buyer_email || "").toLowerCase() === String(userEmail || "").toLowerCase();
+
+                  const isSeller =
+                    String(tx.seller_email || "").toLowerCase() === String(userEmail || "").toLowerCase();
+
                   const isComplete = ["complete", "completed"].includes(txStatusLower);
+                  const canDispatch = isSeller && !isComplete && ["dispatch_pending", "receipt_pending"].includes(txStatusLower);
+                  const canConfirmReceived =
+                    isBuyer && !isComplete && ["dispatch_sent", "dispatch_pending", "receipt_pending"].includes(txStatusLower);
 
                   return (
                     <div
@@ -1830,7 +1834,7 @@ async function postTxAction(path: string, body: any) {
                           </p>
                           <p className="text-xs text-neutral-500">Transaction ID: {tx.$id}</p>
                           <p className="text-xs text-neutral-500">
-                            Role: {tx.seller_email === userEmail ? "Seller" : "Buyer"}
+                            Role: {isSeller ? "Seller" : "Buyer"}
                           </p>
                         </div>
 
@@ -1851,100 +1855,59 @@ async function postTxAction(path: string, body: any) {
                         </p>
                       </div>
 
-                       <div className="mt-3 flex flex-wrap items-center gap-2">
-  <p className="text-[11px] text-neutral-500">
-    Follow the steps here as the transaction moves forward.
-  </p>
+                      <div className="mt-3 flex flex-wrap items-center gap-2">
+                        <p className="text-[11px] text-neutral-500">
+                          Follow the steps here as the transaction moves forward.
+                        </p>
 
-  {/* SELLER ACTION: confirm dispatch */}
-  {tx.seller_email === userEmail &&
-    ["dispatch_pending", "receipt_pending"].includes(String(tx.transaction_status || "").toLowerCase()) && (
-      <button
-        type="button"
-        onClick={async () => {
-          try {
-            setBannerError("");
-            setBannerSuccess("");
-            await postTxAction("/api/transactions/confirm-dispatch", { txId: tx.$id });
-            setBannerSuccess("Nice — marked as dispatched.");
-            window.location.reload();
-          } catch (e: any) {
-            setBannerError(e?.message || "Failed to confirm dispatch.");
-          }
-        }}
-        className="px-4 py-2 rounded-md bg-sky-600 hover:bg-sky-700 text-white text-xs font-semibold"
-      >
-        Confirm dispatched
-      </button>
-    )}
+                        {canDispatch && (
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              try {
+                                setBannerError("");
+                                setBannerSuccess("");
+                                await postTxAction("/api/transactions/confirm-dispatch", { txId: tx.$id });
+                                setBannerSuccess("Nice — marked as dispatched.");
+                                window.location.reload();
+                              } catch (e: any) {
+                                setBannerError(e?.message || "Failed to confirm dispatch.");
+                              }
+                            }}
+                            className="px-4 py-2 rounded-md bg-sky-600 hover:bg-sky-700 text-white text-xs font-semibold"
+                          >
+                            Confirm dispatch
+                          </button>
+                        )}
 
-  {/* BUYER ACTION: confirm received */}
-  {tx.buyer_email === userEmail &&
-    ["dispatch_sent", "dispatch_pending", "receipt_pending"].includes(String(tx.transaction_status || "").toLowerCase()) && (
-      <button
-        type="button"
-        onClick={async () => {
-          try {
-            setBannerError("");
-            setBannerSuccess("");
-            await postTxAction("/api/transactions/confirm-received", { txId: tx.$id });
-            setBannerSuccess("Thanks — marked as received.");
-            window.location.reload();
-          } catch (e: any) {
-            setBannerError(e?.message || "Failed to confirm receipt.");
-          }
-        }}
-        className="px-4 py-2 rounded-md bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold"
-      >
-        Confirm received
-      </button>
-    )}
-</div>
- <div className="mt-3 flex flex-wrap items-center gap-2">
-  <p className="text-[11px] text-neutral-500">
-    Follow the steps here as the transaction moves forward.
-  </p>
-
-  {/* Seller: Confirm dispatch */}
-  {isSeller && !["dispatch_sent", "complete", "completed"].includes(String(tx.transaction_status || "").toLowerCase()) && (
-    <button
-      type="button"
-      onClick={async () => {
-        try {
-          setBannerError("");
-          setBannerSuccess("");
-          await postTxAction("/api/transactions/confirm-dispatch", { txId: tx.$id });
-          setBannerSuccess("Dispatch marked as sent.");
-          window.location.reload();
-        } catch (e: any) {
-          setBannerError(e?.message || "Failed to confirm dispatch.");
-        }
-      }}
-      className="px-4 py-2 rounded-md bg-sky-600 hover:bg-sky-700 text-white text-xs font-semibold"
-    >
-      Confirm dispatch
-    </button>
-  )}
-
-  {/* Buyer: Confirm received */}
-  {isBuyer && !isComplete && (
-    <button
-      type="button"
-      onClick={async () => {
-        try {
-          setBannerError("");
-          setBannerSuccess("");
-          await postTxAction("/api/transactions/confirm-received", { txId: tx.$id });
-          setBannerSuccess("Thanks — marked as received.");
-          window.location.reload();
-        } catch (e: any) {
-          setBannerError(e?.message || "Failed to confirm receipt.");
-        }
-      }}
-      className="px-4 py-2 rounded-md bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold"
-    >
-      Confirm received
-    </button>
-  )}
-</div>
-  
+                        {canConfirmReceived && (
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              try {
+                                setBannerError("");
+                                setBannerSuccess("");
+                                await postTxAction("/api/transactions/confirm-received", { txId: tx.$id });
+                                setBannerSuccess("Thanks — marked as received.");
+                                window.location.reload();
+                              } catch (e: any) {
+                                setBannerError(e?.message || "Failed to confirm receipt.");
+                              }
+                            }}
+                            className="px-4 py-2 rounded-md bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold"
+                          >
+                            Confirm received
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
