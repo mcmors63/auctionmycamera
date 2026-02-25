@@ -2,7 +2,7 @@
 "use client";
 
 import type React from "react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Client, Account, Databases, Storage, ID, Query } from "appwrite";
@@ -24,20 +24,15 @@ const storage = new Storage(client);
 // -----------------------------
 const LISTINGS_DB_ID =
   process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID ||
-  process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID ||
-  process.env.APPWRITE_LISTINGS_DATABASE_ID ||
   process.env.APPWRITE_LISTINGS_DATABASE_ID ||
   "690fc34a0000ce1baa63";
 
 const LISTINGS_COLLECTION_ID =
   process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_COLLECTION_ID ||
-  process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_COLLECTION_ID ||
-  process.env.APPWRITE_LISTINGS_COLLECTION_ID ||
   process.env.APPWRITE_LISTINGS_COLLECTION_ID ||
   "listings";
 
 // ✅ IMPORTANT: Dashboard must use the SAME env vars as registration.
-// No “guessing” via listings DB. If these are missing, we show a clear error.
 const PROFILES_DB_ID = (process.env.NEXT_PUBLIC_APPWRITE_PROFILES_DATABASE_ID || "").trim();
 const PROFILES_COLLECTION_ID = (process.env.NEXT_PUBLIC_APPWRITE_PROFILES_COLLECTION_ID || "").trim();
 
@@ -170,8 +165,6 @@ function isHistoryStatus(s: string) {
 
 function isFinishedTransaction(tx: Transaction) {
   const t = (tx.transaction_status || "").toLowerCase();
-
-  // Finished only when the full workflow is complete
   return t === "complete" || t === "completed";
 }
 
@@ -192,7 +185,7 @@ function listingSubtitle(l: Listing) {
 export default function DashboardPage() {
   const router = useRouter();
 
-  // Tabs
+  // Tabs (✅ default to profile so people SEE their details first)
   const [activeTab, setActiveTab] = useState<
     | "profile"
     | "sell"
@@ -203,7 +196,7 @@ export default function DashboardPage() {
     | "purchased"
     | "history"
     | "transactions"
-  >("sell");
+  >("profile");
 
   // Auth + profile
   const [user, setUser] = useState<any>(null);
@@ -247,6 +240,7 @@ export default function DashboardPage() {
   // Photo (dashboard sell)
   const [sellPhoto, setSellPhoto] = useState<File | null>(null);
   const [sellPhotoPreview, setSellPhotoPreview] = useState<string | null>(null);
+  const lastPreviewUrlRef = useRef<string | null>(null);
 
   // Fee preview (simple for now)
   const [commissionRate, setCommissionRate] = useState(0);
@@ -267,6 +261,9 @@ export default function DashboardPage() {
   // Delete account
   const [deleteError, setDeleteError] = useState("");
   const [deleteLoading, setDeleteLoading] = useState(false);
+
+  // Profile repair helper
+  const [creatingProfile, setCreatingProfile] = useState(false);
 
   const userEmail = user?.email ?? null;
 
@@ -295,180 +292,181 @@ export default function DashboardPage() {
   }, [allListings]);
 
   // -----------------------------
-// Load dashboard (auth gated)
-// -----------------------------
-useEffect(() => {
-  let cancelled = false;
+  // Load dashboard (auth gated)
+  // -----------------------------
+  useEffect(() => {
+    let cancelled = false;
 
-  const loadAll = async () => {
-    setInitialLoading(true);
-    setBannerError("");
-    setBannerSuccess("");
+    const loadAll = async () => {
+      setInitialLoading(true);
+      setBannerError("");
+      setBannerSuccess("");
 
-    // 0) Ensure profile env is actually set
-    if (!PROFILES_DB_ID || !PROFILES_COLLECTION_ID) {
-      setBannerError(
-        "Dashboard misconfigured: missing NEXT_PUBLIC_APPWRITE_PROFILES_DATABASE_ID or NEXT_PUBLIC_APPWRITE_PROFILES_COLLECTION_ID."
-      );
-      setInitialLoading(false);
-      return;
-    }
+      // 0) Ensure profile env is actually set
+      if (!PROFILES_DB_ID || !PROFILES_COLLECTION_ID) {
+        setBannerError(
+          "Dashboard misconfigured: missing NEXT_PUBLIC_APPWRITE_PROFILES_DATABASE_ID or NEXT_PUBLIC_APPWRITE_PROFILES_COLLECTION_ID.\n" +
+            "Fix these in Vercel and your local .env.local so the dashboard points to the same profiles collection used during registration."
+        );
+        setInitialLoading(false);
+        return;
+      }
 
-    // 1) AUTH
-    let current: any;
-    try {
-      current = await account.get();
-    } catch (err) {
-      console.warn("Dashboard auth error:", err);
-      router.push("/login");
-      return;
-    }
-
-    if (!current?.$id) {
-      router.push("/login");
-      return;
-    }
-
-    const emailLower = String(current.email || "").toLowerCase();
-    if (emailLower && emailLower === ADMIN_EMAIL) {
-      router.push("/admin");
-      return;
-    }
-
-    if (!current.emailVerification) {
-      router.push("/resend-verification");
-      return;
-    }
-
-    if (cancelled) return;
-    setUser(current);
-
-    // 2) PROFILE (strict env + fallback search)
-    try {
-      // Primary: doc id = user id (this is what your RegisterClient does)
-      const prof = await databases.getDocument(PROFILES_DB_ID, PROFILES_COLLECTION_ID, current.$id);
-      if (!cancelled) setProfile(prof as any);
-    } catch {
-      // Fallback: some older clones stored profiles under random $id and linked by userId/email.
+      // 1) AUTH
+      let current: any;
       try {
-        const found: any[] = [];
+        current = await account.get();
+      } catch (err) {
+        console.warn("Dashboard auth error:", err);
+        router.push("/login");
+        return;
+      }
 
-        // try userId if it exists in schema
+      if (!current?.$id) {
+        router.push("/login");
+        return;
+      }
+
+      const emailLower = String(current.email || "").toLowerCase();
+      if (emailLower && emailLower === ADMIN_EMAIL) {
+        router.push("/admin");
+        return;
+      }
+
+      if (!current.emailVerification) {
+        router.push("/resend-verification");
+        return;
+      }
+
+      if (cancelled) return;
+      setUser(current);
+
+      // 2) PROFILE (strict env + fallback search)
+      try {
+        // Primary: doc id = user id (this is what your RegisterClient does)
+        const prof = await databases.getDocument(PROFILES_DB_ID, PROFILES_COLLECTION_ID, current.$id);
+        if (!cancelled) setProfile(prof as any);
+      } catch {
+        // Fallback: some older clones stored profiles under random $id and linked by userId/email.
         try {
-          const rByUserId = await databases.listDocuments(PROFILES_DB_ID, PROFILES_COLLECTION_ID, [
-            Query.equal("userId", current.$id),
-            Query.limit(1),
-          ]);
-          found.push(...(rByUserId.documents || []));
-        } catch {
-          // ignore
-        }
+          const found: any[] = [];
 
-        // try email as last resort
-        if (found.length === 0) {
+          // try userId if it exists in schema
           try {
-            const rByEmail = await databases.listDocuments(PROFILES_DB_ID, PROFILES_COLLECTION_ID, [
-              Query.equal("email", current.email),
+            const rByUserId = await databases.listDocuments(PROFILES_DB_ID, PROFILES_COLLECTION_ID, [
+              Query.equal("userId", current.$id),
               Query.limit(1),
             ]);
-            found.push(...(rByEmail.documents || []));
+            found.push(...(rByUserId.documents || []));
           } catch {
             // ignore
           }
+
+          // try email as last resort
+          if (found.length === 0) {
+            try {
+              const rByEmail = await databases.listDocuments(PROFILES_DB_ID, PROFILES_COLLECTION_ID, [
+                Query.equal("email", current.email),
+                Query.limit(1),
+              ]);
+              found.push(...(rByEmail.documents || []));
+            } catch {
+              // ignore
+            }
+          }
+
+          if (!cancelled) setProfile(found[0] ? (found[0] as any) : null);
+        } catch {
+          if (!cancelled) setProfile(null);
         }
-
-        if (!cancelled) setProfile(found[0] ? (found[0] as any) : null);
-      } catch {
-        if (!cancelled) setProfile(null);
       }
-    }
 
-    // 3) LISTINGS (seller_email or sellerEmail)
-    try {
-      const results: Listing[] = [];
-
+      // 3) LISTINGS (seller_email or sellerEmail)
       try {
-        const r1 = await databases.listDocuments(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, [
-          Query.equal("seller_email", current.email),
-        ]);
-        results.push(...((r1.documents || []) as any));
-      } catch {
-        // ignore
-      }
-
-      // fallback field name used in some clones
-      try {
-        const r2 = await databases.listDocuments(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, [
-          Query.equal("sellerEmail", current.email),
-        ]);
-        results.push(...((r2.documents || []) as any));
-      } catch {
-        // ignore
-      }
-
-      // de-dupe by id
-      const byId = new Map<string, Listing>();
-      for (const d of results) if (d?.$id && !byId.has(d.$id)) byId.set(d.$id, d);
-
-      const docs = Array.from(byId.values());
-
-      if (!cancelled) {
-        setAllListings(docs);
-        setAwaitingListings(docs.filter((l) => isAwaitingStatus(l.status)));
-        setQueuedListings(docs.filter((l) => isQueuedStatus(l.status)));
-        setLiveListings(docs.filter((l) => isLiveStatus(l.status)));
-      }
-    } catch (e) {
-      console.error("Listings load failed:", e);
-      if (!cancelled) setBannerError("Failed to load your listings. Please refresh.");
-    }
-
-    // 4) TRANSACTIONS (optional, non-fatal)
-    try {
-      if (TX_DB_ID && TX_COLLECTION_ID) {
-        const combined: Transaction[] = [];
+        const results: Listing[] = [];
 
         try {
-          const txSeller = await databases.listDocuments(TX_DB_ID, TX_COLLECTION_ID, [
+          const r1 = await databases.listDocuments(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, [
             Query.equal("seller_email", current.email),
           ]);
-          combined.push(...((txSeller.documents || []) as any));
+          results.push(...((r1.documents || []) as any));
         } catch {
           // ignore
         }
 
+        // fallback field name used in some clones
         try {
-          const txBuyer = await databases.listDocuments(TX_DB_ID, TX_COLLECTION_ID, [
-            Query.equal("buyer_email", current.email),
+          const r2 = await databases.listDocuments(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, [
+            Query.equal("sellerEmail", current.email),
           ]);
-          combined.push(...((txBuyer.documents || []) as any));
+          results.push(...((r2.documents || []) as any));
         } catch {
           // ignore
         }
 
-        const byId = new Map<string, Transaction>();
-        combined.forEach((tx) => {
-          if (tx?.$id && !byId.has(tx.$id)) byId.set(tx.$id, tx);
-        });
+        // de-dupe by id
+        const byId = new Map<string, Listing>();
+        for (const d of results) if (d?.$id && !byId.has(d.$id)) byId.set(d.$id, d);
 
-        if (!cancelled) setTransactions(Array.from(byId.values()));
+        const docs = Array.from(byId.values());
+
+        if (!cancelled) {
+          setAllListings(docs);
+          setAwaitingListings(docs.filter((l) => isAwaitingStatus(l.status)));
+          setQueuedListings(docs.filter((l) => isQueuedStatus(l.status)));
+          setLiveListings(docs.filter((l) => isLiveStatus(l.status)));
+        }
+      } catch (e) {
+        console.error("Listings load failed:", e);
+        if (!cancelled) setBannerError("Failed to load your listings. Please refresh.");
       }
-    } catch {
-      // ignore (transactions might not exist yet)
-    }
 
-    if (!cancelled) setInitialLoading(false);
-  };
+      // 4) TRANSACTIONS (optional, non-fatal)
+      try {
+        if (TX_DB_ID && TX_COLLECTION_ID) {
+          const combined: Transaction[] = [];
 
-  void loadAll();
+          try {
+            const txSeller = await databases.listDocuments(TX_DB_ID, TX_COLLECTION_ID, [
+              Query.equal("seller_email", current.email),
+            ]);
+            combined.push(...((txSeller.documents || []) as any));
+          } catch {
+            // ignore
+          }
 
-  return () => {
-    cancelled = true;
-  };
-}, [router]);
+          try {
+            const txBuyer = await databases.listDocuments(TX_DB_ID, TX_COLLECTION_ID, [
+              Query.equal("buyer_email", current.email),
+            ]);
+            combined.push(...((txBuyer.documents || []) as any));
+          } catch {
+            // ignore
+          }
+
+          const byId = new Map<string, Transaction>();
+          combined.forEach((tx) => {
+            if (tx?.$id && !byId.has(tx.$id)) byId.set(tx.$id, tx);
+          });
+
+          if (!cancelled) setTransactions(Array.from(byId.values()));
+        }
+      } catch {
+        // ignore (transactions might not exist yet)
+      }
+
+      if (!cancelled) setInitialLoading(false);
+    };
+
+    void loadAll();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [router]);
 
   // -----------------------------
-  // Auto logout after 5 minutes
+  // Auto logout after 5 minutes (✅ actually 5 mins now)
   // -----------------------------
   useEffect(() => {
     let timeout: any;
@@ -483,7 +481,7 @@ useEffect(() => {
         }
         alert("Logged out due to inactivity.");
         router.push("/login");
-      }, 10 * 60 * 1000);
+      }, 5 * 60 * 1000);
     };
 
     const events = ["mousemove", "keydown", "click"];
@@ -529,6 +527,40 @@ useEffect(() => {
       setBannerError("Failed to update profile.");
     } finally {
       setSavingProfile(false);
+    }
+  };
+
+  // ✅ Repair helper: create profile doc if missing
+  const handleCreateProfile = async () => {
+    if (!user?.$id) return;
+    setCreatingProfile(true);
+    setBannerError("");
+    setBannerSuccess("");
+
+    try {
+      const doc = await databases.createDocument(PROFILES_DB_ID, PROFILES_COLLECTION_ID, user.$id, {
+        email: user.email || "",
+        userId: user.$id,
+        first_name: "",
+        surname: "",
+        house: "",
+        street: "",
+        town: "",
+        county: "",
+        postcode: "",
+        phone: "",
+      });
+
+      setProfile(doc as any);
+      setBannerSuccess("Profile created. You can now fill in your details and save.");
+    } catch (e: any) {
+      console.error("create profile error:", e);
+      setBannerError(
+        e?.message ||
+          "Could not create your profile. This usually means your profiles collection permissions don’t allow user-create."
+      );
+    } finally {
+      setCreatingProfile(false);
     }
   };
 
@@ -609,31 +641,32 @@ useEffect(() => {
   };
 
   // -----------------------------
-// Transaction action helper (JWT-auth)
-// -----------------------------
-async function postTxAction(path: string, body: any) {
-  const jwt = await account.createJWT();
-  const token = (jwt as any)?.jwt || "";
+  // Transaction action helper (JWT-auth)
+  // -----------------------------
+  async function postTxAction(path: string, body: any) {
+    const jwt = await account.createJWT();
+    const token = (jwt as any)?.jwt || "";
 
-  if (!token) {
-    throw new Error("Could not create auth token. Please log out and log in again.");
+    if (!token) {
+      throw new Error("Could not create auth token. Please log out and log in again.");
+    }
+
+    const res = await fetch(path, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(body || {}),
+    });
+
+    const data = await res.json().catch(() => ({} as any));
+    if (!res.ok || data?.ok === false) {
+      throw new Error(data?.error || "Request failed.");
+    }
+    return data;
   }
 
-  const res = await fetch(path, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
-    },
-    body: JSON.stringify(body || {}),
-  });
-
-  const data = await res.json().catch(() => ({} as any));
-  if (!res.ok || data?.ok === false) {
-    throw new Error(data?.error || "Request failed.");
-  }
-  return data;
-}
   // -----------------------------
   // Delete account (keeps same backend endpoint)
   // -----------------------------
@@ -899,6 +932,13 @@ async function postTxAction(path: string, body: any) {
       }
 
       alert("Listing submitted! Awaiting approval.");
+
+      // ✅ clean up preview URL
+      if (lastPreviewUrlRef.current) {
+        URL.revokeObjectURL(lastPreviewUrlRef.current);
+        lastPreviewUrlRef.current = null;
+      }
+
       setSellPhoto(null);
       setSellPhotoPreview(null);
       setSellForm({
@@ -965,7 +1005,6 @@ async function postTxAction(path: string, body: any) {
           </div>
 
           <div className="flex flex-wrap gap-2 items-center self-start md:self-auto">
-            {/* ✅ JWT helper button */}
             <button
               onClick={handleCopyJwt}
               className="px-4 py-2 text-sm font-semibold rounded-md border border-sky-500/70 text-sky-200 hover:bg-sky-900/20 transition"
@@ -993,7 +1032,7 @@ async function postTxAction(path: string, body: any) {
 
         {/* Banners */}
         {bannerError && (
-          <div className="flex items-center gap-2 bg-rose-900/30 text-rose-200 p-3 rounded-md mb-4 border border-rose-700/70">
+          <div className="whitespace-pre-line flex items-center gap-2 bg-rose-900/30 text-rose-200 p-3 rounded-md mb-4 border border-rose-700/70">
             <XCircleIcon className="w-5 h-5" />
             <span className="text-sm">{bannerError}</span>
           </div>
@@ -1042,15 +1081,41 @@ async function postTxAction(path: string, body: any) {
             <h2 className={`text-xl font-bold ${accentText}`}>Personal Details</h2>
 
             {!profile ? (
-              <p className="text-neutral-300">
-                No profile found for your account.
-                <br />
-                This usually means your dashboard is pointing at a different Appwrite database/collection than your
-                registration.
-                <br />
-                Check your env vars: <strong>NEXT_PUBLIC_APPWRITE_PROFILES_DATABASE_ID</strong> and{" "}
-                <strong>NEXT_PUBLIC_APPWRITE_PROFILES_COLLECTION_ID</strong>.
-              </p>
+              <div className="space-y-3">
+                <p className="text-neutral-300">
+                  No profile found for your account.
+                  <br />
+                  This usually means your dashboard is pointing at a different Appwrite database/collection than your
+                  registration.
+                  <br />
+                  Check your env vars: <strong>NEXT_PUBLIC_APPWRITE_PROFILES_DATABASE_ID</strong> and{" "}
+                  <strong>NEXT_PUBLIC_APPWRITE_PROFILES_COLLECTION_ID</strong>.
+                </p>
+
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={handleCreateProfile}
+                    disabled={creatingProfile}
+                    className={`${primaryBtn} font-semibold px-6 py-2 rounded-md text-sm disabled:opacity-50`}
+                  >
+                    {creatingProfile ? "Creating…" : "Create my profile"}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => router.refresh?.()}
+                    className="px-6 py-2 rounded-md text-sm font-semibold border border-neutral-700 text-neutral-200 hover:bg-neutral-900"
+                  >
+                    Refresh
+                  </button>
+                </div>
+
+                <p className="text-xs text-neutral-500">
+                  If “Create my profile” fails, it’s a permissions issue on the profiles collection (user-create
+                  disabled). Tell me what error message you see and we’ll fix it properly.
+                </p>
+              </div>
             ) : (
               <>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -1129,9 +1194,7 @@ async function postTxAction(path: string, body: any) {
                         onChange={(e) => setNewPassword(e.target.value)}
                         className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
                       />
-                      <p className="text-xs text-neutral-500 mt-1">
-                        Must include letters &amp; numbers, min 8 characters.
-                      </p>
+                      <p className="text-xs text-neutral-500 mt-1">Must include letters &amp; numbers, min 8 characters.</p>
                     </div>
 
                     <div>
@@ -1212,7 +1275,10 @@ async function postTxAction(path: string, body: any) {
               </p>
             )}
 
-            <form onSubmit={handleSellSubmit} className="space-y-5">
+            <form
+              onSubmit={handleSellSubmit}
+              className="space-y-5"
+            >
               {/* Item basics */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
@@ -1318,8 +1384,15 @@ async function postTxAction(path: string, body: any) {
                     const file = e.target.files?.[0] || null;
                     setSellPhoto(file);
 
+                    // ✅ prevent blob URL leaks
+                    if (lastPreviewUrlRef.current) {
+                      URL.revokeObjectURL(lastPreviewUrlRef.current);
+                      lastPreviewUrlRef.current = null;
+                    }
+
                     if (file) {
                       const url = URL.createObjectURL(file);
+                      lastPreviewUrlRef.current = url;
                       setSellPhotoPreview(url);
                     } else {
                       setSellPhotoPreview(null);
@@ -1458,138 +1531,123 @@ async function postTxAction(path: string, body: any) {
           </div>
         )}
 
-       {/* AWAITING TAB */}
-{activeTab === "awaiting" && (
-  <div className="space-y-4">
-    <h2 className={`text-xl font-bold mb-2 ${accentText}`}>Awaiting Approval</h2>
-    <p className="text-sm text-neutral-300 mb-2">
-      These listings are waiting for the admin team to review.
-    </p>
+        {/* AWAITING TAB */}
+        {activeTab === "awaiting" && (
+          <div className="space-y-4">
+            <h2 className={`text-xl font-bold mb-2 ${accentText}`}>Awaiting Approval</h2>
+            <p className="text-sm text-neutral-300 mb-2">These listings are waiting for the admin team to review.</p>
 
-    {awaitingListings.length === 0 ? (
-      <p className="text-neutral-400 text-sm text-center">
-        You have no listings awaiting approval.
-      </p>
-    ) : (
-      <div className="grid gap-4">
-        {awaitingListings.map((l) => (
-          <div
-            key={l.$id}
-            className="border border-neutral-800 rounded-xl p-4 bg-neutral-900/40 shadow-sm"
-          >
-            <div className="flex justify-between items-center mb-2">
-              <div>
-                <h3 className={`text-lg font-bold ${accentText}`}>{listingTitle(l)}</h3>
-                <p className="text-xs text-neutral-400">{listingSubtitle(l)}</p>
-                <p className="text-xs text-neutral-500 mt-1">Status: Pending review</p>
+            {awaitingListings.length === 0 ? (
+              <p className="text-neutral-400 text-sm text-center">You have no listings awaiting approval.</p>
+            ) : (
+              <div className="grid gap-4">
+                {awaitingListings.map((l) => (
+                  <div key={l.$id} className="border border-neutral-800 rounded-xl p-4 bg-neutral-900/40 shadow-sm">
+                    <div className="flex justify-between items-center mb-2">
+                      <div>
+                        <h3 className={`text-lg font-bold ${accentText}`}>{listingTitle(l)}</h3>
+                        <p className="text-xs text-neutral-400">{listingSubtitle(l)}</p>
+                        <p className="text-xs text-neutral-500 mt-1">Status: Pending review</p>
+                      </div>
+
+                      <span className="px-3 py-1 rounded-md text-xs font-semibold bg-neutral-950/60 text-neutral-200 border border-neutral-800">
+                        Awaiting Approval
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-sm text-neutral-200 mt-2">
+                      <p>
+                        <strong>Reserve:</strong> £{toNum(l.reserve_price).toLocaleString("en-GB")}
+                      </p>
+                      <p>
+                        <strong>Starting:</strong> £{toNum(l.starting_price, 0).toLocaleString("en-GB")}
+                      </p>
+                      <p>
+                        <strong>Buy Now:</strong>{" "}
+                        {toNum(l.buy_now, 0) > 0 ? `£${toNum(l.buy_now).toLocaleString("en-GB")}` : "Not set"}
+                      </p>
+                    </div>
+
+                    {safeStr(l.description) && (
+                      <p className="mt-2 text-xs text-neutral-400">
+                        <strong>Description:</strong> {safeStr(l.description)}
+                      </p>
+                    )}
+                  </div>
+                ))}
               </div>
-
-              <span className="px-3 py-1 rounded-md text-xs font-semibold bg-neutral-950/60 text-neutral-200 border border-neutral-800">
-                Awaiting Approval
-              </span>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-sm text-neutral-200 mt-2">
-              <p>
-                <strong>Reserve:</strong> £{toNum(l.reserve_price).toLocaleString("en-GB")}
-              </p>
-              <p>
-                <strong>Starting:</strong> £{toNum(l.starting_price, 0).toLocaleString("en-GB")}
-              </p>
-              <p>
-                <strong>Buy Now:</strong>{" "}
-                {toNum(l.buy_now, 0) > 0
-                  ? `£${toNum(l.buy_now).toLocaleString("en-GB")}`
-                  : "Not set"}
-              </p>
-            </div>
-
-            {safeStr(l.description) && (
-              <p className="mt-2 text-xs text-neutral-400">
-                <strong>Description:</strong> {safeStr(l.description)}
-              </p>
             )}
           </div>
-        ))}
-      </div>
-    )}
-  </div>
-)}
-       
-      {/* APPROVED / QUEUED TAB */}
-{activeTab === "approvedQueued" && (
-  <div className="space-y-4">
-    <h2 className={`text-xl font-bold mb-2 ${accentText}`}>Approved / Queued</h2>
-    <p className="text-sm text-neutral-300 mb-1">
-      These listings are approved and queued for the next weekly auction.
-    </p>
-    <p className="text-xs text-neutral-400">
-      You currently have <strong>{queuedListings.length}</strong> queued.
-    </p>
+        )}
 
-    {queuedListings.length === 0 ? (
-      <p className="text-neutral-400 text-sm text-center mt-4">
-        You have no approved listings waiting for the next auction.
-      </p>
-    ) : (
-      <div className="grid gap-4 mt-2">
-        {queuedListings.map((l) => (
-          <div
-            key={l.$id}
-            className="border border-neutral-800 rounded-xl p-4 bg-neutral-900/40 shadow-sm"
-          >
-            <div className="flex justify-between items-center mb-2">
-              <div>
-                <h3 className={`text-xl font-bold ${accentText}`}>{listingTitle(l)}</h3>
-                <p className="text-xs text-neutral-400">{listingSubtitle(l)}</p>
-                <p className="text-xs text-neutral-500 mt-1">Status: Approved / queued</p>
+        {/* APPROVED / QUEUED TAB */}
+        {activeTab === "approvedQueued" && (
+          <div className="space-y-4">
+            <h2 className={`text-xl font-bold mb-2 ${accentText}`}>Approved / Queued</h2>
+            <p className="text-sm text-neutral-300 mb-1">These listings are approved and queued for the next weekly auction.</p>
+            <p className="text-xs text-neutral-400">
+              You currently have <strong>{queuedListings.length}</strong> queued.
+            </p>
+
+            {queuedListings.length === 0 ? (
+              <p className="text-neutral-400 text-sm text-center mt-4">
+                You have no approved listings waiting for the next auction.
+              </p>
+            ) : (
+              <div className="grid gap-4 mt-2">
+                {queuedListings.map((l) => (
+                  <div key={l.$id} className="border border-neutral-800 rounded-xl p-4 bg-neutral-900/40 shadow-sm">
+                    <div className="flex justify-between items-center mb-2">
+                      <div>
+                        <h3 className={`text-xl font-bold ${accentText}`}>{listingTitle(l)}</h3>
+                        <p className="text-xs text-neutral-400">{listingSubtitle(l)}</p>
+                        <p className="text-xs text-neutral-500 mt-1">Status: Approved / queued</p>
+                      </div>
+
+                      <span className="px-3 py-1 rounded-md text-xs font-semibold bg-sky-900/20 text-sky-200 border border-sky-700/40">
+                        Queued
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm text-neutral-200 mb-2">
+                      <p>
+                        <strong>Reserve:</strong> £{toNum(l.reserve_price).toLocaleString("en-GB")}
+                      </p>
+                      <p>
+                        <strong>Starting:</strong> £{toNum(l.starting_price, 0).toLocaleString("en-GB")}
+                      </p>
+                      <p>
+                        <strong>Buy Now:</strong>{" "}
+                        {toNum(l.buy_now, 0) > 0 ? `£${toNum(l.buy_now).toLocaleString("en-GB")}` : "Not set"}
+                      </p>
+                    </div>
+
+                    <div className="mt-3 text-xs text-neutral-400 space-y-1">
+                      <p>
+                        <strong>Relist setting:</strong>{" "}
+                        {l.relist_until_sold
+                          ? "This item will be relisted automatically if it does not sell."
+                          : "This item will not be automatically relisted."}
+                      </p>
+                    </div>
+
+                    <div className="mt-4">
+                      <a
+                        href={`/listing/${l.$id}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center px-4 py-2 rounded-md bg-neutral-950/60 hover:bg-neutral-950 text-neutral-100 text-sm font-semibold border border-neutral-800"
+                      >
+                        View public listing
+                      </a>
+                    </div>
+                  </div>
+                ))}
               </div>
-
-              <span className="px-3 py-1 rounded-md text-xs font-semibold bg-sky-900/20 text-sky-200 border border-sky-700/40">
-                Queued
-              </span>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm text-neutral-200 mb-2">
-              <p>
-                <strong>Reserve:</strong> £{toNum(l.reserve_price).toLocaleString("en-GB")}
-              </p>
-              <p>
-                <strong>Starting:</strong> £{toNum(l.starting_price, 0).toLocaleString("en-GB")}
-              </p>
-              <p>
-                <strong>Buy Now:</strong>{" "}
-                {toNum(l.buy_now, 0) > 0
-                  ? `£${toNum(l.buy_now).toLocaleString("en-GB")}`
-                  : "Not set"}
-              </p>
-            </div>
-
-            <div className="mt-3 text-xs text-neutral-400 space-y-1">
-              <p>
-                <strong>Relist setting:</strong>{" "}
-                {l.relist_until_sold
-                  ? "This item will be relisted automatically if it does not sell."
-                  : "This item will not be automatically relisted."}
-              </p>
-            </div>
-
-            <div className="mt-4">
-              <a
-                href={`/listing/${l.$id}`}
-                target="_blank"
-                rel="noreferrer"
-                className="inline-flex items-center px-4 py-2 rounded-md bg-neutral-950/60 hover:bg-neutral-950 text-neutral-100 text-sm font-semibold border border-neutral-800"
-              >
-                View public listing
-              </a>
-            </div>
+            )}
           </div>
-        ))}
-      </div>
-    )}
-  </div>
-)}
+        )}
+
         {/* LIVE TAB */}
         {activeTab === "live" && (
           <div className="space-y-4">
@@ -1669,9 +1727,7 @@ async function postTxAction(path: string, body: any) {
                   <div key={tx.$id} className="border border-neutral-800 rounded-xl p-4 bg-neutral-900/40 shadow-sm">
                     <div className="flex justify-between items-start mb-2">
                       <div>
-                        <p className={`text-sm font-semibold ${accentText}`}>
-                          {tx.registration || tx.listing_id || "Sale"}
-                        </p>
+                        <p className={`text-sm font-semibold ${accentText}`}>{tx.registration || tx.listing_id || "Sale"}</p>
                         <p className="text-xs text-neutral-400">Buyer: {tx.buyer_email || "Unknown"}</p>
                         <p className="text-xs text-neutral-500">Transaction ID: {tx.$id}</p>
                       </div>
@@ -1745,9 +1801,7 @@ async function postTxAction(path: string, body: any) {
             <h2 className={`text-xl font-bold mb-2 ${accentText}`}>History</h2>
 
             {historyListings.length === 0 ? (
-              <p className="text-neutral-400 text-sm text-center">
-                Ended, sold, and unsold auctions will appear here.
-              </p>
+              <p className="text-neutral-400 text-sm text-center">Ended, sold, and unsold auctions will appear here.</p>
             ) : (
               <div className="grid gap-5">
                 {historyListings.map((l) => (
@@ -1771,8 +1825,7 @@ async function postTxAction(path: string, body: any) {
                         <strong>Highest bid:</strong> £{toNum(l.current_bid, 0).toLocaleString("en-GB")}
                       </p>
                       <p>
-                        <strong>Auction ended:</strong>{" "}
-                        {l.auction_end ? new Date(l.auction_end).toLocaleString("en-GB") : "—"}
+                        <strong>Auction ended:</strong> {l.auction_end ? new Date(l.auction_end).toLocaleString("en-GB") : "—"}
                       </p>
                     </div>
 
@@ -1786,7 +1839,7 @@ async function postTxAction(path: string, body: any) {
           </div>
         )}
 
-                    {/* TRANSACTIONS TAB */}
+        {/* TRANSACTIONS TAB */}
         {activeTab === "transactions" && (
           <div className="space-y-4">
             <h2 className={`text-xl font-bold mb-2 ${accentText}`}>Transactions</h2>
@@ -1794,50 +1847,47 @@ async function postTxAction(path: string, body: any) {
 
             <div className="flex flex-wrap gap-3 text-xs text-neutral-200 mb-2">
               <span className="px-3 py-1 rounded-full bg-neutral-950/60 border border-neutral-800">
-                As seller:{" "}
-                <strong>{activeTransactions.filter((t) => t.seller_email === userEmail).length}</strong>
+                As seller: <strong>{activeTransactions.filter((t) => t.seller_email === userEmail).length}</strong>
               </span>
               <span className="px-3 py-1 rounded-full bg-neutral-950/60 border border-neutral-800">
-                As buyer:{" "}
-                <strong>{activeTransactions.filter((t) => t.buyer_email === userEmail).length}</strong>
+                As buyer: <strong>{activeTransactions.filter((t) => t.buyer_email === userEmail).length}</strong>
               </span>
             </div>
 
             {activeTransactions.length === 0 ? (
-              <p className="text-neutral-400 text-sm text-center">
-                You don&apos;t have any active transactions right now.
-              </p>
+              <p className="text-neutral-400 text-sm text-center">You don&apos;t have any active transactions right now.</p>
             ) : (
               <div className="grid gap-4">
                 {activeTransactions.map((tx) => {
                   const statusLabel = tx.transaction_status || tx.payment_status || "pending";
                   const txStatusLower = String(tx.transaction_status || "").toLowerCase();
+                  const paymentLower = String(tx.payment_status || "").toLowerCase();
 
-                  const isBuyer =
-                    String(tx.buyer_email || "").toLowerCase() === String(userEmail || "").toLowerCase();
-
-                  const isSeller =
-                    String(tx.seller_email || "").toLowerCase() === String(userEmail || "").toLowerCase();
-
+                  const isBuyer = String(tx.buyer_email || "").toLowerCase() === String(userEmail || "").toLowerCase();
+                  const isSeller = String(tx.seller_email || "").toLowerCase() === String(userEmail || "").toLowerCase();
                   const isComplete = ["complete", "completed"].includes(txStatusLower);
-                  const canDispatch = isSeller && !isComplete && ["dispatch_pending", "receipt_pending"].includes(txStatusLower);
+
+                  const canDispatch =
+                    isSeller &&
+                    !isComplete &&
+                    paymentLower === "paid" &&
+                    ["dispatch_pending", "pending", "pending_documents"].includes(txStatusLower);
+
                   const canConfirmReceived =
-                    isBuyer && !isComplete && ["dispatch_sent", "dispatch_pending", "receipt_pending"].includes(txStatusLower);
+                    isBuyer &&
+                    !isComplete &&
+                    paymentLower === "paid" &&
+                    txStatusLower === "receipt_pending";
 
                   return (
-                    <div
-                      key={tx.$id}
-                      className="border border-neutral-800 rounded-xl p-4 bg-neutral-900/40 shadow-sm"
-                    >
+                    <div key={tx.$id} className="border border-neutral-800 rounded-xl p-4 bg-neutral-900/40 shadow-sm">
                       <div className="flex justify-between items-start mb-2">
                         <div>
                           <p className={`text-sm font-semibold ${accentText}`}>
                             {tx.registration || tx.listing_id || "Transaction"}
                           </p>
                           <p className="text-xs text-neutral-500">Transaction ID: {tx.$id}</p>
-                          <p className="text-xs text-neutral-500">
-                            Role: {isSeller ? "Seller" : "Buyer"}
-                          </p>
+                          <p className="text-xs text-neutral-500">Role: {isSeller ? "Seller" : "Buyer"}</p>
                         </div>
 
                         <span className="px-3 py-1 rounded-md text-xs font-semibold bg-neutral-950/60 text-neutral-200 border border-neutral-800">
@@ -1858,9 +1908,7 @@ async function postTxAction(path: string, body: any) {
                       </div>
 
                       <div className="mt-3 flex flex-wrap items-center gap-2">
-                        <p className="text-[11px] text-neutral-500">
-                          Follow the steps here as the transaction moves forward.
-                        </p>
+                        <p className="text-[11px] text-neutral-500">Follow the steps here as the transaction moves forward.</p>
 
                         {canDispatch && (
                           <button
@@ -1869,7 +1917,14 @@ async function postTxAction(path: string, body: any) {
                               try {
                                 setBannerError("");
                                 setBannerSuccess("");
-                                await postTxAction("/api/transactions/confirm-dispatch", { txId: tx.$id });
+
+                                await postTxAction("/api/transactions/mark-dispatched", {
+                                  txId: tx.$id,
+                                  carrier: "",
+                                  tracking: "",
+                                  note: "",
+                                });
+
                                 setBannerSuccess("Nice — marked as dispatched.");
                                 window.location.reload();
                               } catch (e: any) {
