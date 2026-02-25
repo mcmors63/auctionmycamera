@@ -2,7 +2,7 @@
 "use client";
 
 import type React from "react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Client, Account, Databases, Storage, ID, Query } from "appwrite";
@@ -24,11 +24,15 @@ const storage = new Storage(client);
 // -----------------------------
 const LISTINGS_DB_ID =
   process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID ||
+  process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID ||
+  process.env.APPWRITE_LISTINGS_DATABASE_ID ||
   process.env.APPWRITE_LISTINGS_DATABASE_ID ||
   "690fc34a0000ce1baa63";
 
 const LISTINGS_COLLECTION_ID =
   process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_COLLECTION_ID ||
+  process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_COLLECTION_ID ||
+  process.env.APPWRITE_LISTINGS_COLLECTION_ID ||
   process.env.APPWRITE_LISTINGS_COLLECTION_ID ||
   "listings";
 
@@ -41,9 +45,7 @@ const TX_DB_ID = LISTINGS_DB_ID;
 const TX_COLLECTION_ID = "transactions";
 
 // Optional admin email (so we can redirect admins cleanly)
-const ADMIN_EMAIL = (process.env.NEXT_PUBLIC_ADMIN_EMAIL || "admin@auctionmycamera.co.uk")
-  .trim()
-  .toLowerCase();
+const ADMIN_EMAIL = (process.env.NEXT_PUBLIC_ADMIN_EMAIL || "admin@auctionmycamera.co.uk").trim().toLowerCase();
 
 // -----------------------------
 // Types
@@ -59,18 +61,14 @@ type Profile = {
   postcode?: string;
   phone?: string;
   email?: string;
-
-  // optional helper fields (some clones store it)
   userId?: string;
 };
 
 type Listing = {
   $id: string;
 
-  // Compatibility label (your API writes registration = displayName)
   registration?: string;
 
-  // Camera fields
   item_title?: string | null;
   gear_type?: string | null;
   era?: string | null;
@@ -79,25 +77,20 @@ type Listing = {
   model?: string | null;
   description?: string | null;
 
-  // Pricing
   reserve_price: number;
   starting_price?: number;
   buy_now?: number;
 
-  // Seller + status
   status: string;
   seller_email?: string;
   sellerEmail?: string;
 
-  // Auction fields (optional)
   auction_start?: string | null;
   auction_end?: string | null;
 
-  // Behaviour flags
   relist_until_sold?: boolean;
   withdraw_after_current?: boolean;
 
-  // Bids (optional)
   current_bid?: number;
 };
 
@@ -105,8 +98,10 @@ type Transaction = {
   $id: string;
   listing_id?: string;
   registration?: string;
+
   seller_email?: string;
   buyer_email?: string;
+  buyer_id?: string;
 
   sale_price?: number;
   commission_amount?: number;
@@ -114,17 +109,36 @@ type Transaction = {
   seller_payout?: number;
 
   payment_status?: string; // pending | paid
-  transaction_status?: string; // pending | processing | complete
+  transaction_status?: string; // dispatch_pending | receipt_pending | complete
 
-  documents?: any[];
+  stripe_payment_intent_id?: string;
+
   created_at?: string;
   updated_at?: string;
 
-  // flags
-  seller_docs_requested?: boolean;
-  seller_docs_received?: boolean;
-  buyer_info_requested?: boolean;
-  buyer_info_received?: boolean;
+  // Delivery snapshot (from scheduler)
+  delivery_first_name?: string;
+  delivery_surname?: string;
+  delivery_house?: string;
+  delivery_street?: string;
+  delivery_town?: string;
+  delivery_county?: string;
+  delivery_postcode?: string;
+  delivery_phone?: string;
+
+  // Seller dispatch fields
+  seller_dispatch_status?: string; // pending | sent
+  seller_dispatch_carrier?: string;
+  seller_dispatch_tracking?: string;
+  seller_dispatch_note?: string;
+  seller_dispatched_at?: string;
+
+  // Buyer receipt fields
+  buyer_receipt_status?: string; // pending | confirmed
+  buyer_received_at?: string;
+
+  // Optional payout flag
+  payout_status?: string;
 };
 
 // -----------------------------
@@ -179,13 +193,44 @@ function listingSubtitle(l: Listing) {
   return bits.length ? bits.join(" • ") : "Camera listing";
 }
 
+function formatLondon(iso?: string) {
+  if (!iso) return "—";
+  try {
+    return new Date(iso).toLocaleString("en-GB", { timeZone: "Europe/London" });
+  } catch {
+    return "—";
+  }
+}
+
+function fmtAddressLines(tx: Transaction) {
+  const name = [safeStr(tx.delivery_first_name), safeStr(tx.delivery_surname)].filter(Boolean).join(" ").trim();
+  const l1 = [safeStr(tx.delivery_house), safeStr(tx.delivery_street)].filter(Boolean).join(" ").trim();
+  const l2 = [safeStr(tx.delivery_town), safeStr(tx.delivery_county)].filter(Boolean).join(", ").trim();
+  const pc = safeStr(tx.delivery_postcode);
+  const phone = safeStr(tx.delivery_phone);
+
+  const lines = [name, l1, l2, pc].filter(Boolean);
+  return { lines, phone };
+}
+
+function txStatusLabel(tx: Transaction) {
+  const p = (tx.payment_status || "").toLowerCase();
+  const s = (tx.transaction_status || "").toLowerCase();
+
+  if (p !== "paid") return "Payment pending";
+  if (s === "dispatch_pending" || s === "pending" || s === "pending_documents") return "Awaiting dispatch";
+  if (s === "receipt_pending" || s === "dispatch_sent") return "In transit";
+  if (s === "complete" || s === "completed") return "Complete";
+  return tx.transaction_status || tx.payment_status || "Pending";
+}
+
 // -----------------------------
 // Component
 // -----------------------------
 export default function DashboardPage() {
   const router = useRouter();
 
-  // Tabs (✅ default to profile so people SEE their details first)
+  // Tabs
   const [activeTab, setActiveTab] = useState<
     | "profile"
     | "sell"
@@ -196,7 +241,7 @@ export default function DashboardPage() {
     | "purchased"
     | "history"
     | "transactions"
-  >("profile");
+  >("sell");
 
   // Auth + profile
   const [user, setUser] = useState<any>(null);
@@ -207,9 +252,6 @@ export default function DashboardPage() {
   const [savingProfile, setSavingProfile] = useState(false);
   const [bannerError, setBannerError] = useState("");
   const [bannerSuccess, setBannerSuccess] = useState("");
-
-  // JWT helper (for testing transaction routes)
-  const [jwtCopyMsg, setJwtCopyMsg] = useState("");
 
   // Listings
   const [awaitingListings, setAwaitingListings] = useState<Listing[]>([]);
@@ -240,9 +282,8 @@ export default function DashboardPage() {
   // Photo (dashboard sell)
   const [sellPhoto, setSellPhoto] = useState<File | null>(null);
   const [sellPhotoPreview, setSellPhotoPreview] = useState<string | null>(null);
-  const lastPreviewUrlRef = useRef<string | null>(null);
 
-  // Fee preview (simple for now)
+  // Fee preview
   const [commissionRate, setCommissionRate] = useState(0);
   const [commissionValue, setCommissionValue] = useState(0);
   const [expectedReturn, setExpectedReturn] = useState(0);
@@ -262,10 +303,36 @@ export default function DashboardPage() {
   const [deleteError, setDeleteError] = useState("");
   const [deleteLoading, setDeleteLoading] = useState(false);
 
-  // Profile repair helper
-  const [creatingProfile, setCreatingProfile] = useState(false);
+  // ✅ Dispatch form state keyed by txId (seller)
+  const [dispatchForms, setDispatchForms] = useState<
+    Record<string, { carrier: string; tracking: string; note: string; saving: boolean; error: string }>
+  >({});
 
   const userEmail = user?.email ?? null;
+
+  // -----------------------------
+  // Honor ?tab=transactions from email links
+  // -----------------------------
+  useEffect(() => {
+    try {
+      const params = new URLSearchParams(window.location.search || "");
+      const tab = (params.get("tab") || "").trim();
+      const allowed = new Set([
+        "profile",
+        "sell",
+        "awaiting",
+        "approvedQueued",
+        "live",
+        "sold",
+        "purchased",
+        "history",
+        "transactions",
+      ]);
+      if (allowed.has(tab)) setActiveTab(tab as any);
+    } catch {
+      // ignore
+    }
+  }, []);
 
   // -----------------------------
   // Derived transaction groups
@@ -302,11 +369,9 @@ export default function DashboardPage() {
       setBannerError("");
       setBannerSuccess("");
 
-      // 0) Ensure profile env is actually set
       if (!PROFILES_DB_ID || !PROFILES_COLLECTION_ID) {
         setBannerError(
-          "Dashboard misconfigured: missing NEXT_PUBLIC_APPWRITE_PROFILES_DATABASE_ID or NEXT_PUBLIC_APPWRITE_PROFILES_COLLECTION_ID.\n" +
-            "Fix these in Vercel and your local .env.local so the dashboard points to the same profiles collection used during registration."
+          "Dashboard misconfigured: missing NEXT_PUBLIC_APPWRITE_PROFILES_DATABASE_ID or NEXT_PUBLIC_APPWRITE_PROFILES_COLLECTION_ID."
         );
         setInitialLoading(false);
         return;
@@ -343,26 +408,20 @@ export default function DashboardPage() {
 
       // 2) PROFILE (strict env + fallback search)
       try {
-        // Primary: doc id = user id (this is what your RegisterClient does)
         const prof = await databases.getDocument(PROFILES_DB_ID, PROFILES_COLLECTION_ID, current.$id);
         if (!cancelled) setProfile(prof as any);
       } catch {
-        // Fallback: some older clones stored profiles under random $id and linked by userId/email.
         try {
           const found: any[] = [];
 
-          // try userId if it exists in schema
           try {
             const rByUserId = await databases.listDocuments(PROFILES_DB_ID, PROFILES_COLLECTION_ID, [
               Query.equal("userId", current.$id),
               Query.limit(1),
             ]);
             found.push(...(rByUserId.documents || []));
-          } catch {
-            // ignore
-          }
+          } catch {}
 
-          // try email as last resort
           if (found.length === 0) {
             try {
               const rByEmail = await databases.listDocuments(PROFILES_DB_ID, PROFILES_COLLECTION_ID, [
@@ -370,9 +429,7 @@ export default function DashboardPage() {
                 Query.limit(1),
               ]);
               found.push(...(rByEmail.documents || []));
-            } catch {
-              // ignore
-            }
+            } catch {}
           }
 
           if (!cancelled) setProfile(found[0] ? (found[0] as any) : null);
@@ -390,21 +447,15 @@ export default function DashboardPage() {
             Query.equal("seller_email", current.email),
           ]);
           results.push(...((r1.documents || []) as any));
-        } catch {
-          // ignore
-        }
+        } catch {}
 
-        // fallback field name used in some clones
         try {
           const r2 = await databases.listDocuments(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, [
             Query.equal("sellerEmail", current.email),
           ]);
           results.push(...((r2.documents || []) as any));
-        } catch {
-          // ignore
-        }
+        } catch {}
 
-        // de-dupe by id
         const byId = new Map<string, Listing>();
         for (const d of results) if (d?.$id && !byId.has(d.$id)) byId.set(d.$id, d);
 
@@ -431,18 +482,14 @@ export default function DashboardPage() {
               Query.equal("seller_email", current.email),
             ]);
             combined.push(...((txSeller.documents || []) as any));
-          } catch {
-            // ignore
-          }
+          } catch {}
 
           try {
             const txBuyer = await databases.listDocuments(TX_DB_ID, TX_COLLECTION_ID, [
               Query.equal("buyer_email", current.email),
             ]);
             combined.push(...((txBuyer.documents || []) as any));
-          } catch {
-            // ignore
-          }
+          } catch {}
 
           const byId = new Map<string, Transaction>();
           combined.forEach((tx) => {
@@ -452,7 +499,7 @@ export default function DashboardPage() {
           if (!cancelled) setTransactions(Array.from(byId.values()));
         }
       } catch {
-        // ignore (transactions might not exist yet)
+        // ignore
       }
 
       if (!cancelled) setInitialLoading(false);
@@ -466,7 +513,7 @@ export default function DashboardPage() {
   }, [router]);
 
   // -----------------------------
-  // Auto logout after 5 minutes (✅ actually 5 mins now)
+  // Auto logout after 10 minutes (comment said 5; code was 10)
   // -----------------------------
   useEffect(() => {
     let timeout: any;
@@ -476,12 +523,10 @@ export default function DashboardPage() {
       timeout = setTimeout(async () => {
         try {
           await account.deleteSession("current");
-        } catch {
-          // ignore
-        }
+        } catch {}
         alert("Logged out due to inactivity.");
         router.push("/login");
-      }, 5 * 60 * 1000);
+      }, 10 * 60 * 1000);
     };
 
     const events = ["mousemove", "keydown", "click"];
@@ -527,40 +572,6 @@ export default function DashboardPage() {
       setBannerError("Failed to update profile.");
     } finally {
       setSavingProfile(false);
-    }
-  };
-
-  // ✅ Repair helper: create profile doc if missing
-  const handleCreateProfile = async () => {
-    if (!user?.$id) return;
-    setCreatingProfile(true);
-    setBannerError("");
-    setBannerSuccess("");
-
-    try {
-      const doc = await databases.createDocument(PROFILES_DB_ID, PROFILES_COLLECTION_ID, user.$id, {
-        email: user.email || "",
-        userId: user.$id,
-        first_name: "",
-        surname: "",
-        house: "",
-        street: "",
-        town: "",
-        county: "",
-        postcode: "",
-        phone: "",
-      });
-
-      setProfile(doc as any);
-      setBannerSuccess("Profile created. You can now fill in your details and save.");
-    } catch (e: any) {
-      console.error("create profile error:", e);
-      setBannerError(
-        e?.message ||
-          "Could not create your profile. This usually means your profiles collection permissions don’t allow user-create."
-      );
-    } finally {
-      setCreatingProfile(false);
     }
   };
 
@@ -611,33 +622,8 @@ export default function DashboardPage() {
   const handleLogout = async () => {
     try {
       await account.deleteSession("current");
-    } catch {
-      // ignore
-    }
+    } catch {}
     router.push("/login");
-  };
-
-  // -----------------------------
-  // Copy JWT (testing helper)
-  // -----------------------------
-  const handleCopyJwt = async () => {
-    setJwtCopyMsg("");
-    try {
-      const jwt = await account.createJWT();
-      const token = (jwt as any)?.jwt || "";
-
-      if (!token || typeof token !== "string" || token.split(".").length !== 3) {
-        setJwtCopyMsg("Could not generate a valid JWT. Try logging out/in.");
-        return;
-      }
-
-      await navigator.clipboard.writeText(token);
-      setJwtCopyMsg("JWT copied. Paste it into PowerShell.");
-      setTimeout(() => setJwtCopyMsg(""), 2500);
-    } catch (e) {
-      console.error("copy jwt error:", e);
-      setJwtCopyMsg("Failed to copy JWT (browser blocked clipboard?).");
-    }
   };
 
   // -----------------------------
@@ -668,7 +654,7 @@ export default function DashboardPage() {
   }
 
   // -----------------------------
-  // Delete account (keeps same backend endpoint)
+  // Delete account
   // -----------------------------
   const handleDeleteAccount = async () => {
     if (!user) return;
@@ -688,9 +674,7 @@ export default function DashboardPage() {
 
     try {
       const hasActiveListing = allListings.some((l) =>
-        ["pending", "pending_approval", "queued", "approved", "live", "active"].includes(
-          (l.status || "").toLowerCase()
-        )
+        ["pending", "pending_approval", "queued", "approved", "live", "active"].includes((l.status || "").toLowerCase())
       );
 
       if (hasActiveListing) {
@@ -735,7 +719,7 @@ export default function DashboardPage() {
   };
 
   // -----------------------------
-  // Fee preview (simple commission model)
+  // Fee preview
   // -----------------------------
   const calculateFees = (reserve: number) => {
     let commission = 0;
@@ -757,9 +741,7 @@ export default function DashboardPage() {
   // -----------------------------
   // Sell form handlers
   // -----------------------------
-  const handleSellChange = (
-    e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>
-  ) => {
+  const handleSellChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
     const target = e.target as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
     const { name, value, type } = target;
 
@@ -927,18 +909,9 @@ export default function DashboardPage() {
         setAwaitingListings(docs.filter((l) => isAwaitingStatus(l.status)));
         setQueuedListings(docs.filter((l) => isQueuedStatus(l.status)));
         setLiveListings(docs.filter((l) => isLiveStatus(l.status)));
-      } catch {
-        // ignore
-      }
+      } catch {}
 
       alert("Listing submitted! Awaiting approval.");
-
-      // ✅ clean up preview URL
-      if (lastPreviewUrlRef.current) {
-        URL.revokeObjectURL(lastPreviewUrlRef.current);
-        lastPreviewUrlRef.current = null;
-      }
-
       setSellPhoto(null);
       setSellPhotoPreview(null);
       setSellForm({
@@ -999,21 +972,11 @@ export default function DashboardPage() {
           <div>
             <h1 className={`text-2xl md:text-3xl font-bold ${accentText}`}>My Dashboard</h1>
             <p className="text-sm text-neutral-300 mt-1">
-              Welcome,{" "}
-              <span className="font-semibold">{profile?.first_name || user?.name || "User"}</span>.
+              Welcome, <span className="font-semibold">{profile?.first_name || user?.name || "User"}</span>.
             </p>
           </div>
 
           <div className="flex flex-wrap gap-2 items-center self-start md:self-auto">
-            <button
-              onClick={handleCopyJwt}
-              className="px-4 py-2 text-sm font-semibold rounded-md border border-sky-500/70 text-sky-200 hover:bg-sky-900/20 transition"
-              type="button"
-              title="Copies an Appwrite JWT for testing API routes"
-            >
-              Copy JWT (testing)
-            </button>
-
             <button
               onClick={handleLogout}
               className="px-4 py-2 text-sm font-semibold rounded-md border border-rose-500/70 text-rose-200 hover:bg-rose-900/30 transition"
@@ -1024,15 +987,9 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        {jwtCopyMsg && (
-          <div className="mb-4 text-xs text-neutral-200 border border-neutral-800 bg-neutral-950/50 rounded-md px-3 py-2">
-            {jwtCopyMsg}
-          </div>
-        )}
-
         {/* Banners */}
         {bannerError && (
-          <div className="whitespace-pre-line flex items-center gap-2 bg-rose-900/30 text-rose-200 p-3 rounded-md mb-4 border border-rose-700/70">
+          <div className="flex items-center gap-2 bg-rose-900/30 text-rose-200 p-3 rounded-md mb-4 border border-rose-700/70">
             <XCircleIcon className="w-5 h-5" />
             <span className="text-sm">{bannerError}</span>
           </div>
@@ -1081,41 +1038,15 @@ export default function DashboardPage() {
             <h2 className={`text-xl font-bold ${accentText}`}>Personal Details</h2>
 
             {!profile ? (
-              <div className="space-y-3">
-                <p className="text-neutral-300">
-                  No profile found for your account.
-                  <br />
-                  This usually means your dashboard is pointing at a different Appwrite database/collection than your
-                  registration.
-                  <br />
-                  Check your env vars: <strong>NEXT_PUBLIC_APPWRITE_PROFILES_DATABASE_ID</strong> and{" "}
-                  <strong>NEXT_PUBLIC_APPWRITE_PROFILES_COLLECTION_ID</strong>.
-                </p>
-
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    onClick={handleCreateProfile}
-                    disabled={creatingProfile}
-                    className={`${primaryBtn} font-semibold px-6 py-2 rounded-md text-sm disabled:opacity-50`}
-                  >
-                    {creatingProfile ? "Creating…" : "Create my profile"}
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => router.refresh?.()}
-                    className="px-6 py-2 rounded-md text-sm font-semibold border border-neutral-700 text-neutral-200 hover:bg-neutral-900"
-                  >
-                    Refresh
-                  </button>
-                </div>
-
-                <p className="text-xs text-neutral-500">
-                  If “Create my profile” fails, it’s a permissions issue on the profiles collection (user-create
-                  disabled). Tell me what error message you see and we’ll fix it properly.
-                </p>
-              </div>
+              <p className="text-neutral-300">
+                No profile found for your account.
+                <br />
+                This usually means your dashboard is pointing at a different Appwrite database/collection than your
+                registration.
+                <br />
+                Check your env vars: <strong>NEXT_PUBLIC_APPWRITE_PROFILES_DATABASE_ID</strong> and{" "}
+                <strong>NEXT_PUBLIC_APPWRITE_PROFILES_COLLECTION_ID</strong>.
+              </p>
             ) : (
               <>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -1264,9 +1195,7 @@ export default function DashboardPage() {
           <div className="space-y-6">
             <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
               <h2 className={`text-xl font-bold ${accentText}`}>Sell an Item</h2>
-              <p className="text-xs text-neutral-400">
-                Submit your listing for approval. Fees only apply if your item sells.
-              </p>
+              <p className="text-xs text-neutral-400">Submit your listing for approval. Fees only apply if your item sells.</p>
             </div>
 
             {sellError && (
@@ -1275,10 +1204,7 @@ export default function DashboardPage() {
               </p>
             )}
 
-            <form
-              onSubmit={handleSellSubmit}
-              className="space-y-5"
-            >
+            <form onSubmit={handleSellSubmit} className="space-y-5">
               {/* Item basics */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
@@ -1384,15 +1310,8 @@ export default function DashboardPage() {
                     const file = e.target.files?.[0] || null;
                     setSellPhoto(file);
 
-                    // ✅ prevent blob URL leaks
-                    if (lastPreviewUrlRef.current) {
-                      URL.revokeObjectURL(lastPreviewUrlRef.current);
-                      lastPreviewUrlRef.current = null;
-                    }
-
                     if (file) {
                       const url = URL.createObjectURL(file);
-                      lastPreviewUrlRef.current = url;
                       setSellPhotoPreview(url);
                     } else {
                       setSellPhotoPreview(null);
@@ -1403,11 +1322,7 @@ export default function DashboardPage() {
 
                 {sellPhotoPreview && (
                   <div className="mt-3">
-                    <img
-                      src={sellPhotoPreview}
-                      alt="Preview"
-                      className="h-40 rounded-lg border border-neutral-700 object-cover"
-                    />
+                    <img src={sellPhotoPreview} alt="Preview" className="h-40 rounded-lg border border-neutral-700 object-cover" />
                   </div>
                 )}
               </div>
@@ -1427,9 +1342,7 @@ export default function DashboardPage() {
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-neutral-400 mb-1">
-                    Starting Price (£) (optional)
-                  </label>
+                  <label className="block text-xs font-semibold text-neutral-400 mb-1">Starting Price (£) (optional)</label>
                   <input
                     type="number"
                     name="starting_price"
@@ -1467,32 +1380,18 @@ export default function DashboardPage() {
                   <strong>Estimated you receive:</strong> £{formatMoney(expectedReturn)} (based on reserve)
                 </p>
 
-                <p className="text-[11px] text-neutral-400">
-                  This is a simple preview. Final commission is based on the final sale price.
-                </p>
+                <p className="text-[11px] text-neutral-400">This is a simple preview. Final commission is based on the final sale price.</p>
               </div>
 
               {/* Checkboxes */}
               <div className="space-y-2 text-xs text-neutral-300">
                 <label className="flex items-start gap-2">
-                  <input
-                    type="checkbox"
-                    name="owner_confirmed"
-                    checked={sellForm.owner_confirmed}
-                    onChange={handleSellChange}
-                    className="mt-1 accent-sky-500"
-                  />
+                  <input type="checkbox" name="owner_confirmed" checked={sellForm.owner_confirmed} onChange={handleSellChange} className="mt-1 accent-sky-500" />
                   <span>I confirm I own this item (or have authority to sell it) and my description is accurate.</span>
                 </label>
 
                 <label className="flex items-start gap-2">
-                  <input
-                    type="checkbox"
-                    name="agreed_terms"
-                    checked={sellForm.agreed_terms}
-                    onChange={handleSellChange}
-                    className="mt-1 accent-sky-500"
-                  />
+                  <input type="checkbox" name="agreed_terms" checked={sellForm.agreed_terms} onChange={handleSellChange} className="mt-1 accent-sky-500" />
                   <span>
                     I agree to the{" "}
                     <Link href="/terms" className="text-sky-300 underline" target="_blank" rel="noreferrer">
@@ -1503,28 +1402,16 @@ export default function DashboardPage() {
                 </label>
 
                 <label className="flex items-start gap-2">
-                  <input
-                    type="checkbox"
-                    name="relist_until_sold"
-                    checked={sellForm.relist_until_sold}
-                    onChange={handleSellChange}
-                    className="mt-1 accent-sky-500"
-                  />
+                  <input type="checkbox" name="relist_until_sold" checked={sellForm.relist_until_sold} onChange={handleSellChange} className="mt-1 accent-sky-500" />
                   <span>
                     Relist automatically in the next weekly auction if it doesn’t sell.
                     <br />
-                    <span className="text-xs text-neutral-500">
-                      You can switch this off later for new listings once we add listing edit controls.
-                    </span>
+                    <span className="text-xs text-neutral-500">You can switch this off later for new listings once we add listing edit controls.</span>
                   </span>
                 </label>
               </div>
 
-              <button
-                type="submit"
-                disabled={sellSubmitting}
-                className={`mt-2 ${primaryBtn} font-semibold px-6 py-2 rounded-md text-sm disabled:opacity-50`}
-              >
+              <button type="submit" disabled={sellSubmitting} className={`mt-2 ${primaryBtn} font-semibold px-6 py-2 rounded-md text-sm disabled:opacity-50`}>
                 {sellSubmitting ? "Submitting…" : "Submit for approval"}
               </button>
             </form>
@@ -1590,9 +1477,7 @@ export default function DashboardPage() {
             </p>
 
             {queuedListings.length === 0 ? (
-              <p className="text-neutral-400 text-sm text-center mt-4">
-                You have no approved listings waiting for the next auction.
-              </p>
+              <p className="text-neutral-400 text-sm text-center mt-4">You have no approved listings waiting for the next auction.</p>
             ) : (
               <div className="grid gap-4 mt-2">
                 {queuedListings.map((l) => (
@@ -1617,17 +1502,14 @@ export default function DashboardPage() {
                         <strong>Starting:</strong> £{toNum(l.starting_price, 0).toLocaleString("en-GB")}
                       </p>
                       <p>
-                        <strong>Buy Now:</strong>{" "}
-                        {toNum(l.buy_now, 0) > 0 ? `£${toNum(l.buy_now).toLocaleString("en-GB")}` : "Not set"}
+                        <strong>Buy Now:</strong> {toNum(l.buy_now, 0) > 0 ? `£${toNum(l.buy_now).toLocaleString("en-GB")}` : "Not set"}
                       </p>
                     </div>
 
                     <div className="mt-3 text-xs text-neutral-400 space-y-1">
                       <p>
                         <strong>Relist setting:</strong>{" "}
-                        {l.relist_until_sold
-                          ? "This item will be relisted automatically if it does not sell."
-                          : "This item will not be automatically relisted."}
+                        {l.relist_until_sold ? "This item will be relisted automatically if it does not sell." : "This item will not be automatically relisted."}
                       </p>
                     </div>
 
@@ -1652,7 +1534,6 @@ export default function DashboardPage() {
         {activeTab === "live" && (
           <div className="space-y-4">
             <h2 className={`text-xl font-bold mb-2 ${accentText}`}>Live Listings</h2>
-
             <p className="text-sm text-neutral-300 mb-4">These listings are currently live in the auction.</p>
 
             {liveListings.length === 0 ? (
@@ -1682,17 +1563,14 @@ export default function DashboardPage() {
                         <strong>Reserve:</strong> £{toNum(l.reserve_price).toLocaleString("en-GB")}
                       </p>
                       <p>
-                        <strong>Buy Now:</strong>{" "}
-                        {toNum(l.buy_now, 0) > 0 ? `£${toNum(l.buy_now).toLocaleString("en-GB")}` : "Not set"}
+                        <strong>Buy Now:</strong> {toNum(l.buy_now, 0) > 0 ? `£${toNum(l.buy_now).toLocaleString("en-GB")}` : "Not set"}
                       </p>
                     </div>
 
                     <div className="mt-3 text-xs text-neutral-400 space-y-1">
                       <p>
                         <strong>Relist setting:</strong>{" "}
-                        {l.relist_until_sold
-                          ? "This item will be relisted automatically if it does not sell."
-                          : "This item will not be automatically relisted."}
+                        {l.relist_until_sold ? "This item will be relisted automatically if it does not sell." : "This item will not be automatically relisted."}
                       </p>
                     </div>
 
@@ -1769,9 +1647,7 @@ export default function DashboardPage() {
                   <div key={tx.$id} className="border border-neutral-800 rounded-xl p-4 bg-neutral-900/40 shadow-sm">
                     <div className="flex justify-between items-start mb-2">
                       <div>
-                        <p className={`text-sm font-semibold ${accentText}`}>
-                          {tx.registration || tx.listing_id || "Purchase"}
-                        </p>
+                        <p className={`text-sm font-semibold ${accentText}`}>{tx.registration || tx.listing_id || "Purchase"}</p>
                         <p className="text-xs text-neutral-400">Seller: {tx.seller_email || "Unknown"}</p>
                         <p className="text-xs text-neutral-500">Transaction ID: {tx.$id}</p>
                       </div>
@@ -1829,9 +1705,7 @@ export default function DashboardPage() {
                       </p>
                     </div>
 
-                    <p className="text-[11px] text-neutral-500 mt-3">
-                      Relist controls will be added once the camera relist endpoint is wired up.
-                    </p>
+                    <p className="text-[11px] text-neutral-500 mt-3">Relist controls will be added once the camera relist endpoint is wired up.</p>
                   </div>
                 ))}
               </div>
@@ -1859,39 +1733,44 @@ export default function DashboardPage() {
             ) : (
               <div className="grid gap-4">
                 {activeTransactions.map((tx) => {
-                  const statusLabel = tx.transaction_status || tx.payment_status || "pending";
                   const txStatusLower = String(tx.transaction_status || "").toLowerCase();
                   const paymentLower = String(tx.payment_status || "").toLowerCase();
 
                   const isBuyer = String(tx.buyer_email || "").toLowerCase() === String(userEmail || "").toLowerCase();
                   const isSeller = String(tx.seller_email || "").toLowerCase() === String(userEmail || "").toLowerCase();
+
                   const isComplete = ["complete", "completed"].includes(txStatusLower);
 
                   const canDispatch =
                     isSeller &&
                     !isComplete &&
                     paymentLower === "paid" &&
-                    ["dispatch_pending", "pending", "pending_documents"].includes(txStatusLower);
+                    ["dispatch_pending", "pending", "pending_documents", "dispatch_sent", "receipt_pending"].includes(txStatusLower);
 
+                  // Buyer can only confirm after dispatch (receipt_pending / dispatch_sent)
                   const canConfirmReceived =
                     isBuyer &&
                     !isComplete &&
                     paymentLower === "paid" &&
-                    txStatusLower === "receipt_pending";
+                    ["receipt_pending", "dispatch_sent"].includes(txStatusLower);
+
+                  const statusChip = txStatusLabel(tx);
+
+                  const form = dispatchForms[tx.$id] || { carrier: "", tracking: "", note: "", saving: false, error: "" };
+
+                  const { lines: deliveryLines, phone: deliveryPhone } = fmtAddressLines(tx);
 
                   return (
                     <div key={tx.$id} className="border border-neutral-800 rounded-xl p-4 bg-neutral-900/40 shadow-sm">
                       <div className="flex justify-between items-start mb-2">
                         <div>
-                          <p className={`text-sm font-semibold ${accentText}`}>
-                            {tx.registration || tx.listing_id || "Transaction"}
-                          </p>
+                          <p className={`text-sm font-semibold ${accentText}`}>{tx.registration || tx.listing_id || "Transaction"}</p>
                           <p className="text-xs text-neutral-500">Transaction ID: {tx.$id}</p>
                           <p className="text-xs text-neutral-500">Role: {isSeller ? "Seller" : "Buyer"}</p>
                         </div>
 
                         <span className="px-3 py-1 rounded-md text-xs font-semibold bg-neutral-950/60 text-neutral-200 border border-neutral-800">
-                          {String(statusLabel).toUpperCase()}
+                          {statusChip.toUpperCase()}
                         </span>
                       </div>
 
@@ -1907,56 +1786,207 @@ export default function DashboardPage() {
                         </p>
                       </div>
 
-                      <div className="mt-3 flex flex-wrap items-center gap-2">
-                        <p className="text-[11px] text-neutral-500">Follow the steps here as the transaction moves forward.</p>
-
-                        {canDispatch && (
-                          <button
-                            type="button"
-                            onClick={async () => {
-                              try {
-                                setBannerError("");
-                                setBannerSuccess("");
-
-                                await postTxAction("/api/transactions/mark-dispatched", {
-                                  txId: tx.$id,
-                                  carrier: "",
-                                  tracking: "",
-                                  note: "",
-                                });
-
-                                setBannerSuccess("Nice — marked as dispatched.");
-                                window.location.reload();
-                              } catch (e: any) {
-                                setBannerError(e?.message || "Failed to confirm dispatch.");
-                              }
-                            }}
-                            className="px-4 py-2 rounded-md bg-sky-600 hover:bg-sky-700 text-white text-xs font-semibold"
-                          >
-                            Confirm dispatch
-                          </button>
-                        )}
-
-                        {canConfirmReceived && (
-                          <button
-                            type="button"
-                            onClick={async () => {
-                              try {
-                                setBannerError("");
-                                setBannerSuccess("");
-                                await postTxAction("/api/transactions/confirm-received", { txId: tx.$id });
-                                setBannerSuccess("Thanks — marked as received.");
-                                window.location.reload();
-                              } catch (e: any) {
-                                setBannerError(e?.message || "Failed to confirm receipt.");
-                              }
-                            }}
-                            className="px-4 py-2 rounded-md bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold"
-                          >
-                            Confirm received
-                          </button>
-                        )}
+                      {/* Timeline */}
+                      <div className="mt-3 text-[11px] text-neutral-400 border border-neutral-800 rounded-lg p-3 bg-neutral-950/40">
+                        <div className="flex flex-wrap gap-2 items-center">
+                          <span className={`px-2 py-1 rounded-md border ${paymentLower === "paid" ? "border-emerald-700/40 text-emerald-200" : "border-neutral-700 text-neutral-300"}`}>
+                            1) Paid
+                          </span>
+                          <span className={`px-2 py-1 rounded-md border ${txStatusLower === "receipt_pending" || txStatusLower === "dispatch_sent" || isComplete ? "border-emerald-700/40 text-emerald-200" : "border-neutral-700 text-neutral-300"}`}>
+                            2) Dispatched
+                          </span>
+                          <span className={`px-2 py-1 rounded-md border ${isComplete ? "border-emerald-700/40 text-emerald-200" : "border-neutral-700 text-neutral-300"}`}>
+                            3) Received
+                          </span>
+                        </div>
                       </div>
+
+                      {/* Seller: show delivery address + dispatch form */}
+                      {isSeller && paymentLower === "paid" && !isComplete && (
+                        <div className="mt-4 border border-neutral-800 rounded-lg p-4 bg-neutral-950/30">
+                          <h4 className="text-sm font-semibold text-neutral-100">Delivery details</h4>
+
+                          {deliveryLines.length ? (
+                            <div className="mt-2 text-sm text-neutral-200">
+                              {deliveryLines.map((ln, i) => (
+                                <div key={i}>{ln}</div>
+                              ))}
+                              {deliveryPhone && <div className="mt-1 text-xs text-neutral-400">Phone: {deliveryPhone}</div>}
+                            </div>
+                          ) : (
+                            <p className="mt-2 text-xs text-neutral-400">
+                              No delivery address snapshot found on this transaction yet.
+                            </p>
+                          )}
+
+                          <div className="mt-4">
+                            <h5 className="text-sm font-semibold text-neutral-100">Confirm dispatch</h5>
+                            <p className="text-xs text-neutral-400 mt-1">
+                              Add the carrier and tracking number so the buyer can track delivery.
+                            </p>
+
+                            {form.error && (
+                              <p className="mt-2 bg-rose-900/30 text-rose-200 text-xs rounded-md px-3 py-2 border border-rose-700/70">
+                                {form.error}
+                              </p>
+                            )}
+
+                            <div className="mt-3 grid grid-cols-1 md:grid-cols-3 gap-3">
+                              <div>
+                                <label className="block text-xs font-semibold text-neutral-400 mb-1">Carrier</label>
+                                <input
+                                  value={form.carrier}
+                                  onChange={(e) =>
+                                    setDispatchForms((p) => ({
+                                      ...p,
+                                      [tx.$id]: { ...form, carrier: e.target.value, error: "" },
+                                    }))
+                                  }
+                                  placeholder="e.g. Royal Mail"
+                                  className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                                />
+                              </div>
+
+                              <div>
+                                <label className="block text-xs font-semibold text-neutral-400 mb-1">Tracking</label>
+                                <input
+                                  value={form.tracking}
+                                  onChange={(e) =>
+                                    setDispatchForms((p) => ({
+                                      ...p,
+                                      [tx.$id]: { ...form, tracking: e.target.value, error: "" },
+                                    }))
+                                  }
+                                  placeholder="Tracking number"
+                                  className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                                />
+                              </div>
+
+                              <div>
+                                <label className="block text-xs font-semibold text-neutral-400 mb-1">Note (optional)</label>
+                                <input
+                                  value={form.note}
+                                  onChange={(e) =>
+                                    setDispatchForms((p) => ({
+                                      ...p,
+                                      [tx.$id]: { ...form, note: e.target.value, error: "" },
+                                    }))
+                                  }
+                                  placeholder="Any extra info"
+                                  className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                                />
+                              </div>
+                            </div>
+
+                            <div className="mt-3 flex items-center gap-2">
+                              <button
+                                type="button"
+                                disabled={form.saving || !canDispatch}
+                                onClick={async () => {
+                                  try {
+                                    setBannerError("");
+                                    setBannerSuccess("");
+
+                                    setDispatchForms((p) => ({
+                                      ...p,
+                                      [tx.$id]: { ...form, saving: true, error: "" },
+                                    }));
+
+                                    await postTxAction("/api/transactions/mark-dispatched", {
+                                      txId: tx.$id,
+                                      carrier: safeStr(form.carrier),
+                                      tracking: safeStr(form.tracking),
+                                      note: safeStr(form.note),
+                                    });
+
+                                    setBannerSuccess("Nice — marked as dispatched.");
+                                    window.location.reload();
+                                  } catch (e: any) {
+                                    setDispatchForms((p) => ({
+                                      ...p,
+                                      [tx.$id]: { ...form, saving: false, error: e?.message || "Failed to confirm dispatch." },
+                                    }));
+                                  }
+                                }}
+                                className="px-4 py-2 rounded-md bg-sky-600 hover:bg-sky-700 text-white text-xs font-semibold disabled:opacity-50"
+                              >
+                                {form.saving ? "Saving…" : "Confirm dispatch"}
+                              </button>
+
+                              <span className="text-[11px] text-neutral-500">
+                                Dispatch time will be recorded automatically.
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Buyer: show tracking info + confirm received */}
+                      {isBuyer && paymentLower === "paid" && !isComplete && (
+                        <div className="mt-4 border border-neutral-800 rounded-lg p-4 bg-neutral-950/30">
+                          <h4 className="text-sm font-semibold text-neutral-100">Delivery updates</h4>
+
+                          <div className="mt-2 text-sm text-neutral-200 grid grid-cols-1 md:grid-cols-3 gap-2">
+                            <p>
+                              <strong>Carrier:</strong> {safeStr(tx.seller_dispatch_carrier) || "—"}
+                            </p>
+                            <p>
+                              <strong>Tracking:</strong> {safeStr(tx.seller_dispatch_tracking) || "—"}
+                            </p>
+                            <p>
+                              <strong>Dispatched:</strong> {tx.seller_dispatched_at ? formatLondon(tx.seller_dispatched_at) : "—"}
+                            </p>
+                          </div>
+
+                          {safeStr(tx.seller_dispatch_note) && (
+                            <p className="mt-2 text-xs text-neutral-400">
+                              <strong>Note:</strong> {safeStr(tx.seller_dispatch_note)}
+                            </p>
+                          )}
+
+                          <div className="mt-3 flex items-center gap-2">
+                            <button
+                              type="button"
+                              disabled={!canConfirmReceived}
+                              onClick={async () => {
+                                try {
+                                  setBannerError("");
+                                  setBannerSuccess("");
+                                  await postTxAction("/api/transactions/confirm-received", { txId: tx.$id });
+                                  setBannerSuccess("Thanks — marked as received.");
+                                  window.location.reload();
+                                } catch (e: any) {
+                                  setBannerError(e?.message || "Failed to confirm receipt.");
+                                }
+                              }}
+                              className="px-4 py-2 rounded-md bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold disabled:opacity-50"
+                            >
+                              Confirm received
+                            </button>
+
+                            <span className="text-[11px] text-neutral-500">
+                              Only click this once you have the item.
+                            </span>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* If complete, show timestamps */}
+                      {isComplete && (
+                        <div className="mt-4 text-xs text-neutral-400 border border-neutral-800 rounded-lg p-3 bg-neutral-950/30">
+                          <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                            <div>
+                              <strong>Dispatched:</strong> {tx.seller_dispatched_at ? formatLondon(tx.seller_dispatched_at) : "—"}
+                            </div>
+                            <div>
+                              <strong>Received:</strong> {tx.buyer_received_at ? formatLondon(tx.buyer_received_at) : "—"}
+                            </div>
+                            <div>
+                              <strong>Payout status:</strong> {safeStr(tx.payout_status) || "—"}
+                            </div>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   );
                 })}
