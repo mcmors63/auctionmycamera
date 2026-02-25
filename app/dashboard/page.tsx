@@ -295,136 +295,137 @@ export default function DashboardPage() {
   }, [allListings]);
 
   // -----------------------------
-  // Load dashboard (auth gated)
-  // -----------------------------
-  useEffect(() => {
-    let cancelled = false;
+// Load dashboard (auth gated)
+// -----------------------------
+useEffect(() => {
+  let cancelled = false;
 
-    const loadAll = async () => {
-      setInitialLoading(true);
-      setBannerError("");
-      setBannerSuccess("");
+  const loadAll = async () => {
+    setInitialLoading(true);
+    setBannerError("");
+    setBannerSuccess("");
 
-      // 0) Ensure profile env is actually set
-      if (!PROFILES_DB_ID || !PROFILES_COLLECTION_ID) {
-        setBannerError(
-          "Dashboard misconfigured: missing NEXT_PUBLIC_APPWRITE_PROFILES_DATABASE_ID or NEXT_PUBLIC_APPWRITE_PROFILES_COLLECTION_ID."
-        );
-        setInitialLoading(false);
-        return;
-      }
+    // 0) Ensure profile env is actually set
+    if (!PROFILES_DB_ID || !PROFILES_COLLECTION_ID) {
+      setBannerError(
+        "Dashboard misconfigured: missing NEXT_PUBLIC_APPWRITE_PROFILES_DATABASE_ID or NEXT_PUBLIC_APPWRITE_PROFILES_COLLECTION_ID."
+      );
+      setInitialLoading(false);
+      return;
+    }
 
-      // 1) AUTH
-      let current: any;
+    // 1) AUTH
+    let current: any;
+    try {
+      current = await account.get();
+    } catch (err) {
+      console.warn("Dashboard auth error:", err);
+      router.push("/login");
+      return;
+    }
+
+    if (!current?.$id) {
+      router.push("/login");
+      return;
+    }
+
+    const emailLower = String(current.email || "").toLowerCase();
+    if (emailLower && emailLower === ADMIN_EMAIL) {
+      router.push("/admin");
+      return;
+    }
+
+    if (!current.emailVerification) {
+      router.push("/resend-verification");
+      return;
+    }
+
+    if (cancelled) return;
+    setUser(current);
+
+    // 2) PROFILE (strict env + fallback search)
+    try {
+      // Primary: doc id = user id (this is what your RegisterClient does)
+      const prof = await databases.getDocument(PROFILES_DB_ID, PROFILES_COLLECTION_ID, current.$id);
+      if (!cancelled) setProfile(prof as any);
+    } catch {
+      // Fallback: some older clones stored profiles under random $id and linked by userId/email.
       try {
-        current = await account.get();
-      } catch (err) {
-        console.warn("Dashboard auth error:", err);
-        router.push("/login");
-        return;
-      }
+        const found: any[] = [];
 
-      if (!current?.$id) {
-        router.push("/login");
-        return;
-      }
-
-      const emailLower = String(current.email || "").toLowerCase();
-      if (emailLower && emailLower === ADMIN_EMAIL) {
-        router.push("/admin");
-        return;
-      }
-
-      if (!current.emailVerification) {
-        router.push("/resend-verification");
-        return;
-      }
-
-      if (cancelled) return;
-      setUser(current);
-
-      // 2) PROFILE (strict env + fallback search)
-      try {
-        // Primary: doc id = user id (this is what your RegisterClient does)
-        const prof = await databases.getDocument(PROFILES_DB_ID, PROFILES_COLLECTION_ID, current.$id);
-        if (!cancelled) setProfile(prof as any);
-      } catch {
-        // Fallback: some older clones stored profiles under random $id and linked by userId/email.
+        // try userId if it exists in schema
         try {
-          const found: any[] = [];
+          const rByUserId = await databases.listDocuments(PROFILES_DB_ID, PROFILES_COLLECTION_ID, [
+            Query.equal("userId", current.$id),
+            Query.limit(1),
+          ]);
+          found.push(...(rByUserId.documents || []));
+        } catch {
+          // ignore
+        }
 
-          // try userId if it exists in schema
+        // try email as last resort
+        if (found.length === 0) {
           try {
-            const rByUserId = await databases.listDocuments(PROFILES_DB_ID, PROFILES_COLLECTION_ID, [
-              Query.equal("userId", current.$id),
+            const rByEmail = await databases.listDocuments(PROFILES_DB_ID, PROFILES_COLLECTION_ID, [
+              Query.equal("email", current.email),
               Query.limit(1),
             ]);
-            found.push(...(rByUserId.documents || []));
+            found.push(...(rByEmail.documents || []));
           } catch {
             // ignore
           }
-
-          // try email as last resort
-          if (found.length === 0) {
-            try {
-              const rByEmail = await databases.listDocuments(PROFILES_DB_ID, PROFILES_COLLECTION_ID, [
-                Query.equal("email", current.email),
-                Query.limit(1),
-              ]);
-              found.push(...(rByEmail.documents || []));
-            } catch {
-              // ignore
-            }
-          }
-
-          if (!cancelled) setProfile(found[0] ? (found[0] as any) : null);
-        } catch {
-          if (!cancelled) setProfile(null);
         }
+
+        if (!cancelled) setProfile(found[0] ? (found[0] as any) : null);
+      } catch {
+        if (!cancelled) setProfile(null);
+      }
+    }
+
+    // 3) LISTINGS (seller_email or sellerEmail)
+    try {
+      const results: Listing[] = [];
+
+      try {
+        const r1 = await databases.listDocuments(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, [
+          Query.equal("seller_email", current.email),
+        ]);
+        results.push(...((r1.documents || []) as any));
+      } catch {
+        // ignore
       }
 
-      // 3) LISTINGS (seller_email or sellerEmail)
+      // fallback field name used in some clones
       try {
-        const results: Listing[] = [];
-
-        try {
-          const r1 = await databases.listDocuments(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, [
-            Query.equal("seller_email", current.email),
-          ]);
-          results.push(...((r1.documents || []) as any));
-        } catch {
-          // ignore
-        }
-
-        // fallback field name used in some clones
-        try {
-          const r2 = await databases.listDocuments(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, [
-            Query.equal("sellerEmail", current.email),
-          ]);
-          results.push(...((r2.documents || []) as any));
-        } catch {
-          // ignore
-        }
-
-        // de-dupe by id
-        const byId = new Map<string, Listing>();
-        for (const d of results) if (d?.$id && !byId.has(d.$id)) byId.set(d.$id, d);
-
-        const docs = Array.from(byId.values());
-
-        if (!cancelled) {
-          setAllListings(docs);
-          setAwaitingListings(docs.filter((l) => isAwaitingStatus(l.status)));
-          setQueuedListings(docs.filter((l) => isQueuedStatus(l.status)));
-          setLiveListings(docs.filter((l) => isLiveStatus(l.status)));
-        }
-      } catch (e) {
-        console.error("Listings load failed:", e);
-        if (!cancelled) setBannerError("Failed to load your listings. Please refresh.");
+        const r2 = await databases.listDocuments(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, [
+          Query.equal("sellerEmail", current.email),
+        ]);
+        results.push(...((r2.documents || []) as any));
+      } catch {
+        // ignore
       }
 
-      // 4) TRANSACTIONS (optional, non-fatal)
-      try {
+      // de-dupe by id
+      const byId = new Map<string, Listing>();
+      for (const d of results) if (d?.$id && !byId.has(d.$id)) byId.set(d.$id, d);
+
+      const docs = Array.from(byId.values());
+
+      if (!cancelled) {
+        setAllListings(docs);
+        setAwaitingListings(docs.filter((l) => isAwaitingStatus(l.status)));
+        setQueuedListings(docs.filter((l) => isQueuedStatus(l.status)));
+        setLiveListings(docs.filter((l) => isLiveStatus(l.status)));
+      }
+    } catch (e) {
+      console.error("Listings load failed:", e);
+      if (!cancelled) setBannerError("Failed to load your listings. Please refresh.");
+    }
+
+    // 4) TRANSACTIONS (optional, non-fatal)
+    try {
+      if (TX_DB_ID && TX_COLLECTION_ID) {
         const combined: Transaction[] = [];
 
         try {
@@ -451,19 +452,20 @@ export default function DashboardPage() {
         });
 
         if (!cancelled) setTransactions(Array.from(byId.values()));
-      } catch {
-        // ignore (transactions might not exist yet)
       }
+    } catch {
+      // ignore (transactions might not exist yet)
+    }
 
-      if (!cancelled) setInitialLoading(false);
-    };
+    if (!cancelled) setInitialLoading(false);
+  };
 
-    void loadAll();
+  void loadAll();
 
-    return () => {
-      cancelled = true;
-    };
-  }, [router]);
+  return () => {
+    cancelled = true;
+  };
+}, [router]);
 
   // -----------------------------
   // Auto logout after 5 minutes
@@ -481,7 +483,7 @@ export default function DashboardPage() {
         }
         alert("Logged out due to inactivity.");
         router.push("/login");
-      }, 5 * 60 * 1000);
+      }, 10 * 60 * 1000);
     };
 
     const events = ["mousemove", "keydown", "click"];
