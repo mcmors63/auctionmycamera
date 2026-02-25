@@ -5,15 +5,19 @@ import Stripe from "stripe";
 export const runtime = "nodejs";
 
 type ChargeWinnerBody = {
-  // Optional but strongly recommended for idempotency + traceability
+  // Optional but recommended
   listingId?: string;
+
+  // ✅ Strongly recommended for transaction lifecycle hardening
+  // If present, we use it for idempotency + metadata so the webhook can reconcile cleanly.
+  transactionId?: string;
 
   // Required
   winnerEmail: string;
   amountInPence: number; // final amount to charge, in pence
 
   // Optional
-  description?: string; // overrides the default description
+  description?: string;
   metadata?: Record<string, any>;
 
   // Security / idempotency
@@ -39,10 +43,15 @@ function coerceMetadata(meta: any): Record<string, string> {
   return out;
 }
 
+function isValidEmail(email: string) {
+  // Simple sanity check (not perfect, but prevents obvious garbage)
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
 export async function POST(req: NextRequest) {
   try {
-    const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY || "";
-    const CHARGE_WINNER_SECRET = process.env.CHARGE_WINNER_SECRET || "";
+    const STRIPE_SECRET_KEY = (process.env.STRIPE_SECRET_KEY || "").trim();
+    const CHARGE_WINNER_SECRET = (process.env.CHARGE_WINNER_SECRET || "").trim();
 
     if (!STRIPE_SECRET_KEY) {
       console.warn("[charge-winner] STRIPE_SECRET_KEY is not set.");
@@ -60,7 +69,6 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Create Stripe ONLY after key exists (prevents build-time crash)
     const stripe = new Stripe(STRIPE_SECRET_KEY);
 
     const body = (await req.json().catch(() => ({}))) as Partial<ChargeWinnerBody>;
@@ -72,15 +80,16 @@ export async function POST(req: NextRequest) {
     }
 
     const listingId = typeof body.listingId === "string" ? body.listingId.trim() : "";
+    const transactionId = typeof body.transactionId === "string" ? body.transactionId.trim() : "";
     const winnerEmail = typeof body.winnerEmail === "string" ? body.winnerEmail.trim() : "";
     const amountInPence = body.amountInPence;
 
     // -----------------------------
     // BASIC VALIDATION
     // -----------------------------
-    if (!winnerEmail) {
+    if (!winnerEmail || !isValidEmail(winnerEmail)) {
       return NextResponse.json(
-        { ok: false, error: "winnerEmail is required." },
+        { ok: false, error: "winnerEmail is required and must be a valid email." },
         { status: 400 }
       );
     }
@@ -97,25 +106,38 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // Optional: keep a reasonable cap to prevent accidental huge charges
+    // (You can adjust/remove if you sell very high-value items.)
+    const MAX_PENCE = 5_000_000; // £50,000
+    if (amountInPence > MAX_PENCE) {
+      return NextResponse.json(
+        { ok: false, error: "amountInPence is unusually high; refusing charge." },
+        { status: 400 }
+      );
+    }
+
     const metadata = coerceMetadata(body.metadata);
+
     const description =
       typeof body.description === "string" && body.description.trim()
         ? body.description.trim()
-        : listingId
-          ? `AuctionMyCamera – winner charge for listing ${listingId}`
-          : `AuctionMyCamera – winner charge`;
+        : transactionId
+          ? `AuctionMyCamera – winner charge (tx ${transactionId})`
+          : listingId
+            ? `AuctionMyCamera – winner charge for listing ${listingId}`
+            : `AuctionMyCamera – winner charge`;
 
     // -----------------------------
     // FIND STRIPE CUSTOMER BY EMAIL
     // -----------------------------
+    // NOTE: This works, but it’s not perfect if multiple customers exist for same email.
+    // The proper long-term hardening is: store stripeCustomerId in Appwrite profile and pass it in.
     const customers = await stripe.customers.list({
       email: winnerEmail,
-      limit: 1,
+      limit: 10,
     });
 
-    const customer = customers.data[0];
-
-    if (!customer) {
+    if (!customers.data.length) {
       return NextResponse.json(
         {
           ok: false,
@@ -126,6 +148,19 @@ export async function POST(req: NextRequest) {
         { status: 404 }
       );
     }
+
+    if (customers.data.length > 1) {
+      console.warn("[charge-winner] Multiple Stripe customers for email; using newest.", {
+        winnerEmail,
+        count: customers.data.length,
+        customerIds: customers.data.map((c) => c.id),
+      });
+    }
+
+    // Stripe returns newest-first in most cases, but we’ll still choose by `created` just in case.
+    const customer = customers.data
+      .slice()
+      .sort((a, b) => (b.created || 0) - (a.created || 0))[0];
 
     // -----------------------------
     // GET DEFAULT PAYMENT METHOD
@@ -139,8 +174,8 @@ export async function POST(req: NextRequest) {
       | undefined;
 
     if (typeof defPm === "string") paymentMethodId = defPm;
-    else if (defPm && typeof defPm === "object" && typeof defPm.id === "string") {
-      paymentMethodId = defPm.id;
+    else if (defPm && typeof defPm === "object" && typeof (defPm as any).id === "string") {
+      paymentMethodId = (defPm as any).id;
     }
 
     if (!paymentMethodId) {
@@ -163,7 +198,7 @@ export async function POST(req: NextRequest) {
 
       paymentMethodId = paymentMethods.data[0].id;
 
-      // Optional: set as default for next time (best effort)
+      // Best-effort: set as default for next time
       try {
         await stripe.customers.update(customer.id, {
           invoice_settings: { default_payment_method: paymentMethodId },
@@ -179,10 +214,13 @@ export async function POST(req: NextRequest) {
     const explicitIdem =
       typeof body.idempotencyKey === "string" ? body.idempotencyKey.trim() : "";
 
-    // If you provide listingId, we can make idempotency stable and safe.
-    // If not, we still accept a caller-provided idempotencyKey.
+    // ✅ Idempotency preference order:
+    // 1) explicit caller override
+    // 2) transactionId (best)
+    // 3) listingId (okay-ish fallback)
     const idempotencyKey =
-      explicitIdem || (listingId ? `camera_winner_${listingId}` : "");
+      explicitIdem ||
+      (transactionId ? `camera_winner_tx_${transactionId}` : listingId ? `camera_winner_${listingId}` : "");
 
     const paymentIntent = await stripe.paymentIntents.create(
       {
@@ -193,9 +231,13 @@ export async function POST(req: NextRequest) {
         off_session: true,
         confirm: true,
         description,
+
+        // ⚠️ Metadata is what your webhook will rely on later.
+        // Keep it stable and strings-only.
         metadata: {
-          type: "auction_winner_charge",
+          purpose: "auction_winner_charge",
           listingId: listingId || "",
+          transactionId: transactionId || "",
           winnerEmail,
           ...metadata,
         },
@@ -228,6 +270,7 @@ export async function POST(req: NextRequest) {
         customerId: customer.id,
         paymentMethodId,
         listingId: listingId || null,
+        transactionId: transactionId || null,
       },
       { status: 200 }
     );
@@ -237,12 +280,17 @@ export async function POST(req: NextRequest) {
     const stripeError = err?.raw ?? err;
 
     const message =
-      stripeError?.message ||
-      err?.message ||
-      "Failed to charge winner off-session.";
+      stripeError?.message || err?.message || "Failed to charge winner off-session.";
 
     const code = stripeError?.code;
     const declineCode = stripeError?.decline_code;
+
+    // If Stripe gave us a PaymentIntent in the error, surface it for debugging
+    const rawPi = stripeError?.payment_intent || stripeError?.raw?.payment_intent;
+    const paymentIntentId =
+      rawPi && typeof rawPi === "object" && typeof rawPi.id === "string" ? rawPi.id : undefined;
+    const paymentIntentStatus =
+      rawPi && typeof rawPi === "object" && typeof rawPi.status === "string" ? rawPi.status : undefined;
 
     const requiresAction =
       code === "authentication_required" || code === "card_not_authenticated";
@@ -264,6 +312,8 @@ export async function POST(req: NextRequest) {
         declineCode,
         requiresAction,
         requiresPaymentMethod,
+        paymentIntentId,
+        paymentIntentStatus,
       },
       { status: statusCode }
     );
