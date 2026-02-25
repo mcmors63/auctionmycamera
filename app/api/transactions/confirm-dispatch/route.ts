@@ -24,6 +24,7 @@ const APPWRITE_PROJECT = (
 
 const APPWRITE_API_KEY = (process.env.APPWRITE_API_KEY || "").trim();
 
+// Transactions DB/collection
 const TX_DB_ID =
   process.env.APPWRITE_TRANSACTIONS_DATABASE_ID ||
   process.env.NEXT_PUBLIC_APPWRITE_TRANSACTIONS_DATABASE_ID ||
@@ -51,13 +52,19 @@ function getBearerJwt(req: Request) {
   return m?.[1]?.trim() || "";
 }
 
+function safeStr(v: any) {
+  return typeof v === "string" ? v.trim() : "";
+}
+
+function lower(v: any) {
+  return safeStr(v).toLowerCase();
+}
+
 async function getAuthedUser(req: Request): Promise<{ userId: string; email: string }> {
   const jwt = getBearerJwt(req);
   if (!jwt) throw new Error("Not authenticated.");
 
-  if (!APPWRITE_ENDPOINT || !APPWRITE_PROJECT) {
-    throw new Error("Server missing Appwrite config.");
-  }
+  if (!APPWRITE_ENDPOINT || !APPWRITE_PROJECT) throw new Error("Server missing Appwrite config.");
 
   const c = new AppwriteClient().setEndpoint(APPWRITE_ENDPOINT).setProject(APPWRITE_PROJECT).setJWT(jwt);
   const account = new Account(c);
@@ -78,15 +85,7 @@ function getServerDatabases() {
   return new Databases(c);
 }
 
-function safeStr(v: any) {
-  return typeof v === "string" ? v.trim() : "";
-}
-
-function lower(v: any) {
-  return safeStr(v).toLowerCase();
-}
-
-// Schema-tolerant update (same pattern as your confirm-received)
+// Schema-tolerant update (same pattern as confirm-received)
 async function updateDocSchemaTolerant(
   databases: Databases,
   dbId: string,
@@ -113,6 +112,8 @@ async function updateDocSchemaTolerant(
   const minimal: Record<string, any> = {};
   if (payload.transaction_status) minimal.transaction_status = payload.transaction_status;
   if (payload.seller_dispatch_status) minimal.seller_dispatch_status = payload.seller_dispatch_status;
+  if (payload.dispatch_tracking) minimal.dispatch_tracking = payload.dispatch_tracking;
+  if (payload.dispatch_carrier) minimal.dispatch_carrier = payload.dispatch_carrier;
   return await databases.updateDocument(dbId, colId, docId, minimal);
 }
 
@@ -133,15 +134,14 @@ export async function POST(req: Request) {
     let body: any = {};
     try {
       body = await req.json();
-    } catch {}
+    } catch {
+      // allow empty
+    }
 
     const txId = safeStr(body?.txId || body?.transactionId);
     if (!txId) {
       return NextResponse.json({ ok: false, error: "txId (or transactionId) is required." }, { status: 400 });
     }
-
-    const carrier = safeStr(body?.carrier);
-    const tracking = safeStr(body?.tracking);
 
     const tx: any = await databases.getDocument(TX_DB_ID, TX_COLLECTION_ID, txId);
 
@@ -160,36 +160,48 @@ export async function POST(req: Request) {
     const paymentStatus = lower(tx?.payment_status);
     if (paymentStatus !== "paid") {
       return NextResponse.json(
-        { ok: false, error: "Cannot dispatch until payment is marked as paid." },
+        { ok: false, error: "Cannot confirm dispatch until payment is marked as paid." },
         { status: 409 }
       );
     }
 
-    // Must be dispatch_pending (idempotent if already dispatched)
+    // Require correct stage (idempotent)
     const stage = lower(tx?.transaction_status);
-    if (stage === "dispatch_sent" || stage === "receipt_pending") {
-      return NextResponse.json({ ok: true, transaction: tx }, { status: 200 });
-    }
-    if (stage && stage !== "dispatch_pending") {
+
+    // We expect scheduler to set "dispatch_pending"
+    // Also allow "receipt_pending" as a legacy name, if you ever used it
+    const allowed = ["dispatch_pending", "receipt_pending"];
+
+    if (stage && !allowed.includes(stage)) {
+      // If already dispatched, return ok (idempotent)
+      if (stage === "dispatch_sent") {
+        return NextResponse.json({ ok: true, transaction: tx }, { status: 200 });
+      }
+      // If already complete, also return ok
+      if (stage === "complete" || stage === "completed") {
+        return NextResponse.json({ ok: true, transaction: tx }, { status: 200 });
+      }
+
       return NextResponse.json(
         { ok: false, error: `Cannot confirm dispatch from status "${tx?.transaction_status}".` },
         { status: 409 }
       );
     }
 
+    const carrier = safeStr(body?.carrier);
+    const tracking = safeStr(body?.tracking);
+
     const nowIso = new Date().toISOString();
 
     const updatePayload: Record<string, any> = {
       transaction_status: "dispatch_sent",
+
       seller_dispatch_status: "sent",
       seller_dispatched_at: nowIso,
 
-      // optional details
+      // Optional fields if your schema has them
       dispatch_carrier: carrier || undefined,
       dispatch_tracking: tracking || undefined,
-
-      // optional: move buyer into receipt waiting stage
-      buyer_receipt_status: "pending",
 
       updated_at: nowIso,
     };
