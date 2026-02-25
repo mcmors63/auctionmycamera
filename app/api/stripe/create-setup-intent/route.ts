@@ -11,14 +11,21 @@ import {
 export const runtime = "nodejs";
 
 // -----------------------------
-// Stripe
+// Stripe (lazy singleton)
 // -----------------------------
-const stripeSecretKey = process.env.STRIPE_SECRET_KEY || "";
-if (!stripeSecretKey) {
-  console.warn("[create-setup-intent] STRIPE_SECRET_KEY is not set. This route will fail.");
+function requiredEnv(name: string) {
+  const v = (process.env[name] || "").trim();
+  if (!v) throw new Error(`${name} is not set`);
+  return v;
 }
 
-const stripe = stripeSecretKey ? new Stripe(stripeSecretKey) : null;
+let _stripe: Stripe | null = null;
+function stripeClient() {
+  if (_stripe) return _stripe;
+  const key = requiredEnv("STRIPE_SECRET_KEY");
+  _stripe = new Stripe(key);
+  return _stripe;
+}
 
 // -----------------------------
 // Appwrite (auth + optional profile cache)
@@ -27,10 +34,12 @@ const APPWRITE_ENDPOINT =
   process.env.APPWRITE_ENDPOINT ||
   process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT ||
   "";
+
 const APPWRITE_PROJECT =
   process.env.APPWRITE_PROJECT_ID ||
   process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID ||
   "";
+
 const APPWRITE_API_KEY = process.env.APPWRITE_API_KEY || "";
 
 // Optional profile cache
@@ -38,6 +47,7 @@ const PROFILES_DB_ID =
   process.env.APPWRITE_PROFILES_DATABASE_ID ||
   process.env.NEXT_PUBLIC_APPWRITE_PROFILES_DATABASE_ID ||
   "";
+
 const PROFILES_COLLECTION_ID =
   process.env.APPWRITE_PROFILES_COLLECTION_ID ||
   process.env.NEXT_PUBLIC_APPWRITE_PROFILES_COLLECTION_ID ||
@@ -97,6 +107,27 @@ async function findProfileByEmail(databases: Databases, email: string) {
   return (res.documents[0] as any) || null;
 }
 
+async function updateProfileStripeCustomerIdSchemaTolerant(
+  databases: Databases,
+  profileId: string,
+  stripeCustomerId: string
+) {
+  try {
+    await databases.updateDocument(PROFILES_DB_ID, PROFILES_COLLECTION_ID, profileId, {
+      stripe_customer_id: stripeCustomerId,
+    });
+    return true;
+  } catch (err: any) {
+    const msg = String(err?.message || "");
+    if (/Unknown attribute:\s*stripe_customer_id/i.test(msg)) {
+      console.warn("[create-setup-intent] profile schema missing stripe_customer_id; skipping sync.");
+      return false;
+    }
+    console.warn("[create-setup-intent] could not sync stripe_customer_id:", err);
+    return false;
+  }
+}
+
 // -----------------------------
 // POST /api/stripe/create-setup-intent
 // Auth: Authorization: Bearer <Appwrite JWT>
@@ -104,12 +135,7 @@ async function findProfileByEmail(databases: Databases, email: string) {
 // -----------------------------
 export async function POST(req: Request) {
   try {
-    if (!stripe) {
-      return NextResponse.json(
-        { error: "Stripe is not configured on the server." },
-        { status: 500 }
-      );
-    }
+    const stripe = stripeClient();
 
     // ✅ AUTH REQUIRED
     const jwt = getBearerJwt(req);
@@ -119,7 +145,7 @@ export async function POST(req: Request) {
 
     const { email, userId } = await getAuthedUser(jwt);
 
-    // We deliberately IGNORE any posted email/userId to prevent abuse
+    // Ignore any posted email/userId to prevent abuse
     const body = await req.json().catch(() => ({} as any));
     const postedEmail = (body?.userEmail || body?.email || "") as string;
     if (postedEmail && postedEmail.trim().toLowerCase() !== email.trim().toLowerCase()) {
@@ -137,7 +163,7 @@ export async function POST(req: Request) {
     if (aw) {
       try {
         profile = await findProfileByEmail(aw.databases, email);
-        stripeCustomerId = profile?.stripe_customer_id || null;
+        stripeCustomerId = (profile?.stripe_customer_id as string | undefined) || null;
       } catch (e) {
         console.warn("[create-setup-intent] profiles lookup skipped:", e);
       }
@@ -157,7 +183,7 @@ export async function POST(req: Request) {
       }
     }
 
-    // 3) Find/create Stripe customer by *authenticated* email
+    // 3) Find/create Stripe customer by authenticated email
     if (!customer) {
       const existing = await stripe.customers.list({ email, limit: 1 });
       customer = existing.data[0] || null;
@@ -172,15 +198,9 @@ export async function POST(req: Request) {
       stripeCustomerId = customer.id;
     }
 
-    // 4) Sync customer id back to profile (optional)
+    // 4) Sync customer id back to profile (optional, schema-tolerant)
     if (aw && profile?.$id && stripeCustomerId && profile.stripe_customer_id !== stripeCustomerId) {
-      try {
-        await aw.databases.updateDocument(PROFILES_DB_ID, PROFILES_COLLECTION_ID, profile.$id, {
-          stripe_customer_id: stripeCustomerId,
-        });
-      } catch (e) {
-        console.warn("[create-setup-intent] could not sync stripe_customer_id:", e);
-      }
+      await updateProfileStripeCustomerIdSchemaTolerant(aw.databases, profile.$id, stripeCustomerId);
     }
 
     // 5) Create SetupIntent (save card)
@@ -191,7 +211,8 @@ export async function POST(req: Request) {
       metadata: {
         purpose: "setup_card",
         email,
-        appwriteUserId: userId,
+        userId, // ✅ canonical
+        appwriteUserId: userId, // ✅ keep for backwards compatibility
       },
     });
 
@@ -206,6 +227,12 @@ export async function POST(req: Request) {
     return NextResponse.json({ clientSecret: setupIntent.client_secret }, { status: 200 });
   } catch (err: any) {
     console.error("[create-setup-intent] error:", err);
+
+    // If env missing, keep it explicit
+    if (String(err?.message || "").includes("STRIPE_SECRET_KEY is not set")) {
+      return NextResponse.json({ error: "Stripe is not configured on the server." }, { status: 500 });
+    }
+
     const status = /Not authenticated|Invalid session/i.test(err?.message || "") ? 401 : 500;
     return NextResponse.json(
       { error: err?.message || "Failed to create setup intent." },

@@ -1,6 +1,6 @@
 // app/api/buy-now/route.ts
 import { NextRequest, NextResponse } from "next/server";
-import { Client, Databases, ID, Account } from "node-appwrite";
+import { Client, Databases, ID, Account, Query } from "node-appwrite";
 import nodemailer from "nodemailer";
 import Stripe from "stripe";
 
@@ -16,16 +16,8 @@ const stripe = STRIPE_SECRET_KEY ? new Stripe(STRIPE_SECRET_KEY) : null;
 // -----------------------------
 // APPWRITE (server-safe envs)
 // -----------------------------
-const endpoint =
-  process.env.APPWRITE_ENDPOINT ||
-  process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT ||
-  "";
-
-const projectId =
-  process.env.APPWRITE_PROJECT_ID ||
-  process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID ||
-  "";
-
+const endpoint = process.env.APPWRITE_ENDPOINT || process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT || "";
+const projectId = process.env.APPWRITE_PROJECT_ID || process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID || "";
 const apiKey = (process.env.APPWRITE_API_KEY || "").trim();
 
 const DB_ID =
@@ -62,6 +54,17 @@ const siteUrl = (process.env.NEXT_PUBLIC_SITE_URL || "https://auctionmycamera.co
 const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || process.env.NEXT_PUBLIC_ADMIN_EMAIL || "admin@auctionmycamera.co.uk")
   .trim()
   .toLowerCase();
+
+const FROM_EMAIL =
+  (process.env.FROM_EMAIL ||
+    process.env.CONTACT_FROM_EMAIL ||
+    process.env.EMAIL_FROM ||
+    process.env.SMTP_FROM ||
+    smtpUser ||
+    "no-reply@auctionmycamera.co.uk"
+  ).trim();
+
+const FROM_NAME = (process.env.FROM_NAME || "AuctionMyCamera").trim();
 
 function getTransporter() {
   if (!smtpHost || !smtpUser || !smtpPass) {
@@ -188,7 +191,6 @@ async function updateDocSchemaTolerant(
 // LISTING HELPERS
 // -----------------------------
 function getBuyNowPriceGBP(listing: any): number {
-  // Support common schemas
   const a = listing?.buy_now_price;
   const b = listing?.buy_now;
   const c = listing?.buyNowPrice;
@@ -206,7 +208,7 @@ function getBuyNowPriceGBP(listing: any): number {
       : NaN;
 
   if (!Number.isFinite(n) || n <= 0) return 0;
-  return Math.round(n); // store GBP integer
+  return Math.round(n);
 }
 
 function getItemTitle(listing: any): string {
@@ -243,14 +245,37 @@ export async function POST(req: NextRequest) {
     }
 
     const body = await req.json().catch(() => ({} as any));
-    const listingId = body.listingId as string | undefined;
-    const paymentIntentId = body.paymentIntentId as string | undefined;
+    const listingId = typeof body?.listingId === "string" ? body.listingId.trim() : "";
+    const paymentIntentId = typeof body?.paymentIntentId === "string" ? body.paymentIntentId.trim() : "";
 
     if (!listingId || !paymentIntentId) {
       return NextResponse.json({ error: "listingId and paymentIntentId are required." }, { status: 400 });
     }
 
     const databases = getServerDatabases();
+
+    // ✅ Idempotency guard:
+    // If we already created a transaction for this paymentIntent, return it.
+    try {
+      const existingTx = await databases.listDocuments(DB_ID, TX_COLLECTION_ID, [
+        Query.equal("stripe_payment_intent_id", paymentIntentId),
+        Query.limit(1),
+      ]);
+
+      if (existingTx.documents?.length) {
+        return NextResponse.json(
+          {
+            ok: true,
+            alreadyProcessed: true,
+            transactionId: (existingTx.documents[0] as any).$id,
+          },
+          { status: 200 }
+        );
+      }
+    } catch (e) {
+      // If schema/index doesn’t support this query, we still proceed (but logging helps).
+      console.warn("[buy-now] Could not query existing transaction by stripe_payment_intent_id", e);
+    }
 
     // 1) Load listing (server source of truth)
     const listing: any = await databases.getDocument(DB_ID, LISTINGS_COLLECTION_ID, listingId);
@@ -277,7 +302,7 @@ export async function POST(req: NextRequest) {
     const expectedTotal = buyNowPrice + EXTRA_FEE_GBP;
     const expectedAmountPence = Math.round(expectedTotal * 100);
 
-    // 3) VERIFY STRIPE PAYMENT INTENT (must be succeeded + amount must match listing price)
+    // 3) VERIFY STRIPE PAYMENT INTENT
     const pi = await stripe.paymentIntents.retrieve(paymentIntentId);
 
     if (!pi || (pi.currency || "").toLowerCase() !== "gbp") {
@@ -290,6 +315,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Payment amount mismatch." }, { status: 400 });
     }
 
+    // Metadata sanity (supports camelCase + underscore variants)
     const metaListingId = String(pi.metadata?.listingId || pi.metadata?.listing_id || "").trim();
     if (metaListingId && metaListingId !== listingId) {
       return NextResponse.json({ error: "Payment metadata mismatch (listingId)." }, { status: 400 });
@@ -300,7 +326,10 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Authenticated user has no valid email." }, { status: 400 });
     }
 
-    const metaBuyerEmail = String(pi.metadata?.buyerEmail || "").trim().toLowerCase();
+    const metaBuyerEmail = String(pi.metadata?.buyerEmail || pi.metadata?.buyer_email || "")
+      .trim()
+      .toLowerCase();
+
     if (metaBuyerEmail && metaBuyerEmail !== buyerEmail.toLowerCase()) {
       return NextResponse.json({ error: "Payment metadata mismatch (buyer)." }, { status: 403 });
     }
@@ -324,12 +353,12 @@ export async function POST(req: NextRequest) {
     const commissionRate =
       typeof commissionRateFromListing === "number" && commissionRateFromListing >= 0
         ? commissionRateFromListing
-        : 10; // default 10%
+        : 10;
 
     const listingFee =
       typeof listingFeeFromListing === "number" && listingFeeFromListing >= 0 ? listingFeeFromListing : 0;
 
-    const salePrice = buyNowPrice; // GBP (no extra fee)
+    const salePrice = buyNowPrice; // GBP
     const commissionAmount = Math.round((salePrice * commissionRate) / 100);
     const sellerPayout = Math.max(0, salePrice - commissionAmount - listingFee);
 
@@ -337,11 +366,13 @@ export async function POST(req: NextRequest) {
     const itemTitle = getItemTitle(listing);
 
     // 5) Create transaction doc (schema-tolerant)
+    // ✅ Align with auction pipeline: payment is done -> dispatch pending
     const txPayload: Record<string, any> = {
       listing_id: listing.$id,
       item_title: itemTitle,
       seller_email: sellerEmail,
       buyer_email: buyerEmail,
+      buyer_id: authed.userId,
 
       sale_price: salePrice,
       commission_rate: commissionRate,
@@ -349,7 +380,7 @@ export async function POST(req: NextRequest) {
       seller_payout: sellerPayout,
 
       payment_status: "paid",
-      transaction_status: "pending",
+      transaction_status: "dispatch_pending",
 
       stripe_payment_intent_id: paymentIntentId,
 
@@ -378,6 +409,7 @@ export async function POST(req: NextRequest) {
       status: "sold",
       sold_price: salePrice,
       buyer_email: buyerEmail,
+      buyer_id: authed.userId,
       sale_status: "sold_buy_now",
       payout_status: "pending",
       updated_at: nowIso,
@@ -396,11 +428,13 @@ export async function POST(req: NextRequest) {
       const buyerDashboardUrl = `${siteUrl}/dashboard?tab=purchases`;
       const adminTxUrl = `${siteUrl}/admin`;
 
+      const from = { name: FROM_NAME, address: FROM_EMAIL };
+
       // Admin
       try {
         if (ADMIN_EMAIL && isValidEmail(ADMIN_EMAIL)) {
           await transporter.sendMail({
-            from: `"AuctionMyCamera" <${smtpUser}>`,
+            from,
             to: ADMIN_EMAIL,
             subject: `Buy Now – ${escapeText(itemTitle)} purchased`,
             text: `Buy Now purchase
@@ -426,7 +460,7 @@ Admin dashboard: ${adminTxUrl}
       // Seller
       try {
         await transporter.sendMail({
-          from: `"AuctionMyCamera" <${smtpUser}>`,
+          from,
           to: sellerEmail,
           subject: `🎉 Your item has sold via Buy Now`,
           text: `Good news!
@@ -449,7 +483,7 @@ Thank you for using AuctionMyCamera.co.uk.
       // Buyer
       try {
         await transporter.sendMail({
-          from: `"AuctionMyCamera" <${smtpUser}>`,
+          from,
           to: buyerEmail,
           subject: `Your Buy Now purchase is confirmed`,
           text: `Thank you for your purchase.

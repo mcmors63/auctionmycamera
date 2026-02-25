@@ -8,21 +8,16 @@ export const runtime = "nodejs";
 // -----------------------------
 // ENV
 // -----------------------------
-const stripeSecretKey = process.env.STRIPE_SECRET_KEY || "";
+const stripeSecretKey = (process.env.STRIPE_SECRET_KEY || "").trim();
 if (!stripeSecretKey) {
   console.warn(
     "[charge-transaction] STRIPE_SECRET_KEY is not set. This route will fail until configured."
   );
 }
 
-// NOTE: forcing apiVersion can be risky if it doesn't match your installed Stripe package.
-// If this value is known-good in your repo, keep it. If you see Stripe errors in prod,
-// remove apiVersion entirely and let the SDK default.
-const stripe = stripeSecretKey
-  ? new Stripe(stripeSecretKey, {
-      apiVersion: "2025-11-17.clover" as any,
-    })
-  : null;
+// ✅ Do NOT force apiVersion unless you have a very specific reason
+// (forcing the wrong version can cause runtime errors).
+const stripe = stripeSecretKey ? new Stripe(stripeSecretKey) : null;
 
 // Appwrite (server-side)
 const appwriteEndpoint =
@@ -35,7 +30,7 @@ const appwriteProject =
   process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID ||
   "";
 
-const appwriteApiKey = process.env.APPWRITE_API_KEY || "";
+const appwriteApiKey = (process.env.APPWRITE_API_KEY || "").trim();
 
 // Transactions DB/Collection
 const TX_DB_ID =
@@ -58,7 +53,7 @@ const PROFILES_COLLECTION_ID =
   "";
 
 // Security: REQUIRED secret for server-to-server charging
-const CHARGE_TRANSACTION_SECRET = process.env.CHARGE_TRANSACTION_SECRET || "";
+const CHARGE_TRANSACTION_SECRET = (process.env.CHARGE_TRANSACTION_SECRET || "").trim();
 
 function getSecretFromReq(req: Request, body: any) {
   const header = (req.headers.get("x-charge-secret") || "").trim();
@@ -96,7 +91,6 @@ function getAppwrite() {
 function asMoneyNumber(n: any): number | null {
   const num = typeof n === "string" ? Number(n) : n;
   if (!Number.isFinite(num)) return null;
-  // Allow 0 as valid for optional fees, but not for sale price
   return num;
 }
 
@@ -139,7 +133,7 @@ export async function POST(req: Request) {
       );
     }
 
-    const transactionId: string | undefined =
+    const transactionId: string =
       typeof body?.transactionId === "string" ? body.transactionId.trim() : "";
 
     if (!transactionId) {
@@ -154,19 +148,29 @@ export async function POST(req: Request) {
     // 1) Load the transaction
     const tx = await databases.getDocument(TX_DB_ID, TX_COLLECTION_ID, transactionId);
 
-    const buyerEmail = (tx as any).buyer_email as string | undefined;
+    const buyerEmail = String((tx as any).buyer_email || "").trim();
+
+    // ✅ If already paid, don't attempt a second charge.
+    const existingPaymentStatus = String((tx as any).payment_status || "").toLowerCase();
+    const existingPi = String((tx as any).stripe_payment_intent_id || "").trim();
+    if (existingPaymentStatus === "paid" && existingPi) {
+      return NextResponse.json({
+        ok: true,
+        alreadyPaid: true,
+        paymentIntentId: existingPi,
+      });
+    }
 
     // sale price in GBP
     const salePriceRaw = (tx as any).sale_price ?? (tx as any).final_price ?? 0;
     const salePrice = asMoneyNumber(salePriceRaw);
 
-    // Optional buyer fees in GBP (e.g., shipping, insurance) — camera-friendly
+    // Optional buyer fees in GBP (e.g., shipping, insurance)
     const buyerFeesRaw = (tx as any).buyer_fees ?? (tx as any).shipping_fee ?? 0;
     const buyerFees = asMoneyNumber(buyerFeesRaw) ?? 0;
 
     // Identify listing id (camera listing)
-    const listingId = String((tx as any).listing_id || (tx as any).item_id || "")
-      .trim();
+    const listingId = String((tx as any).listing_id || (tx as any).item_id || "").trim();
 
     if (!buyerEmail) {
       return NextResponse.json(
@@ -203,7 +207,7 @@ export async function POST(req: Request) {
     const profRes = await databases.listDocuments(
       PROFILES_DB_ID,
       PROFILES_COLLECTION_ID,
-      [Query.equal("email", buyerEmail)]
+      [Query.equal("email", buyerEmail), Query.limit(1)]
     );
 
     if (!profRes.documents.length) {
@@ -214,14 +218,13 @@ export async function POST(req: Request) {
     }
 
     const profile = profRes.documents[0] as any;
-    const stripeCustomerId: string | undefined = profile.stripe_customer_id;
+    const stripeCustomerId: string = String(profile.stripe_customer_id || "").trim();
 
     if (!stripeCustomerId) {
       return NextResponse.json(
         {
           ok: false,
-          error:
-            "Buyer has no Stripe customer / saved card. Ask them to add a payment method.",
+          error: "Buyer has no Stripe customer / saved card. Ask them to add a payment method.",
           requiresPaymentMethod: true,
         },
         { status: 400 }
@@ -256,8 +259,7 @@ export async function POST(req: Request) {
       return NextResponse.json(
         {
           ok: false,
-          error:
-            "No saved card found for this buyer. Ask them to add a payment method.",
+          error: "No saved card found for this buyer. Ask them to add a payment method.",
           requiresPaymentMethod: true,
         },
         { status: 400 }
@@ -286,13 +288,16 @@ export async function POST(req: Request) {
           off_session: true,
           confirm: true,
           description: `AuctionMyCamera – ${itemLabel}`,
+
+          // ✅ Standardised metadata (camelCase)
           metadata: {
-            transaction_id: transactionId,
-            buyer_email: buyerEmail,
-            listing_id: listingId || "",
-            sale_price_gbp: String(salePrice),
-            buyer_fees_gbp: String(buyerFees),
-            total_charged_gbp: String(totalToCharge),
+            purpose: "transaction_charge",
+            transactionId,
+            buyerEmail,
+            listingId: listingId || "",
+            salePriceGbp: String(salePrice),
+            buyerFeesGbp: String(buyerFees),
+            totalChargedGbp: String(totalToCharge),
           },
         },
         { idempotencyKey: `charge_tx_${transactionId}` }
@@ -305,17 +310,14 @@ export async function POST(req: Request) {
         err?.raw?.message ||
         "Stripe charge failed. Card may require authentication.";
 
-      // Mark transaction as failed payment (schema-tolerant)
+      // Best-effort mark transaction failed (schema-tolerant)
       try {
         await databases.updateDocument(TX_DB_ID, TX_COLLECTION_ID, transactionId, {
           payment_status: "failed",
           payment_error: msg,
         });
       } catch (updateErr) {
-        console.error(
-          "[charge-transaction] failed to update transaction on error:",
-          updateErr
-        );
+        console.error("[charge-transaction] failed to update transaction on error:", updateErr);
       }
 
       return NextResponse.json(
@@ -339,41 +341,51 @@ export async function POST(req: Request) {
     if (paymentIntent.status !== "succeeded") {
       const msg = `PaymentIntent not succeeded (status: ${paymentIntent.status}).`;
 
-      await databases.updateDocument(TX_DB_ID, TX_COLLECTION_ID, transactionId, {
-        payment_status: "failed",
-        payment_error: msg,
-        stripe_payment_intent_id: paymentIntent.id,
-      });
+      // Best-effort update; do not throw
+      try {
+        await databases.updateDocument(TX_DB_ID, TX_COLLECTION_ID, transactionId, {
+          payment_status: "failed",
+          payment_error: msg,
+          stripe_payment_intent_id: paymentIntent.id,
+        });
+      } catch (e) {
+        console.warn("[charge-transaction] unable to persist failed payment status", e);
+      }
 
       return NextResponse.json({ ok: false, error: msg }, { status: 400 });
     }
 
-    // 5) Update transaction as paid
-    // IMPORTANT: don’t let missing Appwrite attributes break this route after charging.
+    // 5) Update transaction as paid (schema tolerant, two-phase)
     const baseUpdate: Record<string, any> = {
       payment_status: "paid",
-      transaction_status: (tx as any).transaction_status || "processing",
       stripe_payment_intent_id: paymentIntent.id,
-      stripe_amount_charged: totalToCharge,
-      stripe_currency: "gbp",
     };
 
-    const optionalFields: Record<string, any> = {
+    // Optional details (only if schema supports them)
+    const optionalUpdate: Record<string, any> = {
+      transaction_status: (tx as any).transaction_status || "processing",
+      stripe_amount_charged: totalToCharge,
+      stripe_currency: "gbp",
       sale_price: salePrice,
       buyer_fees: buyerFees,
     };
 
     try {
-      await databases.updateDocument(TX_DB_ID, TX_COLLECTION_ID, transactionId, {
-        ...baseUpdate,
-        ...optionalFields,
-      });
-    } catch (e: any) {
-      console.warn(
-        "[charge-transaction] updateDocument rejected optional fields; retrying base update only:",
-        e?.message || e
-      );
       await databases.updateDocument(TX_DB_ID, TX_COLLECTION_ID, transactionId, baseUpdate);
+    } catch (e) {
+      // If even base update fails, that’s serious (but card is charged)
+      console.error("[charge-transaction] FAILED to persist base paid status!", e);
+      return NextResponse.json(
+        { ok: false, error: "Charged in Stripe, but failed to update transaction in Appwrite." },
+        { status: 500 }
+      );
+    }
+
+    // Optional update should never fail the route
+    try {
+      await databases.updateDocument(TX_DB_ID, TX_COLLECTION_ID, transactionId, optionalUpdate);
+    } catch (e: any) {
+      console.warn("[charge-transaction] optional tx fields not saved (schema mismatch?)", e?.message || e);
     }
 
     return NextResponse.json({

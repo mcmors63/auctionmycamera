@@ -1,6 +1,6 @@
 // app/api/auction-scheduler/route.ts
 import { NextRequest, NextResponse } from "next/server";
-import { Client, Databases, Query, ID, Account } from "node-appwrite";
+import { Client, Databases, Query, ID } from "node-appwrite";
 import Stripe from "stripe";
 import nodemailer from "nodemailer";
 import { getAuctionWindow } from "@/lib/getAuctionWindow";
@@ -57,6 +57,12 @@ const CRON_SECRET = (process.env.CRON_SECRET || process.env.AUCTION_CRON_SECRET 
 
 function cronAuthed(req: NextRequest) {
   if (!CRON_SECRET) return false;
+
+  // Preferred: Vercel Cron style Authorization header
+  const auth = (req.headers.get("authorization") || "").trim();
+  if (auth === `Bearer ${CRON_SECRET}`) return true;
+
+  // Your existing methods (keep for manual testing)
   const q = (req.nextUrl.searchParams.get("secret") || "").trim();
   const h = (req.headers.get("x-cron-secret") || "").trim();
   return q === CRON_SECRET || h === CRON_SECRET;
@@ -85,7 +91,6 @@ const RAW_FROM_EMAIL =
   "no-reply@auctionmycamera.co.uk";
 
 const FROM_NAME = (process.env.FROM_NAME || "AuctionMyCamera").trim();
-
 const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || process.env.NEXT_PUBLIC_ADMIN_EMAIL || "").trim();
 
 function normalizeEmailAddress(input: string) {
@@ -286,7 +291,7 @@ async function createTransactionForWinner(params: {
 
     dvla_fee: 0,
 
-    // ✅ Pipeline: payment is complete, now we wait for dispatch/receipt
+    // ✅ IMPORTANT: only create tx after Stripe says "succeeded"
     payment_status: "paid",
     transaction_status: "dispatch_pending",
 
@@ -601,7 +606,11 @@ End:   ${fmtLondon(end)}
       }
 
       if (reserve > 0 && currentBid < reserve) {
-        winnerCharges.push({ listingId: lid, skipped: true, reason: `reserve not met (bid=${currentBid}, reserve=${reserve})` });
+        winnerCharges.push({
+          listingId: lid,
+          skipped: true,
+          reason: `reserve not met (bid=${currentBid}, reserve=${reserve})`,
+        });
         continue;
       }
 
@@ -668,7 +677,8 @@ End:   ${fmtLondon(end)}
           continue;
         }
 
-        const idempotencyKey = `winner-charge-${lid}`;
+        // ✅ Harden idempotency: include amount so we don't collide if totals change
+        const idempotencyKey = `winner-charge-${lid}-${amountInPence}`;
 
         const label = getListingLabel(listing);
         const description = `Auction winner - ${label}`;
@@ -693,6 +703,20 @@ End:   ${fmtLondon(end)}
           { idempotencyKey }
         );
 
+        // ✅ CRITICAL HARDENING:
+        // Only mark listing/tx/emails as paid if Stripe says succeeded.
+        if (intent.status !== "succeeded") {
+          winnerCharges.push({
+            listingId: lid,
+            charged: false,
+            winnerEmail,
+            paymentIntentId: intent.id,
+            paymentStatus: intent.status,
+            reason: `PaymentIntent not succeeded (status: ${intent.status})`,
+          });
+          continue;
+        }
+
         // Update listing doc (best-effort)
         try {
           const commissionRate = getNumeric(listing.commission_rate);
@@ -715,7 +739,7 @@ End:   ${fmtLondon(end)}
           console.error(`Failed to update listing doc for ${lid} after charge`, updateErr);
         }
 
-        // Create transaction (pipeline starts)
+        // Create transaction (pipeline starts) — only after succeeded
         const tx = await createTransactionForWinner({
           databases,
           listing,
@@ -725,7 +749,7 @@ End:   ${fmtLondon(end)}
           paymentIntentId: intent.id,
         });
 
-        // Emails (best-effort; do not fail cron)
+        // Emails (best-effort; do not fail cron) — only after succeeded
         try {
           const sellerEmail = String(listing.seller_email || listing.sellerEmail || "").trim();
           if (mailer && isValidEmail(FROM_ADDRESS)) {
