@@ -42,11 +42,12 @@ const TRANSACTIONS_COLLECTION_ID =
   process.env.NEXT_PUBLIC_APPWRITE_TRANSACTIONS_COLLECTION_ID ||
   "";
 
-  const PROFILES_COLLECTION_ID =
+// ✅ Added (used for buyer delivery snapshot)
+const PROFILES_COLLECTION_ID =
   process.env.APPWRITE_PROFILES_COLLECTION_ID ||
   process.env.NEXT_PUBLIC_APPWRITE_PROFILES_COLLECTION_ID ||
   "";
-  
+
 function getDatabases() {
   if (!endpoint || !projectId || !apiKey) return null;
   if (!DB_ID || !LISTINGS_COLLECTION_ID) return null;
@@ -67,7 +68,7 @@ function cronAuthed(req: NextRequest) {
   const auth = (req.headers.get("authorization") || "").trim();
   if (auth === `Bearer ${CRON_SECRET}`) return true;
 
-  // Your existing methods (keep for manual testing)
+  // Existing methods (keep for manual testing)
   const q = (req.nextUrl.searchParams.get("secret") || "").trim();
   const h = (req.headers.get("x-cron-secret") || "").trim();
   return q === CRON_SECRET || h === CRON_SECRET;
@@ -317,7 +318,7 @@ async function createTransactionForWinner(params: {
 
     dvla_fee: 0,
 
-    // ✅ IMPORTANT: only create tx after Stripe says "succeeded"
+    // ✅ only create tx after Stripe says "succeeded"
     payment_status: "paid",
     transaction_status: "dispatch_pending",
 
@@ -328,7 +329,7 @@ async function createTransactionForWinner(params: {
 
     ...delivery,
 
-    // Optional future flags (safe to ignore if schema doesn’t include them)
+    // Optional future flags (safe if schema doesn’t include them)
     seller_dispatch_status: "pending",
     buyer_receipt_status: "pending",
   };
@@ -459,6 +460,87 @@ async function sendWinnerEmails(params: {
         `Seller: ${sellerEmail || "unknown"}`,
         `Listing: ${listingLink}`,
         `PaymentIntent: ${paymentIntentId}`,
+      ].join("\n"),
+    });
+  }
+}
+
+// -----------------------------
+// NEW: Emails when winner payment fails / requires card
+// -----------------------------
+async function sendPaymentRequiredEmails(params: {
+  mailer: nodemailer.Transporter;
+  listing: any;
+  winnerEmail: string;
+  sellerEmail: string;
+  finalBidAmount: number;
+  reason: string;
+}) {
+  const { mailer, listing, winnerEmail, sellerEmail, finalBidAmount, reason } = params;
+
+  const label = getListingLabel(listing);
+  const amountLabel = `£${finalBidAmount.toLocaleString("en-GB", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
+
+  const from = { name: FROM_NAME, address: FROM_ADDRESS };
+
+  const paymentMethodLink = `${SITE_URL}/payment-method`;
+  const adminLink = `${SITE_URL}/admin`;
+  const listingLink = `${SITE_URL}/listing/${listing.$id}`;
+
+  // Buyer: action required
+  if (isValidEmail(winnerEmail) && isValidEmail(FROM_ADDRESS)) {
+    await mailer.sendMail({
+      from,
+      to: winnerEmail,
+      subject: `⚠️ Action required: payment failed for ${label}`,
+      text: [
+        `You won the auction for: ${label}`,
+        `Amount due: ${amountLabel}`,
+        ``,
+        `We could not take payment automatically: ${reason}`,
+        ``,
+        `Next step: add or update your saved card here:`,
+        paymentMethodLink,
+        ``,
+        `After updating your card, our system will attempt payment again automatically.`,
+        ``,
+        `View listing: ${listingLink}`,
+        ``,
+        `— AuctionMyCamera Team`,
+      ].join("\n"),
+      html: `
+        <p>You won the auction for <strong>${esc(label)}</strong>.</p>
+        <p><strong>Amount due:</strong> ${esc(amountLabel)}</p>
+        <p style="color:#b45309"><strong>We could not take payment automatically:</strong> ${esc(reason)}</p>
+        <p><strong>Next step:</strong> <a href="${esc(
+          paymentMethodLink
+        )}" target="_blank" rel="noopener noreferrer">Add / update your saved card</a></p>
+        <p>After updating your card, our system will attempt payment again automatically.</p>
+        <p><a href="${esc(listingLink)}" target="_blank" rel="noopener noreferrer">View listing</a></p>
+        <p>— AuctionMyCamera Team</p>
+      `,
+    });
+  }
+
+  // Admin: notify
+  if (ADMIN_EMAIL && isValidEmail(ADMIN_EMAIL) && isValidEmail(FROM_ADDRESS)) {
+    await mailer.sendMail({
+      from,
+      to: ADMIN_EMAIL,
+      subject: `⚠️ Winner payment failed: ${label} — ${amountLabel}`,
+      text: [
+        `Winner payment failed.`,
+        ``,
+        `Item: ${label}`,
+        `Amount: ${amountLabel}`,
+        `Buyer: ${winnerEmail}`,
+        `Seller: ${sellerEmail || "unknown"}`,
+        `Reason: ${reason}`,
+        `Listing: ${listingLink}`,
+        `Admin: ${adminLink}`,
       ].join("\n"),
     });
   }
@@ -695,11 +777,35 @@ End:   ${fmtLondon(end)}
 
         const paymentMethod = await pickPaymentMethodForCustomer(customer.id);
 
+        // ✅ NEW: handle “no saved card”
         if (!paymentMethod) {
+          try {
+            await databases.updateDocument(DB_ID, LISTINGS_COLLECTION_ID, lid, {
+              sale_status: "payment_required",
+              payment_status: "unpaid",
+              buyer_email: winnerEmail,
+              buyer_id: winnerUserId,
+            });
+          } catch {}
+
+          try {
+            const sellerEmail = String(listing.seller_email || listing.sellerEmail || "").trim();
+            if (mailer && isValidEmail(FROM_ADDRESS)) {
+              await sendPaymentRequiredEmails({
+                mailer,
+                listing,
+                winnerEmail,
+                sellerEmail,
+                finalBidAmount,
+                reason: "No saved card on file.",
+              });
+            }
+          } catch {}
+
           winnerCharges.push({
             listingId: lid,
-            skipped: true,
-            reason: "winner has no saved card in Stripe (must add card via payment-method page)",
+            charged: false,
+            reason: "winner has no saved card",
             winnerEmail,
           });
           continue;
@@ -731,9 +837,31 @@ End:   ${fmtLondon(end)}
           { idempotencyKey }
         );
 
-        // ✅ CRITICAL HARDENING:
-        // Only mark listing/tx/emails as paid if Stripe says succeeded.
+        // ✅ Only proceed if succeeded
         if (intent.status !== "succeeded") {
+          try {
+            await databases.updateDocument(DB_ID, LISTINGS_COLLECTION_ID, lid, {
+              sale_status: "payment_failed",
+              payment_status: "unpaid",
+              buyer_email: winnerEmail,
+              buyer_id: winnerUserId,
+            });
+          } catch {}
+
+          try {
+            const sellerEmail = String(listing.seller_email || listing.sellerEmail || "").trim();
+            if (mailer && isValidEmail(FROM_ADDRESS)) {
+              await sendPaymentRequiredEmails({
+                mailer,
+                listing,
+                winnerEmail,
+                sellerEmail,
+                finalBidAmount,
+                reason: `Stripe status: ${intent.status}`,
+              });
+            }
+          } catch {}
+
           winnerCharges.push({
             listingId: lid,
             charged: false,
@@ -743,6 +871,25 @@ End:   ${fmtLondon(end)}
             reason: `PaymentIntent not succeeded (status: ${intent.status})`,
           });
           continue;
+        }
+
+        // ✅ Load buyer profile snapshot (for delivery address snapshot)
+        let buyerProfile: any = null;
+
+        if (winnerUserId && PROFILES_COLLECTION_ID) {
+          try {
+            buyerProfile = await databases.getDocument(DB_ID, PROFILES_COLLECTION_ID, winnerUserId);
+          } catch {
+            try {
+              const found = await databases.listDocuments(DB_ID, PROFILES_COLLECTION_ID, [
+                Query.equal("email", winnerEmail),
+                Query.limit(1),
+              ]);
+              buyerProfile = found.documents[0] || null;
+            } catch {
+              buyerProfile = null;
+            }
+          }
         }
 
         // Update listing doc (best-effort)
@@ -767,41 +914,18 @@ End:   ${fmtLondon(end)}
           console.error(`Failed to update listing doc for ${lid} after charge`, updateErr);
         }
 
-        // Load buyer profile snapshot
-let buyerProfile: any = null;
-
-if (winnerUserId && PROFILES_COLLECTION_ID) {
-  try {
-    buyerProfile = await databases.getDocument(
-      DB_ID,
-      PROFILES_COLLECTION_ID,
-      winnerUserId
-    );
-  } catch {
-    // fallback: try by email
-    try {
-      const found = await databases.listDocuments(DB_ID, PROFILES_COLLECTION_ID, [
-        Query.equal("email", winnerEmail),
-        Query.limit(1),
-      ]);
-      buyerProfile = found.documents[0] || null;
-    } catch {
-      buyerProfile = null;
-    }
-  }
-}
-        // Create transaction (pipeline starts) — only after succeeded
+        // Create transaction — only after succeeded (includes delivery snapshot)
         const tx = await createTransactionForWinner({
-  databases,
-  listing,
-  finalBidAmount,
-  winnerEmail,
-  winnerUserId,
-  paymentIntentId: intent.id,
-  buyerProfile,
-});
+          databases,
+          listing,
+          finalBidAmount,
+          winnerEmail,
+          winnerUserId,
+          paymentIntentId: intent.id,
+          buyerProfile,
+        });
 
-        // Emails (best-effort; do not fail cron) — only after succeeded
+        // Emails — only after succeeded
         try {
           const sellerEmail = String(listing.seller_email || listing.sellerEmail || "").trim();
           if (mailer && isValidEmail(FROM_ADDRESS)) {
@@ -832,17 +956,42 @@ if (winnerUserId && PROFILES_COLLECTION_ID) {
         });
       } catch (err: any) {
         console.error(`Stripe error charging winner for listing ${lid}:`, err);
+
+        // Best-effort mark as payment_failed + email buyer/admin
+        try {
+          await databases.updateDocument(DB_ID, LISTINGS_COLLECTION_ID, lid, {
+            sale_status: "payment_failed",
+            payment_status: "unpaid",
+          });
+        } catch {}
+
+        try {
+          const sellerEmail = String(listing.seller_email || listing.sellerEmail || "").trim();
+          if (mailer && isValidEmail(FROM_ADDRESS)) {
+            await sendPaymentRequiredEmails({
+              mailer,
+              listing,
+              winnerEmail,
+              sellerEmail,
+              finalBidAmount,
+              reason: err?.message || "Stripe error charging winner.",
+            });
+          }
+        } catch {}
+
         const entry: any = {
           listingId: lid,
           charged: false,
           winnerEmail,
           error: err?.message || "Stripe charge failed.",
         };
+
         const anyErr = err as any;
         if (anyErr?.raw?.payment_intent) {
           entry.paymentIntentId = anyErr.raw.payment_intent.id;
           entry.paymentStatus = anyErr.raw.payment_intent.status;
         }
+
         winnerCharges.push(entry);
       }
     }
