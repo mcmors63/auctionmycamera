@@ -1,6 +1,6 @@
 // app/api/auction-scheduler/route.ts
 import { NextRequest, NextResponse } from "next/server";
-import { Client, Databases, Query, ID } from "node-appwrite";
+import { Client, Databases, Query, ID, Account } from "node-appwrite";
 import Stripe from "stripe";
 import nodemailer from "nodemailer";
 import { getAuctionWindow } from "@/lib/getAuctionWindow";
@@ -10,21 +10,16 @@ export const dynamic = "force-dynamic";
 
 // -----------------------------
 // APPWRITE SETUP (server-safe)
-// Prefer server envs first, then NEXT_PUBLIC fallbacks.
 // -----------------------------
 const endpoint =
-  process.env.APPWRITE_ENDPOINT ||
-  process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT ||
-  "";
+  process.env.APPWRITE_ENDPOINT || process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT || "";
 
 const projectId =
-  process.env.APPWRITE_PROJECT_ID ||
-  process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID ||
-  "";
+  process.env.APPWRITE_PROJECT_ID || process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID || "";
 
 const apiKey = (process.env.APPWRITE_API_KEY || "").trim();
 
-// DB + collections (NO hard-coded DB id fallback)
+// DB + collections
 const DB_ID =
   process.env.APPWRITE_LISTINGS_DATABASE_ID ||
   process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID ||
@@ -61,7 +56,7 @@ function getDatabases() {
 const CRON_SECRET = (process.env.CRON_SECRET || process.env.AUCTION_CRON_SECRET || "").trim();
 
 function cronAuthed(req: NextRequest) {
-  if (!CRON_SECRET) return false; // ✅ MUST be set, otherwise refuse
+  if (!CRON_SECRET) return false;
   const q = (req.nextUrl.searchParams.get("secret") || "").trim();
   const h = (req.headers.get("x-cron-secret") || "").trim();
   return q === CRON_SECRET || h === CRON_SECRET;
@@ -76,7 +71,10 @@ const stripe = stripeSecret ? new Stripe(stripeSecret) : null;
 // -----------------------------
 // EMAIL
 // -----------------------------
-const SITE_URL = (process.env.NEXT_PUBLIC_SITE_URL || "https://auctionmycamera.co.uk").replace(/\/+$/, "");
+const SITE_URL = (process.env.NEXT_PUBLIC_SITE_URL || "https://auctionmycamera.co.uk").replace(
+  /\/+$/,
+  ""
+);
 
 const RAW_FROM_EMAIL =
   process.env.FROM_EMAIL ||
@@ -87,6 +85,8 @@ const RAW_FROM_EMAIL =
   "no-reply@auctionmycamera.co.uk";
 
 const FROM_NAME = (process.env.FROM_NAME || "AuctionMyCamera").trim();
+
+const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || process.env.NEXT_PUBLIC_ADMIN_EMAIL || "").trim();
 
 function normalizeEmailAddress(input: string) {
   let v = (input || "").trim();
@@ -122,6 +122,15 @@ function getMailer() {
 
 function fmtLondon(d: Date) {
   return d.toLocaleString("en-GB", { timeZone: "Europe/London" });
+}
+
+function esc(s: string) {
+  return String(s || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
 }
 
 // -----------------------------
@@ -172,73 +181,253 @@ async function listAllDocs(params: {
     if (page.documents.length < pageSize) break;
     offset += pageSize;
 
-    if (all.length >= hardLimit) break; // safety
+    if (all.length >= hardLimit) break;
   }
 
   return all;
 }
 
+function getListingLabel(listing: any) {
+  const t = String(listing?.item_title || listing?.title || "").trim();
+  if (t) return t;
+
+  const brand = String(listing?.brand || "").trim();
+  const model = String(listing?.model || "").trim();
+  const bm = [brand, model].filter(Boolean).join(" ").trim();
+  if (bm) return bm;
+
+  const reg = String(listing?.registration || "").trim();
+  if (reg) return reg;
+
+  return `Listing ${String(listing?.$id || "").slice(0, 8)}`;
+}
+
 // -----------------------------
-// Helper: create transaction doc (best-effort)
+// Stripe helper: pick default PM first
+// -----------------------------
+async function pickPaymentMethodForCustomer(customerId: string) {
+  if (!stripe) return null;
+
+  const customer = await stripe.customers.retrieve(customerId);
+  let defaultPmId: string | null = null;
+
+  if (!("deleted" in customer)) {
+    const defPm = customer.invoice_settings?.default_payment_method as
+      | string
+      | { id: string }
+      | null
+      | undefined;
+
+    if (typeof defPm === "string") defaultPmId = defPm;
+    else if (defPm && typeof defPm === "object") defaultPmId = defPm.id;
+  }
+
+  if (defaultPmId) {
+    try {
+      const pm = await stripe.paymentMethods.retrieve(defaultPmId);
+      if ((pm as any)?.id) return pm as Stripe.PaymentMethod;
+    } catch {
+      // fall back to listing below
+    }
+  }
+
+  const pmList = await stripe.paymentMethods.list({
+    customer: customerId,
+    type: "card",
+    limit: 1,
+  });
+
+  return pmList.data[0] || null;
+}
+
+// -----------------------------
+// Transaction doc creation (pipeline starts)
 // -----------------------------
 async function createTransactionForWinner(params: {
   databases: Databases;
   listing: any;
-  finalBidAmount: number; // winning bid (GBP)
+  finalBidAmount: number; // GBP
   winnerEmail: string;
+  winnerUserId: string | null;
   paymentIntentId: string;
 }) {
-  const { databases, listing, finalBidAmount, winnerEmail, paymentIntentId } = params;
+  const { databases, listing, finalBidAmount, winnerEmail, winnerUserId, paymentIntentId } = params;
 
   if (!TRANSACTIONS_COLLECTION_ID) {
     console.warn("No TRANSACTIONS_COLLECTION_ID configured; skipping transaction creation.");
-    return;
+    return null;
   }
 
   const nowIso = new Date().toISOString();
 
   const listingId = String(listing.$id || "");
-  const display =
-    (listing.item_title as string | undefined) ||
-    (listing.title as string | undefined) ||
-    (listing.registration as string | undefined) ||
-    "";
+  const label = getListingLabel(listing);
 
-  const sellerEmail = (listing.seller_email as string | undefined) || "";
+  const sellerEmail = String(listing.seller_email || listing.sellerEmail || "").trim();
 
-  const commissionRate = getNumeric(listing.commission_rate); // e.g. 10 = 10%
-  const salePriceInt = Math.round(finalBidAmount);
+  const commissionRate = getNumeric(listing.commission_rate); // % e.g. 10
+  const salePrice = Math.round(finalBidAmount);
 
-  const commissionAmount = Math.round(commissionRate > 0 ? (salePriceInt * commissionRate) / 100 : 0);
-  const sellerPayout = Math.max(0, salePriceInt - commissionAmount - EXTRA_FEE_GBP);
+  const commissionAmount = Math.round(commissionRate > 0 ? (salePrice * commissionRate) / 100 : 0);
+  const sellerPayout = Math.max(0, salePrice - commissionAmount - EXTRA_FEE_GBP);
 
   const data: Record<string, any> = {
     listing_id: listingId,
     seller_email: sellerEmail,
     buyer_email: winnerEmail,
+    buyer_id: winnerUserId,
 
-    sale_price: salePriceInt,
+    sale_price: salePrice,
 
     commission_rate: commissionRate,
     commission_amount: commissionAmount,
 
     seller_payout: sellerPayout,
 
-    // Keep field if your schema expects it; cameras set it to 0
     dvla_fee: 0,
 
-    transaction_status: "pending_documents",
+    // ✅ Pipeline: payment is complete, now we wait for dispatch/receipt
+    payment_status: "paid",
+    transaction_status: "dispatch_pending",
+
     created_at: nowIso,
 
-    payment_status: "paid",
-    registration: display,
+    registration: label,
     stripe_payment_intent_id: paymentIntentId,
+
+    // Optional future flags (safe to ignore if schema doesn’t include them)
+    seller_dispatch_status: "pending",
+    buyer_receipt_status: "pending",
   };
 
   try {
-    await databases.createDocument(DB_ID, TRANSACTIONS_COLLECTION_ID, ID.unique(), data);
+    const doc = await databases.createDocument(DB_ID, TRANSACTIONS_COLLECTION_ID, ID.unique(), data);
+    return doc as any;
   } catch (err) {
     console.error("Failed to create transaction document for listing", listingId, err);
+    return null;
+  }
+}
+
+// -----------------------------
+// Emails after successful charge
+// -----------------------------
+async function sendWinnerEmails(params: {
+  mailer: nodemailer.Transporter;
+  listing: any;
+  winnerEmail: string;
+  sellerEmail: string;
+  finalBidAmount: number;
+  paymentIntentId: string;
+}) {
+  const { mailer, listing, winnerEmail, sellerEmail, finalBidAmount, paymentIntentId } = params;
+
+  const label = getListingLabel(listing);
+  const amountLabel = `£${finalBidAmount.toLocaleString("en-GB", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
+
+  const buyerLink = `${SITE_URL}/dashboard?tab=transactions`;
+  const sellerLink = `${SITE_URL}/dashboard?tab=transactions`;
+  const listingLink = `${SITE_URL}/listing/${listing.$id}`;
+
+  const from = { name: FROM_NAME, address: FROM_ADDRESS };
+
+  // Buyer
+  if (isValidEmail(winnerEmail) && isValidEmail(FROM_ADDRESS)) {
+    await mailer.sendMail({
+      from,
+      to: winnerEmail,
+      subject: `✅ You won: ${label} — payment received`,
+      text: [
+        `Congratulations — you won the auction for: ${label}`,
+        ``,
+        `Payment received: ${amountLabel}`,
+        ``,
+        `Next steps:`,
+        `1) The seller will dispatch your item within the delivery window.`,
+        `2) You’ll be able to track progress in your dashboard.`,
+        ``,
+        `Go to your dashboard: ${buyerLink}`,
+        `View listing: ${listingLink}`,
+        ``,
+        `Payment reference: ${paymentIntentId}`,
+        ``,
+        `— AuctionMyCamera Team`,
+      ].join("\n"),
+      html: `
+        <p>Congratulations — you won the auction for <strong>${esc(label)}</strong>.</p>
+        <p><strong>Payment received:</strong> ${esc(amountLabel)}</p>
+        <p><strong>Next steps</strong></p>
+        <ol>
+          <li>The seller will dispatch your item within the delivery window.</li>
+          <li>You can track progress in your dashboard.</li>
+        </ol>
+        <p>
+          <a href="${esc(buyerLink)}" target="_blank" rel="noopener noreferrer">Go to your dashboard</a><br/>
+          <a href="${esc(listingLink)}" target="_blank" rel="noopener noreferrer">View listing</a>
+        </p>
+        <p style="color:#6b7280;font-size:12px">Payment reference: ${esc(paymentIntentId)}</p>
+        <p>— AuctionMyCamera Team</p>
+      `,
+    });
+  }
+
+  // Seller
+  if (isValidEmail(sellerEmail) && isValidEmail(FROM_ADDRESS)) {
+    await mailer.sendMail({
+      from,
+      to: sellerEmail,
+      subject: `✅ Sold: ${label} — buyer payment received`,
+      text: [
+        `Good news — your item has sold: ${label}`,
+        ``,
+        `Buyer payment received: ${amountLabel}`,
+        ``,
+        `Next steps:`,
+        `1) Prepare your item for dispatch.`,
+        `2) Add dispatch details (carrier/tracking) in your dashboard.`,
+        ``,
+        `Go to your dashboard: ${sellerLink}`,
+        `View listing: ${listingLink}`,
+        ``,
+        `— AuctionMyCamera Team`,
+      ].join("\n"),
+      html: `
+        <p>Good news — your item has sold: <strong>${esc(label)}</strong></p>
+        <p><strong>Buyer payment received:</strong> ${esc(amountLabel)}</p>
+        <p><strong>Next steps</strong></p>
+        <ol>
+          <li>Prepare your item for dispatch.</li>
+          <li>Add dispatch details (carrier/tracking) in your dashboard.</li>
+        </ol>
+        <p>
+          <a href="${esc(sellerLink)}" target="_blank" rel="noopener noreferrer">Go to your dashboard</a><br/>
+          <a href="${esc(listingLink)}" target="_blank" rel="noopener noreferrer">View listing</a>
+        </p>
+        <p>— AuctionMyCamera Team</p>
+      `,
+    });
+  }
+
+  // Admin (optional)
+  if (ADMIN_EMAIL && isValidEmail(ADMIN_EMAIL) && isValidEmail(FROM_ADDRESS)) {
+    await mailer.sendMail({
+      from,
+      to: ADMIN_EMAIL,
+      subject: `📸 Sale: ${label} — ${amountLabel} paid`,
+      text: [
+        `A sale was completed and the winner was charged.`,
+        ``,
+        `Item: ${label}`,
+        `Amount: ${amountLabel}`,
+        `Buyer: ${winnerEmail}`,
+        `Seller: ${sellerEmail || "unknown"}`,
+        `Listing: ${listingLink}`,
+        `PaymentIntent: ${paymentIntentId}`,
+      ].join("\n"),
+    });
   }
 }
 
@@ -249,7 +438,6 @@ export async function GET(req: NextRequest) {
   const winnerCharges: any[] = [];
 
   try {
-    // ---- Hard guards ----
     if (!cronAuthed(req)) {
       return NextResponse.json({ ok: false, error: "Forbidden (cron secret required)." }, { status: 403 });
     }
@@ -259,10 +447,7 @@ export async function GET(req: NextRequest) {
     }
 
     if (!DB_ID || !LISTINGS_COLLECTION_ID) {
-      return NextResponse.json(
-        { ok: false, error: "Missing listings DB/collection env config." },
-        { status: 500 }
-      );
+      return NextResponse.json({ ok: false, error: "Missing listings DB/collection env config." }, { status: 500 });
     }
 
     const databases = getDatabases();
@@ -281,10 +466,7 @@ export async function GET(req: NextRequest) {
       databases,
       dbId: DB_ID,
       colId: LISTINGS_COLLECTION_ID,
-      queries: [
-        Query.equal("status", ["queued", "approvedQueued"]),
-        Query.orderAsc("$createdAt"),
-      ],
+      queries: [Query.equal("status", ["queued", "approvedQueued"]), Query.orderAsc("$createdAt")],
       pageSize: 200,
       hardLimit: 5000,
     });
@@ -293,15 +475,10 @@ export async function GET(req: NextRequest) {
 
     for (const doc of queuedDocs as any[]) {
       const startTs = parseTimestamp(doc.auction_start);
-
-      // If auction_start missing, do NOT auto-promote blindly.
       if (!startTs) continue;
-
       if (startTs > nowTs) continue;
 
-      await databases.updateDocument(DB_ID, LISTINGS_COLLECTION_ID, doc.$id, {
-        status: "live",
-      });
+      await databases.updateDocument(DB_ID, LISTINGS_COLLECTION_ID, doc.$id, { status: "live" });
       promoted++;
     }
 
@@ -312,11 +489,7 @@ export async function GET(req: NextRequest) {
       databases,
       dbId: DB_ID,
       colId: LISTINGS_COLLECTION_ID,
-      queries: [
-        Query.equal("status", "live"),
-        Query.lessThanEqual("auction_end", nowIso),
-        Query.orderAsc("$createdAt"),
-      ],
+      queries: [Query.equal("status", "live"), Query.lessThanEqual("auction_end", nowIso), Query.orderAsc("$createdAt")],
       pageSize: 200,
       hardLimit: 5000,
     });
@@ -340,9 +513,7 @@ export async function GET(req: NextRequest) {
       const reserveMet = reserve <= 0 ? hasBid : currentBid >= reserve;
 
       if (hasBid && reserveMet) {
-        const updated = await databases.updateDocument(DB_ID, LISTINGS_COLLECTION_ID, lid, {
-          status: "completed",
-        });
+        const updated = await databases.updateDocument(DB_ID, LISTINGS_COLLECTION_ID, lid, { status: "completed" });
         completed++;
         justCompletedForCharging.push(updated);
         continue;
@@ -371,12 +542,8 @@ export async function GET(req: NextRequest) {
 
         relisted++;
 
-        const sellerEmail = (doc.seller_email as string | undefined) || "";
-        const title =
-          (doc.item_title as string | undefined) ||
-          (doc.title as string | undefined) ||
-          (doc.registration as string | undefined) ||
-          "your listing";
+        const sellerEmail = String(doc.seller_email || "").trim();
+        const title = getListingLabel(doc);
 
         if (mailer && sellerEmail && isValidEmail(sellerEmail) && isValidEmail(FROM_ADDRESS)) {
           try {
@@ -401,9 +568,7 @@ End:   ${fmtLondon(end)}
         continue;
       }
 
-      await databases.updateDocument(DB_ID, LISTINGS_COLLECTION_ID, lid, {
-        status: "not_sold",
-      });
+      await databases.updateDocument(DB_ID, LISTINGS_COLLECTION_ID, lid, { status: "not_sold" });
       markedNotSold++;
     }
 
@@ -436,15 +601,11 @@ End:   ${fmtLondon(end)}
       }
 
       if (reserve > 0 && currentBid < reserve) {
-        winnerCharges.push({
-          listingId: lid,
-          skipped: true,
-          reason: `reserve not met (bid=${currentBid}, reserve=${reserve})`,
-        });
+        winnerCharges.push({ listingId: lid, skipped: true, reason: `reserve not met (bid=${currentBid}, reserve=${reserve})` });
         continue;
       }
 
-      // ---- Load bids for this listing (paged, hard limit 5000) ----
+      // Load bids
       let bids: any[] = [];
       try {
         bids = await listAllDocs({
@@ -466,13 +627,15 @@ End:   ${fmtLondon(end)}
         continue;
       }
 
-      // Your bid docs sort by a custom timestamp — keep your existing intent:
+      // Sort by timestamp desc (your intent)
       bids.sort((a, b) => parseTimestamp(b.timestamp) - parseTimestamp(a.timestamp));
-      const winningBid = bids[0];
 
+      const winningBid = bids[0];
       const rawAmount = winningBid.amount !== undefined ? winningBid.amount : winningBid.bid_amount;
       const winningAmount = getNumeric(rawAmount);
-      const winnerEmail = winningBid.bidder_email || "";
+
+      const winnerEmail = String(winningBid.bidder_email || "").trim();
+      const winnerUserId = String(winningBid.bidder_id || "").trim() || null;
 
       if (!winnerEmail) {
         winnerCharges.push({ listingId: lid, skipped: true, reason: "winning bid has no bidder_email" });
@@ -489,17 +652,13 @@ End:   ${fmtLondon(end)}
       const amountInPence = Math.round(totalToCharge * 100);
 
       try {
-        const existing = await stripe.customers.list({ email: winnerEmail, limit: 1 });
+        const existing = await stripe.customers.list({ email: winnerEmail, limit: 10 });
         let customer = existing.data[0];
         if (!customer) customer = await stripe.customers.create({ email: winnerEmail });
 
-        const paymentMethods = await stripe.paymentMethods.list({
-          customer: customer.id,
-          type: "card",
-          limit: 1,
-        });
+        const paymentMethod = await pickPaymentMethodForCustomer(customer.id);
 
-        if (!paymentMethods.data.length) {
+        if (!paymentMethod) {
           winnerCharges.push({
             listingId: lid,
             skipped: true,
@@ -509,12 +668,9 @@ End:   ${fmtLondon(end)}
           continue;
         }
 
-        const paymentMethod = paymentMethods.data[0];
         const idempotencyKey = `winner-charge-${lid}`;
 
-        const label =
-          listing.item_title || listing.title || listing.registration || listing.listing_id || lid;
-
+        const label = getListingLabel(listing);
         const description = `Auction winner - ${label}`;
 
         const intent = await stripe.paymentIntents.create(
@@ -529,6 +685,7 @@ End:   ${fmtLondon(end)}
             metadata: {
               listingId: lid,
               winnerEmail,
+              winnerUserId: winnerUserId || "",
               type: "auction_winner",
               finalBidAmount: String(finalBidAmount),
             },
@@ -543,14 +700,14 @@ End:   ${fmtLondon(end)}
           const saleFee = commissionRate > 0 ? (soldPrice * commissionRate) / 100 : 0;
           const sellerNetAmount = Math.max(0, soldPrice - saleFee);
 
-          const buyerId = listing.buyer_id || listing.highest_bidder || null;
-
           await databases.updateDocument(DB_ID, LISTINGS_COLLECTION_ID, lid, {
             buyer_email: winnerEmail,
-            buyer_id: buyerId,
+            buyer_id: winnerUserId,
+
             sold_price: soldPrice,
             sale_fee: saleFee,
             seller_net_amount: sellerNetAmount,
+
             sale_status: "winner_charged",
             payout_status: "pending",
           });
@@ -558,22 +715,44 @@ End:   ${fmtLondon(end)}
           console.error(`Failed to update listing doc for ${lid} after charge`, updateErr);
         }
 
-        await createTransactionForWinner({
+        // Create transaction (pipeline starts)
+        const tx = await createTransactionForWinner({
           databases,
           listing,
           finalBidAmount,
           winnerEmail,
+          winnerUserId,
           paymentIntentId: intent.id,
         });
+
+        // Emails (best-effort; do not fail cron)
+        try {
+          const sellerEmail = String(listing.seller_email || listing.sellerEmail || "").trim();
+          if (mailer && isValidEmail(FROM_ADDRESS)) {
+            await sendWinnerEmails({
+              mailer,
+              listing,
+              winnerEmail,
+              sellerEmail,
+              finalBidAmount,
+              paymentIntentId: intent.id,
+            });
+          }
+        } catch (mailErr) {
+          console.error(`Failed to send winner emails for ${lid}`, mailErr);
+        }
 
         winnerCharges.push({
           listingId: lid,
           charged: true,
           winnerEmail,
+          winnerUserId,
           bid: finalBidAmount,
           totalCharged: totalToCharge,
           paymentIntentId: intent.id,
           paymentStatus: intent.status,
+          transactionId: tx?.$id || null,
+          paymentMethodId: paymentMethod.id,
         });
       } catch (err: any) {
         console.error(`Stripe error charging winner for listing ${lid}:`, err);

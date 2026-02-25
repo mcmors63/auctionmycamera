@@ -168,9 +168,9 @@ function isHistoryStatus(s: string) {
 }
 
 function isFinishedTransaction(tx: Transaction) {
-  const t = (tx.transaction_status || "").toLowerCase();
-  const p = (tx.payment_status || "").toLowerCase();
-  return t === "complete" || t === "completed" || p === "paid";
+  const t = (tx.transaction_status || "").toLowerCase().trim();
+  // ✅ “paid” is NOT finished — it’s the start of the dispatch/receipt workflow.
+  return t === "complete" || t === "completed";
 }
 
 function listingTitle(l: Listing) {
