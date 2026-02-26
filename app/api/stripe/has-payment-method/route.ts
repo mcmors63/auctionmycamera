@@ -25,8 +25,15 @@ function stripeClient() {
 // -----------------------------
 // APPWRITE (profiles) - OPTIONAL
 // -----------------------------
-const APPWRITE_ENDPOINT =
-  (process.env.APPWRITE_ENDPOINT || process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT || "").trim();
+function normalizeEndpoint(raw: string) {
+  const x = (raw || "").trim().replace(/\/+$/, "");
+  if (!x) return "";
+  return x.endsWith("/v1") ? x : `${x}/v1`;
+}
+
+const APPWRITE_ENDPOINT = normalizeEndpoint(
+  process.env.APPWRITE_ENDPOINT || process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT || ""
+);
 
 const APPWRITE_PROJECT =
   (process.env.APPWRITE_PROJECT_ID || process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID || "").trim();
@@ -223,4 +230,8 @@ export async function POST(req: Request) {
       { status: 500 }
     );
   }
+}
+
+export async function OPTIONS() {
+  return new NextResponse(null, { status: 204 });
 }

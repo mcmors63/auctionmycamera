@@ -1,6 +1,7 @@
 // app/api/transactions/mark-dispatched/route.ts
 import { NextResponse } from "next/server";
 import { Client as AppwriteClient, Account, Databases } from "node-appwrite";
+import nodemailer from "nodemailer";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -42,6 +43,164 @@ const TX_COLLECTION_ID =
   process.env.APPWRITE_TRANSACTIONS_TABLE_ID ||
   process.env.NEXT_PUBLIC_APPWRITE_TRANSACTIONS_TABLE_ID ||
   "transactions";
+
+// -----------------------------
+// EMAIL (server-side)
+// -----------------------------
+const SITE_URL = (process.env.NEXT_PUBLIC_SITE_URL || "https://auctionmycamera.co.uk").replace(
+  /\/+$/,
+  ""
+);
+
+const RAW_FROM_EMAIL =
+  process.env.FROM_EMAIL ||
+  process.env.CONTACT_FROM_EMAIL ||
+  process.env.EMAIL_FROM ||
+  process.env.SMTP_FROM ||
+  process.env.SMTP_USER ||
+  "no-reply@auctionmycamera.co.uk";
+
+const FROM_NAME = (process.env.FROM_NAME || "AuctionMyCamera").trim();
+const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || process.env.NEXT_PUBLIC_ADMIN_EMAIL || "").trim();
+
+function normalizeEmailAddress(input: string) {
+  let v = (input || "").trim();
+  const angleMatch = v.match(/<([^>]+)>/);
+  if (angleMatch?.[1]) v = angleMatch[1].trim();
+  v = v.replace(/^"+|"+$/g, "").trim();
+  v = v.replace(/\s+/g, "");
+  return v;
+}
+
+function isValidEmail(email: string) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
+const FROM_ADDRESS = normalizeEmailAddress(RAW_FROM_EMAIL);
+
+function getMailer() {
+  const host = (process.env.SMTP_HOST || "").trim();
+  const user = (process.env.SMTP_USER || "").trim();
+  const pass = (process.env.SMTP_PASS || "").trim();
+  const port = Number(process.env.SMTP_PORT || "465");
+
+  if (host && user && pass) {
+    return nodemailer.createTransport({
+      host,
+      port,
+      secure: port === 465,
+      auth: { user, pass },
+    });
+  }
+  return null;
+}
+
+function esc(s: string) {
+  return String(s || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+function fmtLondonIso(iso: string) {
+  try {
+    const d = new Date(iso);
+    return d.toLocaleString("en-GB", { timeZone: "Europe/London" });
+  } catch {
+    return iso;
+  }
+}
+
+async function sendDispatchEmails(params: {
+  tx: any;
+  carrier: string;
+  tracking: string;
+  note: string;
+}) {
+  const { tx, carrier, tracking, note } = params;
+
+  const mailer = getMailer();
+  if (!mailer) return { sent: false, reason: "SMTP not configured" };
+  if (!isValidEmail(FROM_ADDRESS)) return { sent: false, reason: "Invalid FROM email" };
+
+  const buyerEmail = String(tx?.buyer_email || "").trim().toLowerCase();
+  const sellerEmail = String(tx?.seller_email || "").trim().toLowerCase();
+
+  // Transaction label
+  const label =
+    String(tx?.registration || "").trim() ||
+    String(tx?.item_title || "").trim() ||
+    `Transaction ${String(tx?.$id || "").slice(0, 8)}`;
+
+  const dashLink = `${SITE_URL}/dashboard?tab=transactions`;
+  const from = { name: FROM_NAME, address: FROM_ADDRESS };
+
+  const dispatchedAt = tx?.seller_dispatched_at ? fmtLondonIso(String(tx.seller_dispatched_at)) : "";
+
+  const carrierLine = carrier ? `Carrier: ${carrier}` : "";
+  const trackingLine = tracking ? `Tracking: ${tracking}` : "";
+  const noteLine = note ? `Note: ${note}` : "";
+
+  // Buyer email
+  if (buyerEmail && isValidEmail(buyerEmail)) {
+    await mailer.sendMail({
+      from,
+      to: buyerEmail,
+      subject: `📦 Dispatched: ${label}`,
+      text: [
+        `Your item has been dispatched: ${label}`,
+        dispatchedAt ? `Dispatched: ${dispatchedAt}` : "",
+        carrierLine,
+        trackingLine,
+        noteLine,
+        "",
+        `Track your order progress in your dashboard:`,
+        dashLink,
+        "",
+        `— AuctionMyCamera Team`,
+      ]
+        .filter(Boolean)
+        .join("\n"),
+      html: `
+        <p>Your item has been dispatched: <strong>${esc(label)}</strong></p>
+        ${dispatchedAt ? `<p><strong>Dispatched:</strong> ${esc(dispatchedAt)}</p>` : ""}
+        ${carrier ? `<p><strong>Carrier:</strong> ${esc(carrier)}</p>` : ""}
+        ${tracking ? `<p><strong>Tracking:</strong> ${esc(tracking)}</p>` : ""}
+        ${note ? `<p><strong>Note:</strong> ${esc(note)}</p>` : ""}
+        <p><a href="${esc(dashLink)}" target="_blank" rel="noopener noreferrer">View in your dashboard</a></p>
+        <p>— AuctionMyCamera Team</p>
+      `,
+    });
+  }
+
+  // Admin notification (optional)
+  if (ADMIN_EMAIL && isValidEmail(ADMIN_EMAIL)) {
+    await mailer.sendMail({
+      from,
+      to: ADMIN_EMAIL,
+      subject: `📦 Dispatched: ${label}`,
+      text: [
+        `A seller marked an item as dispatched.`,
+        "",
+        `Item: ${label}`,
+        `TX: ${String(tx?.$id || "")}`,
+        sellerEmail ? `Seller: ${sellerEmail}` : "",
+        buyerEmail ? `Buyer: ${buyerEmail}` : "",
+        dispatchedAt ? `Dispatched: ${dispatchedAt}` : "",
+        carrierLine,
+        trackingLine,
+        noteLine,
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    });
+  }
+
+  // (Optional) seller confirmation email — not essential; skip for now to reduce noise.
+  return { sent: true };
+}
 
 // -----------------------------
 // Helpers
@@ -203,7 +362,21 @@ export async function POST(req: Request) {
 
     const updated = await updateDocSchemaTolerant(databases, TX_DB_ID, TX_COLLECTION_ID, txId, updatePayload);
 
-    return NextResponse.json({ ok: true, transaction: updated }, { status: 200 });
+    // ✅ Dispatch confirmation emails (best-effort, non-blocking)
+    let emailResult: any = { sent: false };
+    try {
+      emailResult = await sendDispatchEmails({
+        tx: updated,
+        carrier,
+        tracking,
+        note,
+      });
+    } catch (e) {
+      console.error("[transactions/mark-dispatched] dispatch email error:", e);
+      emailResult = { sent: false, error: "email_failed" };
+    }
+
+    return NextResponse.json({ ok: true, transaction: updated, dispatchEmail: emailResult }, { status: 200 });
   } catch (err: any) {
     const msg = String(err?.message || "");
     const status = /Not authenticated|Invalid session|auth/i.test(msg) ? 401 : 500;

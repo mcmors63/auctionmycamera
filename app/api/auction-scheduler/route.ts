@@ -80,6 +80,11 @@ function cronAuthed(req: NextRequest) {
 const stripeSecret = (process.env.STRIPE_SECRET_KEY || "").trim();
 const stripe = stripeSecret ? new Stripe(stripeSecret) : null;
 
+// ✅ SAFETY SWITCH (prevents real charges while testing)
+const DISABLE_WINNER_CHARGES =
+  (process.env.DISABLE_WINNER_CHARGES || "").trim() === "1" ||
+  (process.env.DISABLE_WINNER_CHARGES || "").trim().toLowerCase() === "true";
+
 // -----------------------------
 // EMAIL
 // -----------------------------
@@ -214,6 +219,52 @@ function getListingLabel(listing: any) {
 }
 
 // -----------------------------
+// Delivery formatting (seller email)
+// -----------------------------
+function safeTrim(v: any) {
+  return typeof v === "string" ? v.trim() : "";
+}
+
+function buildDeliveryBlock(profile: any) {
+  const first = safeTrim(profile?.first_name);
+  const last = safeTrim(profile?.surname);
+  const phone = safeTrim(profile?.phone);
+
+  const house = safeTrim(profile?.house);
+  const street = safeTrim(profile?.street);
+  const town = safeTrim(profile?.town);
+  const county = safeTrim(profile?.county);
+  const postcode = safeTrim(profile?.postcode);
+
+  const nameLine = [first, last].filter(Boolean).join(" ").trim();
+
+  const lines = [
+    nameLine || "",
+    house || "",
+    street || "",
+    town || "",
+    county || "",
+    postcode || "",
+    phone ? `Phone: ${phone}` : "",
+  ].filter(Boolean);
+
+  const hasUsable =
+    !!(house || street || town || postcode || nameLine || phone);
+
+  return {
+    hasUsable,
+    text: hasUsable ? lines.join("\n") : "",
+    html:
+      hasUsable
+        ? `<div style="margin-top:12px;padding:12px;border:1px solid #e5e7eb;border-radius:12px;background:#fafafa">
+             <p style="margin:0 0 8px 0"><strong>Buyer delivery details</strong></p>
+             <div style="white-space:pre-line;line-height:1.5">${esc(lines.join("\n"))}</div>
+           </div>`
+        : "",
+  };
+}
+
+// -----------------------------
 // Stripe helper: pick default PM first
 // -----------------------------
 async function pickPaymentMethodForCustomer(customerId: string) {
@@ -343,6 +394,67 @@ async function createTransactionForWinner(params: {
   }
 }
 
+// ✅ NEW: create a payment-failed transaction (best-effort + schema tolerant)
+async function createPaymentFailedTransaction(params: {
+  databases: Databases;
+  listing: any;
+  finalBidAmount: number; // GBP
+  winnerEmail: string;
+  winnerUserId: string | null;
+  paymentIntentId?: string;
+  reason: string;
+  buyerProfile?: any;
+}) {
+  const { databases, listing, finalBidAmount, winnerEmail, winnerUserId, paymentIntentId, reason, buyerProfile } =
+    params;
+
+  if (!TRANSACTIONS_COLLECTION_ID) return null;
+
+  const nowIso = new Date().toISOString();
+  const listingId = String(listing.$id || "");
+  const label = getListingLabel(listing);
+  const sellerEmail = String(listing.seller_email || listing.sellerEmail || "").trim();
+
+  const delivery = {
+    delivery_first_name: buyerProfile?.first_name || "",
+    delivery_surname: buyerProfile?.surname || "",
+    delivery_house: buyerProfile?.house || "",
+    delivery_street: buyerProfile?.street || "",
+    delivery_town: buyerProfile?.town || "",
+    delivery_county: buyerProfile?.county || "",
+    delivery_postcode: buyerProfile?.postcode || "",
+    delivery_phone: buyerProfile?.phone || "",
+  };
+
+  const data: Record<string, any> = {
+    listing_id: listingId,
+    seller_email: sellerEmail,
+    buyer_email: winnerEmail,
+    buyer_id: winnerUserId,
+
+    sale_price: Math.round(finalBidAmount),
+
+    payment_status: "unpaid",
+    transaction_status: "payment_failed",
+
+    created_at: nowIso,
+    registration: label,
+
+    stripe_payment_intent_id: paymentIntentId || "",
+    payment_failure_reason: reason,
+
+    ...delivery,
+  };
+
+  try {
+    const doc = await databases.createDocument(DB_ID, TRANSACTIONS_COLLECTION_ID, ID.unique(), data);
+    return doc as any;
+  } catch (err) {
+    console.warn("Could not create payment_failed transaction (schema may not allow fields).", err);
+    return null;
+  }
+}
+
 // -----------------------------
 // Emails after successful charge
 // -----------------------------
@@ -353,8 +465,9 @@ async function sendWinnerEmails(params: {
   sellerEmail: string;
   finalBidAmount: number;
   paymentIntentId: string;
+  buyerProfile?: any; // ✅ added
 }) {
-  const { mailer, listing, winnerEmail, sellerEmail, finalBidAmount, paymentIntentId } = params;
+  const { mailer, listing, winnerEmail, sellerEmail, finalBidAmount, paymentIntentId, buyerProfile } = params;
 
   const label = getListingLabel(listing);
   const amountLabel = `£${finalBidAmount.toLocaleString("en-GB", {
@@ -368,7 +481,7 @@ async function sendWinnerEmails(params: {
 
   const from = { name: FROM_NAME, address: FROM_ADDRESS };
 
-  // Buyer
+  // Buyer (unchanged)
   if (isValidEmail(winnerEmail) && isValidEmail(FROM_ADDRESS)) {
     await mailer.sendMail({
       from,
@@ -408,8 +521,10 @@ async function sendWinnerEmails(params: {
     });
   }
 
-  // Seller
+  // Seller (✅ now includes delivery details when available)
   if (isValidEmail(sellerEmail) && isValidEmail(FROM_ADDRESS)) {
+    const delivery = buildDeliveryBlock(buyerProfile);
+
     await mailer.sendMail({
       from,
       to: sellerEmail,
@@ -418,6 +533,8 @@ async function sendWinnerEmails(params: {
         `Good news — your item has sold: ${label}`,
         ``,
         `Buyer payment received: ${amountLabel}`,
+        ``,
+        delivery.hasUsable ? `Buyer delivery details:\n${delivery.text}` : `Buyer delivery details: (not available — buyer must update profile)`,
         ``,
         `Next steps:`,
         `1) Prepare your item for dispatch.`,
@@ -431,6 +548,7 @@ async function sendWinnerEmails(params: {
       html: `
         <p>Good news — your item has sold: <strong>${esc(label)}</strong></p>
         <p><strong>Buyer payment received:</strong> ${esc(amountLabel)}</p>
+        ${delivery.hasUsable ? delivery.html : `<p><strong>Buyer delivery details:</strong> <span style="color:#6b7280">Not available — buyer must update their profile.</span></p>`}
         <p><strong>Next steps</strong></p>
         <ol>
           <li>Prepare your item for dispatch.</li>
@@ -466,7 +584,7 @@ async function sendWinnerEmails(params: {
 }
 
 // -----------------------------
-// NEW: Emails when winner payment fails / requires card
+// Emails when winner payment fails / requires card
 // -----------------------------
 async function sendPaymentRequiredEmails(params: {
   mailer: nodemailer.Transporter;
@@ -544,6 +662,9 @@ async function sendPaymentRequiredEmails(params: {
       ].join("\n"),
     });
   }
+
+  // (Optional) Seller notice — keep OFF by default to avoid confusion
+  // If you want this, tell me and we’ll wire it properly.
 }
 
 // -----------------------------
@@ -574,8 +695,10 @@ export async function GET(req: NextRequest) {
     const nowIso = now.toISOString();
     const nowTs = now.getTime();
 
+    const mailer = getMailer();
+
     // ---------------------------------
-    // 1) Promote queued -> live
+    // 1) Promote queued -> live (and repair missing dates)
     // ---------------------------------
     const queuedDocs = await listAllDocs({
       databases,
@@ -587,13 +710,40 @@ export async function GET(req: NextRequest) {
     });
 
     let promoted = 0;
+    let repairedQueuedDates = 0;
 
     for (const doc of queuedDocs as any[]) {
-      const startTs = parseTimestamp(doc.auction_start);
-      if (!startTs) continue;
+      const lid = String(doc.$id || "");
+
+      let startTs = parseTimestamp(doc.auction_start);
+      let endTs = parseTimestamp(doc.auction_end);
+
+      // ✅ If dates are missing, assign them from the current/next auction window
+      if (!startTs || !endTs) {
+        const { currentStart, currentEnd, nextStart, nextEnd, now: wnNow } = getAuctionWindow();
+        const useNext = wnNow.getTime() > currentEnd.getTime();
+
+        const start = useNext ? nextStart : currentStart;
+        const end = useNext ? nextEnd : currentEnd;
+
+        try {
+          await databases.updateDocument(DB_ID, LISTINGS_COLLECTION_ID, lid, {
+            auction_start: start.toISOString(),
+            auction_end: end.toISOString(),
+          });
+          repairedQueuedDates++;
+          startTs = start.getTime();
+          endTs = end.getTime();
+        } catch {
+          // If we can't write, skip promotion
+          continue;
+        }
+      }
+
+      // Only promote when it is time
       if (startTs > nowTs) continue;
 
-      await databases.updateDocument(DB_ID, LISTINGS_COLLECTION_ID, doc.$id, { status: "live" });
+      await databases.updateDocument(DB_ID, LISTINGS_COLLECTION_ID, lid, { status: "live" });
       promoted++;
     }
 
@@ -615,7 +765,6 @@ export async function GET(req: NextRequest) {
     let relistEmailsSent = 0;
 
     const justCompletedForCharging: any[] = [];
-    const mailer = getMailer();
 
     for (const doc of liveToEndDocs as any[]) {
       const lid = doc.$id as string;
@@ -690,11 +839,27 @@ End:   ${fmtLondon(end)}
     // ---------------------------------
     // 3) Charge winners for completed listings only
     // ---------------------------------
+    if (DISABLE_WINNER_CHARGES) {
+      return NextResponse.json({
+        ok: true,
+        now: nowIso,
+        promoted,
+        repairedQueuedDates,
+        completed,
+        markedNotSold,
+        relisted,
+        relistEmailsSent,
+        winnerCharges: [],
+        note: "DISABLE_WINNER_CHARGES is enabled — skipped winner charging.",
+      });
+    }
+
     if (!stripe || !BIDS_COLLECTION_ID) {
       return NextResponse.json({
         ok: true,
         now: nowIso,
         promoted,
+        repairedQueuedDates,
         completed,
         markedNotSold,
         relisted,
@@ -746,8 +911,12 @@ End:   ${fmtLondon(end)}
         continue;
       }
 
-      // Sort by timestamp desc (your intent)
-      bids.sort((a, b) => parseTimestamp(b.timestamp) - parseTimestamp(a.timestamp));
+      // Prefer your timestamp if present; otherwise fall back to $createdAt
+      bids.sort((a, b) => {
+        const bt = parseTimestamp(b.timestamp) || parseTimestamp(b.$createdAt);
+        const at = parseTimestamp(a.timestamp) || parseTimestamp(a.$createdAt);
+        return bt - at;
+      });
 
       const winningBid = bids[0];
       const rawAmount = winningBid.amount !== undefined ? winningBid.amount : winningBid.bid_amount;
@@ -770,6 +939,29 @@ End:   ${fmtLondon(end)}
       const totalToCharge = finalBidAmount; // cameras: no extra fee
       const amountInPence = Math.round(totalToCharge * 100);
 
+      // ✅ Load buyer profile snapshot early (so even failure transactions can include it)
+      let buyerProfile: any = null;
+      if ((winnerUserId || winnerEmail) && PROFILES_COLLECTION_ID) {
+        if (winnerUserId) {
+          try {
+            buyerProfile = await databases.getDocument(DB_ID, PROFILES_COLLECTION_ID, winnerUserId);
+          } catch {
+            buyerProfile = null;
+          }
+        }
+        if (!buyerProfile && winnerEmail) {
+          try {
+            const found = await databases.listDocuments(DB_ID, PROFILES_COLLECTION_ID, [
+              Query.equal("email", winnerEmail),
+              Query.limit(1),
+            ]);
+            buyerProfile = found.documents[0] || null;
+          } catch {
+            buyerProfile = null;
+          }
+        }
+      }
+
       try {
         const existing = await stripe.customers.list({ email: winnerEmail, limit: 10 });
         let customer = existing.data[0];
@@ -777,7 +969,7 @@ End:   ${fmtLondon(end)}
 
         const paymentMethod = await pickPaymentMethodForCustomer(customer.id);
 
-        // ✅ NEW: handle “no saved card”
+        // ✅ handle “no saved card”
         if (!paymentMethod) {
           try {
             await databases.updateDocument(DB_ID, LISTINGS_COLLECTION_ID, lid, {
@@ -787,6 +979,17 @@ End:   ${fmtLondon(end)}
               buyer_id: winnerUserId,
             });
           } catch {}
+
+          // Create payment-failed transaction (best-effort)
+          const txFail = await createPaymentFailedTransaction({
+            databases,
+            listing,
+            finalBidAmount,
+            winnerEmail,
+            winnerUserId,
+            reason: "No saved card on file.",
+            buyerProfile,
+          });
 
           try {
             const sellerEmail = String(listing.seller_email || listing.sellerEmail || "").trim();
@@ -807,11 +1010,11 @@ End:   ${fmtLondon(end)}
             charged: false,
             reason: "winner has no saved card",
             winnerEmail,
+            transactionId: txFail?.$id || null,
           });
           continue;
         }
 
-        // ✅ Harden idempotency: include amount so we don't collide if totals change
         const idempotencyKey = `winner-charge-${lid}-${amountInPence}`;
 
         const label = getListingLabel(listing);
@@ -848,6 +1051,17 @@ End:   ${fmtLondon(end)}
             });
           } catch {}
 
+          const txFail = await createPaymentFailedTransaction({
+            databases,
+            listing,
+            finalBidAmount,
+            winnerEmail,
+            winnerUserId,
+            paymentIntentId: intent.id,
+            reason: `Stripe status: ${intent.status}`,
+            buyerProfile,
+          });
+
           try {
             const sellerEmail = String(listing.seller_email || listing.sellerEmail || "").trim();
             if (mailer && isValidEmail(FROM_ADDRESS)) {
@@ -869,27 +1083,9 @@ End:   ${fmtLondon(end)}
             paymentIntentId: intent.id,
             paymentStatus: intent.status,
             reason: `PaymentIntent not succeeded (status: ${intent.status})`,
+            transactionId: txFail?.$id || null,
           });
           continue;
-        }
-
-        // ✅ Load buyer profile snapshot (for delivery address snapshot)
-        let buyerProfile: any = null;
-
-        if (winnerUserId && PROFILES_COLLECTION_ID) {
-          try {
-            buyerProfile = await databases.getDocument(DB_ID, PROFILES_COLLECTION_ID, winnerUserId);
-          } catch {
-            try {
-              const found = await databases.listDocuments(DB_ID, PROFILES_COLLECTION_ID, [
-                Query.equal("email", winnerEmail),
-                Query.limit(1),
-              ]);
-              buyerProfile = found.documents[0] || null;
-            } catch {
-              buyerProfile = null;
-            }
-          }
         }
 
         // Update listing doc (best-effort)
@@ -925,7 +1121,7 @@ End:   ${fmtLondon(end)}
           buyerProfile,
         });
 
-        // Emails — only after succeeded
+        // Emails — only after succeeded (✅ seller email now includes delivery)
         try {
           const sellerEmail = String(listing.seller_email || listing.sellerEmail || "").trim();
           if (mailer && isValidEmail(FROM_ADDRESS)) {
@@ -936,6 +1132,7 @@ End:   ${fmtLondon(end)}
               sellerEmail,
               finalBidAmount,
               paymentIntentId: intent.id,
+              buyerProfile, // ✅ pass through
             });
           }
         } catch (mailErr) {
@@ -962,8 +1159,25 @@ End:   ${fmtLondon(end)}
           await databases.updateDocument(DB_ID, LISTINGS_COLLECTION_ID, lid, {
             sale_status: "payment_failed",
             payment_status: "unpaid",
+            buyer_email: winnerEmail,
+            buyer_id: winnerUserId,
           });
         } catch {}
+
+        const anyErr = err as any;
+        const piId =
+          anyErr?.raw?.payment_intent?.id || anyErr?.payment_intent?.id || anyErr?.paymentIntentId || "";
+
+        const txFail = await createPaymentFailedTransaction({
+          databases,
+          listing,
+          finalBidAmount,
+          winnerEmail,
+          winnerUserId,
+          paymentIntentId: piId || "",
+          reason: err?.message || "Stripe error charging winner.",
+          buyerProfile,
+        });
 
         try {
           const sellerEmail = String(listing.seller_email || listing.sellerEmail || "").trim();
@@ -979,20 +1193,14 @@ End:   ${fmtLondon(end)}
           }
         } catch {}
 
-        const entry: any = {
+        winnerCharges.push({
           listingId: lid,
           charged: false,
           winnerEmail,
           error: err?.message || "Stripe charge failed.",
-        };
-
-        const anyErr = err as any;
-        if (anyErr?.raw?.payment_intent) {
-          entry.paymentIntentId = anyErr.raw.payment_intent.id;
-          entry.paymentStatus = anyErr.raw.payment_intent.status;
-        }
-
-        winnerCharges.push(entry);
+          paymentIntentId: piId || undefined,
+          transactionId: txFail?.$id || null,
+        });
       }
     }
 
@@ -1000,6 +1208,7 @@ End:   ${fmtLondon(end)}
       ok: true,
       now: nowIso,
       promoted,
+      repairedQueuedDates,
       completed,
       markedNotSold,
       relisted,
