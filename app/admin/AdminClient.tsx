@@ -1,3 +1,4 @@
+// app/admin/AdminClient.tsx
 "use client";
 
 import { useEffect, useState } from "react";
@@ -113,6 +114,12 @@ function safeNumber(v: any): number | null {
   const n = typeof v === "number" ? v : Number(v);
   if (!Number.isFinite(n)) return null;
   return n;
+}
+
+function trimReason(s: string) {
+  const v = String(s || "").trim();
+  if (!v) return "";
+  return v.length > 800 ? v.slice(0, 800) + "…" : v;
 }
 
 export default function AdminClient() {
@@ -235,6 +242,7 @@ export default function AdminClient() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           listingId: selectedListing.$id,
+          // server will fetch truth anyway; keep for backwards compatibility
           sellerEmail: selectedListing.seller_email || selectedListing.sellerEmail,
           interesting_fact: selectedListing.admin_notes || selectedListing.interesting_fact || "",
           starting_price: Number(selectedListing.starting_price) || 0,
@@ -264,22 +272,30 @@ export default function AdminClient() {
   };
 
   // ------------------------------------------------------
-  // REJECT LISTING
+  // REJECT LISTING (now with reason)
   // ------------------------------------------------------
   const rejectListing = async (doc: any) => {
     if (!doc) return;
 
     const title = getListingTitle(doc);
-    if (!window.confirm(`Are you sure you want to reject "${title}"?`)) return;
+
+    const reasonInput = window.prompt(
+      `Reject "${title}" — add a short reason for the seller (recommended):`,
+      ""
+    );
+
+    // If they hit cancel, abort. If they submit empty, we still allow reject.
+    if (reasonInput === null) return;
+
+    const reason = trimReason(reasonInput);
 
     try {
       const res = await fetch("/api/admin/reject-listing", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          plateId: doc.$id,
-          registration: title,
-          sellerEmail: doc.seller_email || doc.sellerEmail,
+          listingId: doc.$id,
+          reason,
         }),
       });
 
@@ -303,7 +319,7 @@ export default function AdminClient() {
         throw new Error(data?.error || "Failed to reject listing.");
       }
 
-      setMessage(`Listing "${title}" rejected.`);
+      setMessage(`Listing "${title}" rejected.${reason ? " (Reason sent)" : ""}`);
       setSelectedListing(null);
 
       const statusFilter = activeTab === "pending" ? "pending_approval" : activeTab;
@@ -321,13 +337,31 @@ export default function AdminClient() {
   };
 
   // ------------------------------------------------------
-  // DELETE LISTING
+  // DELETE LISTING (server-only)
   // ------------------------------------------------------
   const deleteListing = async (id: string) => {
-    if (!confirm("Delete this listing?")) return;
+    if (!confirm("Delete this listing? This cannot be undone.")) return;
 
     try {
-      await databases.deleteDocument(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, id);
+      setLoading(true);
+
+      const res = await fetch("/api/admin/delete-listing", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ listingId: id }),
+      });
+
+      let data: any = null;
+      try {
+        data = await res.json();
+      } catch (e) {
+        console.error("delete-listing: failed to parse JSON", e);
+      }
+
+      if (!res.ok || data?.error) {
+        console.error("delete-listing error:", { status: res.status, statusText: res.statusText, data });
+        throw new Error(data?.error || "Failed to delete listing.");
+      }
 
       const statusFilter = activeTab === "pending" ? "pending_approval" : activeTab;
 
@@ -339,9 +373,11 @@ export default function AdminClient() {
 
       setListings(updated.documents);
       setMessage("Listing deleted.");
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      alert("Failed to delete listing.");
+      alert(err.message || "Failed to delete listing.");
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -498,8 +534,7 @@ export default function AdminClient() {
                     : "";
 
                 const listingIdDisplay =
-                  String(doc?.listing_id || "").trim() ||
-                  `AMC-${String(doc.$id).slice(-6).toUpperCase()}`;
+                  String(doc?.listing_id || "").trim() || `AMC-${String(doc.$id).slice(-6).toUpperCase()}`;
 
                 return (
                   <div key={doc.$id} className="border rounded-xl p-5 bg-neutral-50 shadow-sm mt-5">

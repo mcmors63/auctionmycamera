@@ -35,7 +35,10 @@ const LISTINGS_COLLECTION_ID =
   process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_COLLECTION_ID ||
   "listings";
 
-const SITE_URL = (process.env.NEXT_PUBLIC_SITE_URL || "https://auctionmycamera.co.uk").replace(/\/+$/, "");
+const SITE_URL = (process.env.NEXT_PUBLIC_SITE_URL || "https://auctionmycamera.co.uk").replace(
+  /\/+$/,
+  ""
+);
 
 // ----- Email -----
 function getMailer() {
@@ -74,6 +77,26 @@ function getServerDatabases() {
   return new Databases(client);
 }
 
+function escapeHtml(input: unknown) {
+  return String(input ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+function has(obj: any, key: string) {
+  return obj && Object.prototype.hasOwnProperty.call(obj, key);
+}
+
+function cleanReason(v: any) {
+  const s = String(v ?? "").trim();
+  // avoid silly huge blobs
+  if (!s) return "";
+  return s.length > 800 ? s.slice(0, 800) + "…" : s;
+}
+
 // Schema-tolerant update: remove unknown keys and retry
 async function updateDocSchemaTolerant(
   databases: Databases,
@@ -84,7 +107,7 @@ async function updateDocSchemaTolerant(
 ) {
   const data: Record<string, any> = { ...payload };
 
-  for (let i = 0; i < 8; i++) {
+  for (let i = 0; i < 10; i++) {
     try {
       return await databases.updateDocument(dbId, colId, docId, data);
     } catch (err: any) {
@@ -98,6 +121,7 @@ async function updateDocSchemaTolerant(
     }
   }
 
+  // last resort
   return await databases.updateDocument(dbId, colId, docId, { status: payload.status });
 }
 
@@ -139,16 +163,45 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Invalid JSON body." }, { status: 400 });
     }
 
-    // ✅ Accept both legacy and camera naming
-    const listingId = body?.plateId || body?.listingId || body?.id;
-    const sellerEmail = String(body?.sellerEmail || body?.seller_email || "").trim();
-    const title = String(body?.registration || body?.title || body?.itemTitle || "your listing").trim();
+    // ✅ Accept both legacy and newer naming
+    const listingId = body?.listingId || body?.plateId || body?.id;
+    const reason = cleanReason(body?.reason || body?.rejection_reason || body?.rejectionReason);
 
-    if (!listingId || !sellerEmail) {
-      return NextResponse.json(
-        { error: "Missing listingId (or plateId) or sellerEmail" },
-        { status: 400 }
-      );
+    if (!listingId) {
+      return NextResponse.json({ error: "Missing listingId (or plateId)." }, { status: 400 });
+    }
+
+    // ✅ Pull truth from DB (seller email/title should come from the listing)
+    let listing: any;
+    try {
+      listing = await databases.getDocument(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, listingId);
+    } catch (e) {
+      console.error("reject-listing: getDocument failed:", e);
+      return NextResponse.json({ error: "Listing not found" }, { status: 404 });
+    }
+
+    const sellerEmail = String(listing?.seller_email || listing?.sellerEmail || "").trim();
+    if (!sellerEmail) {
+      // We still reject, but note this is unusual
+      console.warn("reject-listing: listing has no seller email:", listingId);
+    }
+
+    const title =
+      String(listing?.item_title || listing?.title || "").trim() ||
+      [listing?.brand, listing?.model].filter(Boolean).join(" ").trim() ||
+      "your listing";
+
+    // ✅ Schema-tolerant update payload (store reason if possible)
+    const payload: Record<string, any> = {
+      status: "rejected",
+    };
+
+    // Only attempt to write a reason field if the listing schema has something compatible,
+    // otherwise schema-tolerant update will strip it safely.
+    if (reason) {
+      if (has(listing, "rejection_reason")) payload.rejection_reason = reason;
+      else if (has(listing, "rejectionReason")) payload.rejectionReason = reason;
+      else payload.rejection_reason = reason; // safe: schema-tolerant will drop if unknown
     }
 
     const updated = await updateDocSchemaTolerant(
@@ -156,14 +209,25 @@ export async function POST(req: NextRequest) {
       LISTINGS_DB_ID,
       LISTINGS_COLLECTION_ID,
       listingId,
-      { status: "rejected" }
+      payload
     );
 
     // Best-effort email
     try {
       const mailer = getMailer();
-      if (mailer) {
+      if (mailer && sellerEmail) {
         const { transporter, fromEmail, replyTo } = mailer;
+
+        const reasonBlock = reason
+          ? `
+            <div style="margin-top:14px; padding:12px; border:1px solid #eee; border-radius:10px; background:#fafafa;">
+              <p style="margin:0 0 6px 0; font-weight:700; color:#333;">Reason</p>
+              <p style="margin:0; color:#444; line-height:1.5; white-space:pre-line;">${escapeHtml(
+                reason
+              )}</p>
+            </div>
+          `
+          : "";
 
         await transporter.sendMail({
           from: `"AuctionMyCamera" <${fromEmail}>`,
@@ -173,17 +237,25 @@ export async function POST(req: NextRequest) {
           html: `
             <div style="font-family: Arial, sans-serif; max-width: 640px; margin: 0 auto; padding: 24px;">
               <h1 style="color:#cc0000; font-size:22px; margin: 0 0 14px 0;">Listing not approved</h1>
+
               <p style="font-size:15px; color:#333; line-height:1.5;">
                 We’ve reviewed <strong>${escapeHtml(title)}</strong>, and unfortunately it hasn’t been approved for auction at this time.
               </p>
+
+              ${reasonBlock}
+
               <p style="font-size:14px; color:#555; margin-top:16px; line-height:1.5;">
-                If you believe this is an error or you’d like more information, reply to this email or contact us at
-                <a href="mailto:${escapeHtml(replyTo)}" style="color:#1a73e8;">${escapeHtml(replyTo)}</a>.
+                If you’d like more information, reply to this email or contact us at
+                <a href="mailto:${escapeHtml(replyTo)}" style="color:#1a73e8;">${escapeHtml(
+            replyTo
+          )}</a>.
               </p>
+
               <p style="font-size:14px; color:#555; margin-top:16px; line-height:1.5;">
                 You can view your dashboard here:<br/>
                 <a href="${SITE_URL}/dashboard" style="color:#1a73e8;">${SITE_URL}/dashboard</a>
               </p>
+
               <hr style="margin:24px 0;border:none;border-top:1px solid #ddd;" />
               <p style="font-size:12px; color:#777; margin:0;">AuctionMyCamera © ${new Date().getFullYear()}</p>
             </div>
@@ -197,18 +269,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, listing: updated });
   } catch (err: any) {
     console.error("reject-listing error:", err);
-    return NextResponse.json(
-      { error: err?.message || "Failed to reject listing" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: err?.message || "Failed to reject listing" }, { status: 500 });
   }
-}
-
-function escapeHtml(input: string) {
-  return String(input || "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#039;");
 }
