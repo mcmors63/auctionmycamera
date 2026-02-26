@@ -308,6 +308,9 @@ export default function DashboardPage() {
     Record<string, { carrier: string; tracking: string; note: string; saving: boolean; error: string }>
   >({});
 
+  // ✅ Withdraw state (queued listings)
+  const [withdrawingId, setWithdrawingId] = useState<string | null>(null);
+
   const userEmail = user?.email ?? null;
 
   // -----------------------------
@@ -357,6 +360,37 @@ export default function DashboardPage() {
   const historyListings = useMemo(() => {
     return allListings.filter((l) => isHistoryStatus(l.status));
   }, [allListings]);
+
+  // -----------------------------
+  // Helper: refresh listings for current user
+  // -----------------------------
+  async function refreshMyListings(email: string) {
+    const results: Listing[] = [];
+
+    try {
+      const r1 = await databases.listDocuments(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, [
+        Query.equal("seller_email", email),
+      ]);
+      results.push(...((r1.documents || []) as any));
+    } catch {}
+
+    try {
+      const r2 = await databases.listDocuments(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, [
+        Query.equal("sellerEmail", email),
+      ]);
+      results.push(...((r2.documents || []) as any));
+    } catch {}
+
+    const byId = new Map<string, Listing>();
+    for (const d of results) if (d?.$id && !byId.has(d.$id)) byId.set(d.$id, d);
+
+    const docs = Array.from(byId.values());
+
+    setAllListings(docs);
+    setAwaitingListings(docs.filter((l) => isAwaitingStatus(l.status)));
+    setQueuedListings(docs.filter((l) => isQueuedStatus(l.status)));
+    setLiveListings(docs.filter((l) => isLiveStatus(l.status)));
+  }
 
   // -----------------------------
   // Load dashboard (auth gated)
@@ -438,35 +472,9 @@ export default function DashboardPage() {
         }
       }
 
-      // 3) LISTINGS (seller_email or sellerEmail)
+      // 3) LISTINGS
       try {
-        const results: Listing[] = [];
-
-        try {
-          const r1 = await databases.listDocuments(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, [
-            Query.equal("seller_email", current.email),
-          ]);
-          results.push(...((r1.documents || []) as any));
-        } catch {}
-
-        try {
-          const r2 = await databases.listDocuments(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, [
-            Query.equal("sellerEmail", current.email),
-          ]);
-          results.push(...((r2.documents || []) as any));
-        } catch {}
-
-        const byId = new Map<string, Listing>();
-        for (const d of results) if (d?.$id && !byId.has(d.$id)) byId.set(d.$id, d);
-
-        const docs = Array.from(byId.values());
-
-        if (!cancelled) {
-          setAllListings(docs);
-          setAwaitingListings(docs.filter((l) => isAwaitingStatus(l.status)));
-          setQueuedListings(docs.filter((l) => isQueuedStatus(l.status)));
-          setLiveListings(docs.filter((l) => isLiveStatus(l.status)));
-        }
+        await refreshMyListings(current.email);
       } catch (e) {
         console.error("Listings load failed:", e);
         if (!cancelled) setBannerError("Failed to load your listings. Please refresh.");
@@ -513,7 +521,7 @@ export default function DashboardPage() {
   }, [router]);
 
   // -----------------------------
-  // Auto logout after 10 minutes (comment said 5; code was 10)
+  // Auto logout after 10 minutes
   // -----------------------------
   useEffect(() => {
     let timeout: any;
@@ -630,6 +638,33 @@ export default function DashboardPage() {
   // Transaction action helper (JWT-auth)
   // -----------------------------
   async function postTxAction(path: string, body: any) {
+    const jwt = await account.createJWT();
+    const token = (jwt as any)?.jwt || "";
+
+    if (!token) {
+      throw new Error("Could not create auth token. Please log out and log in again.");
+    }
+
+    const res = await fetch(path, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(body || {}),
+    });
+
+    const data = await res.json().catch(() => ({} as any));
+    if (!res.ok || data?.ok === false) {
+      throw new Error(data?.error || "Request failed.");
+    }
+    return data;
+  }
+
+  // -----------------------------
+  // Listing action helper (JWT-auth)
+  // -----------------------------
+  async function postListingAction(path: string, body: any) {
     const jwt = await account.createJWT();
     const token = (jwt as any)?.jwt || "";
 
@@ -887,28 +922,7 @@ export default function DashboardPage() {
 
       // Refresh listings
       try {
-        const results: Listing[] = [];
-        try {
-          const r1 = await databases.listDocuments(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, [
-            Query.equal("seller_email", user.email),
-          ]);
-          results.push(...((r1.documents || []) as any));
-        } catch {}
-        try {
-          const r2 = await databases.listDocuments(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, [
-            Query.equal("sellerEmail", user.email),
-          ]);
-          results.push(...((r2.documents || []) as any));
-        } catch {}
-
-        const byId = new Map<string, Listing>();
-        for (const d of results) if (d?.$id && !byId.has(d.$id)) byId.set(d.$id, d);
-
-        const docs = Array.from(byId.values());
-        setAllListings(docs);
-        setAwaitingListings(docs.filter((l) => isAwaitingStatus(l.status)));
-        setQueuedListings(docs.filter((l) => isQueuedStatus(l.status)));
-        setLiveListings(docs.filter((l) => isLiveStatus(l.status)));
+        await refreshMyListings(user.email);
       } catch {}
 
       alert("Listing submitted! Awaiting approval.");
@@ -940,6 +954,41 @@ export default function DashboardPage() {
       setSellSubmitting(false);
     }
   };
+
+  // -----------------------------
+  // Withdraw queued listing (server route)
+  // -----------------------------
+  async function withdrawQueuedListing(listingId: string) {
+    if (!user?.email) return;
+
+    const listing = queuedListings.find((x) => x.$id === listingId);
+    const title = listing ? listingTitle(listing) : "this listing";
+
+    const sure = window.confirm(
+      `Withdraw "${title}" from the upcoming auction?\n\nThis will remove it from the queued auction cycle.`
+    );
+    if (!sure) return;
+
+    const reason = (window.prompt("Optional reason (shown to admin only if stored):", "") || "").trim();
+
+    try {
+      setBannerError("");
+      setBannerSuccess("");
+      setWithdrawingId(listingId);
+
+      await postListingAction("/api/listings/withdraw-queued", {
+        listingId,
+        reason,
+      });
+
+      setBannerSuccess("Withdrawn — it’s no longer queued for auction.");
+      await refreshMyListings(user.email);
+    } catch (e: any) {
+      setBannerError(e?.message || "Failed to withdraw listing.");
+    } finally {
+      setWithdrawingId(null);
+    }
+  }
 
   // -----------------------------
   // Loading screen
@@ -1125,7 +1174,9 @@ export default function DashboardPage() {
                         onChange={(e) => setNewPassword(e.target.value)}
                         className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
                       />
-                      <p className="text-xs text-neutral-500 mt-1">Must include letters &amp; numbers, min 8 characters.</p>
+                      <p className="text-xs text-neutral-500 mt-1">
+                        Must include letters &amp; numbers, min 8 characters.
+                      </p>
                     </div>
 
                     <div>
@@ -1195,7 +1246,9 @@ export default function DashboardPage() {
           <div className="space-y-6">
             <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
               <h2 className={`text-xl font-bold ${accentText}`}>Sell an Item</h2>
-              <p className="text-xs text-neutral-400">Submit your listing for approval. Fees only apply if your item sells.</p>
+              <p className="text-xs text-neutral-400">
+                Submit your listing for approval. Fees only apply if your item sells.
+              </p>
             </div>
 
             {sellError && (
@@ -1322,7 +1375,11 @@ export default function DashboardPage() {
 
                 {sellPhotoPreview && (
                   <div className="mt-3">
-                    <img src={sellPhotoPreview} alt="Preview" className="h-40 rounded-lg border border-neutral-700 object-cover" />
+                    <img
+                      src={sellPhotoPreview}
+                      alt="Preview"
+                      className="h-40 rounded-lg border border-neutral-700 object-cover"
+                    />
                   </div>
                 )}
               </div>
@@ -1342,7 +1399,9 @@ export default function DashboardPage() {
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-neutral-400 mb-1">Starting Price (£) (optional)</label>
+                  <label className="block text-xs font-semibold text-neutral-400 mb-1">
+                    Starting Price (£) (optional)
+                  </label>
                   <input
                     type="number"
                     name="starting_price"
@@ -1354,7 +1413,9 @@ export default function DashboardPage() {
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-neutral-400 mb-1">Buy Now Price (£) (optional)</label>
+                  <label className="block text-xs font-semibold text-neutral-400 mb-1">
+                    Buy Now Price (£) (optional)
+                  </label>
                   <input
                     type="number"
                     name="buy_now"
@@ -1368,7 +1429,9 @@ export default function DashboardPage() {
 
               {/* Fee preview */}
               <div className={`mt-4 p-4 ${accentBgSoft} border ${accentBorder} rounded-md space-y-2`}>
-                <h3 className="text-sm font-semibold text-sky-200">Fees &amp; Expected Return (based on your reserve)</h3>
+                <h3 className="text-sm font-semibold text-sky-200">
+                  Fees &amp; Expected Return (based on your reserve)
+                </h3>
 
                 <p className="text-xs text-neutral-200">
                   <strong>Commission rate:</strong> {commissionRate}% (estimate)
@@ -1380,18 +1443,32 @@ export default function DashboardPage() {
                   <strong>Estimated you receive:</strong> £{formatMoney(expectedReturn)} (based on reserve)
                 </p>
 
-                <p className="text-[11px] text-neutral-400">This is a simple preview. Final commission is based on the final sale price.</p>
+                <p className="text-[11px] text-neutral-400">
+                  This is a simple preview. Final commission is based on the final sale price.
+                </p>
               </div>
 
               {/* Checkboxes */}
               <div className="space-y-2 text-xs text-neutral-300">
                 <label className="flex items-start gap-2">
-                  <input type="checkbox" name="owner_confirmed" checked={sellForm.owner_confirmed} onChange={handleSellChange} className="mt-1 accent-sky-500" />
+                  <input
+                    type="checkbox"
+                    name="owner_confirmed"
+                    checked={sellForm.owner_confirmed}
+                    onChange={handleSellChange}
+                    className="mt-1 accent-sky-500"
+                  />
                   <span>I confirm I own this item (or have authority to sell it) and my description is accurate.</span>
                 </label>
 
                 <label className="flex items-start gap-2">
-                  <input type="checkbox" name="agreed_terms" checked={sellForm.agreed_terms} onChange={handleSellChange} className="mt-1 accent-sky-500" />
+                  <input
+                    type="checkbox"
+                    name="agreed_terms"
+                    checked={sellForm.agreed_terms}
+                    onChange={handleSellChange}
+                    className="mt-1 accent-sky-500"
+                  />
                   <span>
                     I agree to the{" "}
                     <Link href="/terms" className="text-sky-300 underline" target="_blank" rel="noreferrer">
@@ -1402,16 +1479,28 @@ export default function DashboardPage() {
                 </label>
 
                 <label className="flex items-start gap-2">
-                  <input type="checkbox" name="relist_until_sold" checked={sellForm.relist_until_sold} onChange={handleSellChange} className="mt-1 accent-sky-500" />
+                  <input
+                    type="checkbox"
+                    name="relist_until_sold"
+                    checked={sellForm.relist_until_sold}
+                    onChange={handleSellChange}
+                    className="mt-1 accent-sky-500"
+                  />
                   <span>
                     Relist automatically in the next weekly auction if it doesn’t sell.
                     <br />
-                    <span className="text-xs text-neutral-500">You can switch this off later for new listings once we add listing edit controls.</span>
+                    <span className="text-xs text-neutral-500">
+                      You can switch this off later for new listings once we add listing edit controls.
+                    </span>
                   </span>
                 </label>
               </div>
 
-              <button type="submit" disabled={sellSubmitting} className={`mt-2 ${primaryBtn} font-semibold px-6 py-2 rounded-md text-sm disabled:opacity-50`}>
+              <button
+                type="submit"
+                disabled={sellSubmitting}
+                className={`mt-2 ${primaryBtn} font-semibold px-6 py-2 rounded-md text-sm disabled:opacity-50`}
+              >
                 {sellSubmitting ? "Submitting…" : "Submit for approval"}
               </button>
             </form>
@@ -1471,13 +1560,17 @@ export default function DashboardPage() {
         {activeTab === "approvedQueued" && (
           <div className="space-y-4">
             <h2 className={`text-xl font-bold mb-2 ${accentText}`}>Approved / Queued</h2>
-            <p className="text-sm text-neutral-300 mb-1">These listings are approved and queued for the next weekly auction.</p>
+            <p className="text-sm text-neutral-300 mb-1">
+              These listings are approved and queued for the next weekly auction.
+            </p>
             <p className="text-xs text-neutral-400">
               You currently have <strong>{queuedListings.length}</strong> queued.
             </p>
 
             {queuedListings.length === 0 ? (
-              <p className="text-neutral-400 text-sm text-center mt-4">You have no approved listings waiting for the next auction.</p>
+              <p className="text-neutral-400 text-sm text-center mt-4">
+                You have no approved listings waiting for the next auction.
+              </p>
             ) : (
               <div className="grid gap-4 mt-2">
                 {queuedListings.map((l) => (
@@ -1502,18 +1595,21 @@ export default function DashboardPage() {
                         <strong>Starting:</strong> £{toNum(l.starting_price, 0).toLocaleString("en-GB")}
                       </p>
                       <p>
-                        <strong>Buy Now:</strong> {toNum(l.buy_now, 0) > 0 ? `£${toNum(l.buy_now).toLocaleString("en-GB")}` : "Not set"}
+                        <strong>Buy Now:</strong>{" "}
+                        {toNum(l.buy_now, 0) > 0 ? `£${toNum(l.buy_now).toLocaleString("en-GB")}` : "Not set"}
                       </p>
                     </div>
 
                     <div className="mt-3 text-xs text-neutral-400 space-y-1">
                       <p>
                         <strong>Relist setting:</strong>{" "}
-                        {l.relist_until_sold ? "This item will be relisted automatically if it does not sell." : "This item will not be automatically relisted."}
+                        {l.relist_until_sold
+                          ? "This item will be relisted automatically if it does not sell."
+                          : "This item will not be automatically relisted."}
                       </p>
                     </div>
 
-                    <div className="mt-4">
+                    <div className="mt-4 flex flex-wrap gap-2">
                       <a
                         href={`/listing/${l.$id}`}
                         target="_blank"
@@ -1522,6 +1618,16 @@ export default function DashboardPage() {
                       >
                         View public listing
                       </a>
+
+                      <button
+                        type="button"
+                        onClick={() => withdrawQueuedListing(l.$id)}
+                        disabled={withdrawingId === l.$id}
+                        className="inline-flex items-center px-4 py-2 rounded-md bg-rose-900/30 hover:bg-rose-900/40 text-rose-200 text-sm font-semibold border border-rose-700/60 disabled:opacity-50"
+                        title="Withdraw from the upcoming auction"
+                      >
+                        {withdrawingId === l.$id ? "Withdrawing…" : "Withdraw"}
+                      </button>
                     </div>
                   </div>
                 ))}
@@ -1557,20 +1663,25 @@ export default function DashboardPage() {
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm text-neutral-200 mb-2">
                       <p>
                         <strong>Current bid:</strong>{" "}
-                        {typeof l.current_bid === "number" ? `£${l.current_bid.toLocaleString("en-GB")}` : "No bids yet"}
+                        {typeof l.current_bid === "number"
+                          ? `£${l.current_bid.toLocaleString("en-GB")}`
+                          : "No bids yet"}
                       </p>
                       <p>
                         <strong>Reserve:</strong> £{toNum(l.reserve_price).toLocaleString("en-GB")}
                       </p>
                       <p>
-                        <strong>Buy Now:</strong> {toNum(l.buy_now, 0) > 0 ? `£${toNum(l.buy_now).toLocaleString("en-GB")}` : "Not set"}
+                        <strong>Buy Now:</strong>{" "}
+                        {toNum(l.buy_now, 0) > 0 ? `£${toNum(l.buy_now).toLocaleString("en-GB")}` : "Not set"}
                       </p>
                     </div>
 
                     <div className="mt-3 text-xs text-neutral-400 space-y-1">
                       <p>
                         <strong>Relist setting:</strong>{" "}
-                        {l.relist_until_sold ? "This item will be relisted automatically if it does not sell." : "This item will not be automatically relisted."}
+                        {l.relist_until_sold
+                          ? "This item will be relisted automatically if it does not sell."
+                          : "This item will not be automatically relisted."}
                       </p>
                     </div>
 
@@ -1605,7 +1716,9 @@ export default function DashboardPage() {
                   <div key={tx.$id} className="border border-neutral-800 rounded-xl p-4 bg-neutral-900/40 shadow-sm">
                     <div className="flex justify-between items-start mb-2">
                       <div>
-                        <p className={`text-sm font-semibold ${accentText}`}>{tx.registration || tx.listing_id || "Sale"}</p>
+                        <p className={`text-sm font-semibold ${accentText}`}>
+                          {tx.registration || tx.listing_id || "Sale"}
+                        </p>
                         <p className="text-xs text-neutral-400">Buyer: {tx.buyer_email || "Unknown"}</p>
                         <p className="text-xs text-neutral-500">Transaction ID: {tx.$id}</p>
                       </div>
@@ -1647,7 +1760,9 @@ export default function DashboardPage() {
                   <div key={tx.$id} className="border border-neutral-800 rounded-xl p-4 bg-neutral-900/40 shadow-sm">
                     <div className="flex justify-between items-start mb-2">
                       <div>
-                        <p className={`text-sm font-semibold ${accentText}`}>{tx.registration || tx.listing_id || "Purchase"}</p>
+                        <p className={`text-sm font-semibold ${accentText}`}>
+                          {tx.registration || tx.listing_id || "Purchase"}
+                        </p>
                         <p className="text-xs text-neutral-400">Seller: {tx.seller_email || "Unknown"}</p>
                         <p className="text-xs text-neutral-500">Transaction ID: {tx.$id}</p>
                       </div>
@@ -1701,11 +1816,14 @@ export default function DashboardPage() {
                         <strong>Highest bid:</strong> £{toNum(l.current_bid, 0).toLocaleString("en-GB")}
                       </p>
                       <p>
-                        <strong>Auction ended:</strong> {l.auction_end ? new Date(l.auction_end).toLocaleString("en-GB") : "—"}
+                        <strong>Auction ended:</strong>{" "}
+                        {l.auction_end ? new Date(l.auction_end).toLocaleString("en-GB") : "—"}
                       </p>
                     </div>
 
-                    <p className="text-[11px] text-neutral-500 mt-3">Relist controls will be added once the camera relist endpoint is wired up.</p>
+                    <p className="text-[11px] text-neutral-500 mt-3">
+                      Relist controls will be added once the camera relist endpoint is wired up.
+                    </p>
                   </div>
                 ))}
               </div>
@@ -1736,8 +1854,10 @@ export default function DashboardPage() {
                   const txStatusLower = String(tx.transaction_status || "").toLowerCase();
                   const paymentLower = String(tx.payment_status || "").toLowerCase();
 
-                  const isBuyer = String(tx.buyer_email || "").toLowerCase() === String(userEmail || "").toLowerCase();
-                  const isSeller = String(tx.seller_email || "").toLowerCase() === String(userEmail || "").toLowerCase();
+                  const isBuyer =
+                    String(tx.buyer_email || "").toLowerCase() === String(userEmail || "").toLowerCase();
+                  const isSeller =
+                    String(tx.seller_email || "").toLowerCase() === String(userEmail || "").toLowerCase();
 
                   const isComplete = ["complete", "completed"].includes(txStatusLower);
 
@@ -1745,7 +1865,9 @@ export default function DashboardPage() {
                     isSeller &&
                     !isComplete &&
                     paymentLower === "paid" &&
-                    ["dispatch_pending", "pending", "pending_documents", "dispatch_sent", "receipt_pending"].includes(txStatusLower);
+                    ["dispatch_pending", "pending", "pending_documents", "dispatch_sent", "receipt_pending"].includes(
+                      txStatusLower
+                    );
 
                   // Buyer can only confirm after dispatch (receipt_pending / dispatch_sent)
                   const canConfirmReceived =
@@ -1756,7 +1878,8 @@ export default function DashboardPage() {
 
                   const statusChip = txStatusLabel(tx);
 
-                  const form = dispatchForms[tx.$id] || { carrier: "", tracking: "", note: "", saving: false, error: "" };
+                  const form =
+                    dispatchForms[tx.$id] || { carrier: "", tracking: "", note: "", saving: false, error: "" };
 
                   const { lines: deliveryLines, phone: deliveryPhone } = fmtAddressLines(tx);
 
@@ -1764,7 +1887,9 @@ export default function DashboardPage() {
                     <div key={tx.$id} className="border border-neutral-800 rounded-xl p-4 bg-neutral-900/40 shadow-sm">
                       <div className="flex justify-between items-start mb-2">
                         <div>
-                          <p className={`text-sm font-semibold ${accentText}`}>{tx.registration || tx.listing_id || "Transaction"}</p>
+                          <p className={`text-sm font-semibold ${accentText}`}>
+                            {tx.registration || tx.listing_id || "Transaction"}
+                          </p>
                           <p className="text-xs text-neutral-500">Transaction ID: {tx.$id}</p>
                           <p className="text-xs text-neutral-500">Role: {isSeller ? "Seller" : "Buyer"}</p>
                         </div>
@@ -1789,13 +1914,29 @@ export default function DashboardPage() {
                       {/* Timeline */}
                       <div className="mt-3 text-[11px] text-neutral-400 border border-neutral-800 rounded-lg p-3 bg-neutral-950/40">
                         <div className="flex flex-wrap gap-2 items-center">
-                          <span className={`px-2 py-1 rounded-md border ${paymentLower === "paid" ? "border-emerald-700/40 text-emerald-200" : "border-neutral-700 text-neutral-300"}`}>
+                          <span
+                            className={`px-2 py-1 rounded-md border ${
+                              paymentLower === "paid"
+                                ? "border-emerald-700/40 text-emerald-200"
+                                : "border-neutral-700 text-neutral-300"
+                            }`}
+                          >
                             1) Paid
                           </span>
-                          <span className={`px-2 py-1 rounded-md border ${txStatusLower === "receipt_pending" || txStatusLower === "dispatch_sent" || isComplete ? "border-emerald-700/40 text-emerald-200" : "border-neutral-700 text-neutral-300"}`}>
+                          <span
+                            className={`px-2 py-1 rounded-md border ${
+                              txStatusLower === "receipt_pending" || txStatusLower === "dispatch_sent" || isComplete
+                                ? "border-emerald-700/40 text-emerald-200"
+                                : "border-neutral-700 text-neutral-300"
+                            }`}
+                          >
                             2) Dispatched
                           </span>
-                          <span className={`px-2 py-1 rounded-md border ${isComplete ? "border-emerald-700/40 text-emerald-200" : "border-neutral-700 text-neutral-300"}`}>
+                          <span
+                            className={`px-2 py-1 rounded-md border ${
+                              isComplete ? "border-emerald-700/40 text-emerald-200" : "border-neutral-700 text-neutral-300"
+                            }`}
+                          >
                             3) Received
                           </span>
                         </div>
@@ -1811,12 +1952,12 @@ export default function DashboardPage() {
                               {deliveryLines.map((ln, i) => (
                                 <div key={i}>{ln}</div>
                               ))}
-                              {deliveryPhone && <div className="mt-1 text-xs text-neutral-400">Phone: {deliveryPhone}</div>}
+                              {deliveryPhone && (
+                                <div className="mt-1 text-xs text-neutral-400">Phone: {deliveryPhone}</div>
+                              )}
                             </div>
                           ) : (
-                            <p className="mt-2 text-xs text-neutral-400">
-                              No delivery address snapshot found on this transaction yet.
-                            </p>
+                            <p className="mt-2 text-xs text-neutral-400">No delivery address snapshot found on this transaction yet.</p>
                           )}
 
                           <div className="mt-4">
@@ -1904,7 +2045,11 @@ export default function DashboardPage() {
                                   } catch (e: any) {
                                     setDispatchForms((p) => ({
                                       ...p,
-                                      [tx.$id]: { ...form, saving: false, error: e?.message || "Failed to confirm dispatch." },
+                                      [tx.$id]: {
+                                        ...form,
+                                        saving: false,
+                                        error: e?.message || "Failed to confirm dispatch.",
+                                      },
                                     }));
                                   }
                                 }}
@@ -1913,9 +2058,7 @@ export default function DashboardPage() {
                                 {form.saving ? "Saving…" : "Confirm dispatch"}
                               </button>
 
-                              <span className="text-[11px] text-neutral-500">
-                                Dispatch time will be recorded automatically.
-                              </span>
+                              <span className="text-[11px] text-neutral-500">Dispatch time will be recorded automatically.</span>
                             </div>
                           </div>
                         </div>
@@ -1934,7 +2077,8 @@ export default function DashboardPage() {
                               <strong>Tracking:</strong> {safeStr(tx.seller_dispatch_tracking) || "—"}
                             </p>
                             <p>
-                              <strong>Dispatched:</strong> {tx.seller_dispatched_at ? formatLondon(tx.seller_dispatched_at) : "—"}
+                              <strong>Dispatched:</strong>{" "}
+                              {tx.seller_dispatched_at ? formatLondon(tx.seller_dispatched_at) : "—"}
                             </p>
                           </div>
 
@@ -1964,9 +2108,7 @@ export default function DashboardPage() {
                               Confirm received
                             </button>
 
-                            <span className="text-[11px] text-neutral-500">
-                              Only click this once you have the item.
-                            </span>
+                            <span className="text-[11px] text-neutral-500">Only click this once you have the item.</span>
                           </div>
                         </div>
                       )}
@@ -1976,7 +2118,8 @@ export default function DashboardPage() {
                         <div className="mt-4 text-xs text-neutral-400 border border-neutral-800 rounded-lg p-3 bg-neutral-950/30">
                           <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
                             <div>
-                              <strong>Dispatched:</strong> {tx.seller_dispatched_at ? formatLondon(tx.seller_dispatched_at) : "—"}
+                              <strong>Dispatched:</strong>{" "}
+                              {tx.seller_dispatched_at ? formatLondon(tx.seller_dispatched_at) : "—"}
                             </div>
                             <div>
                               <strong>Received:</strong> {tx.buyer_received_at ? formatLondon(tx.buyer_received_at) : "—"}
