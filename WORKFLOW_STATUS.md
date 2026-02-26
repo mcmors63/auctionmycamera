@@ -1,191 +1,160 @@
-A) Account & Dashboard
+# 📸 AuctionMyCamera — Workflow Status (Source of Truth)
 
- Dashboard loads profile correctly (Personal Details tab)
+Last updated: 2026-02-26  
+Owner: Shaun  
+Repo: auctionmycamera.co.uk (Next.js + Appwrite + Stripe)
 
- Profile update works
+============================================================
 
- Password change works
+## SECTION A — Account & Dashboard
 
- Remove "Copy JWT (testing)" button from dashboard UI
+- Dashboard loads profile correctly — DONE  
+- Profile update works — DONE  
+- Password change works — DONE  
+- "Copy JWT (testing)" removed — DONE  
+- Delete account workflow verified end-to-end — TODO  
 
- Delete account workflow verified end-to-end (needs test)
+============================================================
 
-B) Listings (Seller)
+## SECTION B — Listings (Seller)
 
- Seller can submit listing from dashboard (/api/listings)
+- Seller can submit listing from dashboard (/api/listings) — DONE  
+- Listing appears in Awaiting / Approved+Queued / Live tabs — DONE  
 
- Listing shows in Awaiting / Approved+Queued / Live tabs
+### Queued listing controls
+- Seller can edit queued listing — PARTIAL (route folder exists but not committed/wired/tested)  
+- Seller can withdraw queued listing — PARTIAL (withdraw route exists; dashboard wiring + test pending)  
 
- Seller can edit queued listing (price/description/relist flag)
+- Listing images verified in production — TODO  
 
- Seller can withdraw queued listing
+### Image handling logic
+- image_url supported — DONE  
+- image_id supported via local proxy (/api/camera-image/:id) — DONE  
+- Fallback hero image implemented — DONE  
 
- Route stub added (untracked): app/api/listings/withdraw-queued/ (needs wire-up + test)
+============================================================
 
- Public listing images now support:
+## SECTION C — Admin Approval
 
- image_url (direct) OR
+- Admin dashboard exists and reachable — DONE  
+- Admin can view pending listings — DONE  
+- Admin approve sets status + schedules auction dates — DONE (needs final production test)  
+- Admin reject sets status + emails seller — DONE (needs confirm in live)  
 
- image_id via local proxy (/api/camera-image/:id) OR
+### Admin tools
+- Admin delete listing route exists — PARTIAL (folder exists untracked; commit + UI wiring + test pending)  
+- Admin notified when listing submitted — TODO  
 
- fallback hero image
+============================================================
 
- Listing images verified end-to-end in production (needs confirm/test)
+## SECTION D — Auction Lifecycle (Weekly Scheduler)
 
-C) Admin Approval
+- Scheduler protected by CRON_SECRET — DONE  
+- Auction start moves queued to live — DONE (needs live validation run)  
+- Queued date repair via getAuctionWindow() — DONE  
+- Auction end closes listing and determines outcome — DONE  
 
- Admin dashboard exists & reachable
+### Reserve logic
+- If reserve not met → status = not_sold — DONE  
+- If relist_until_sold enabled → re-queues listing — DONE  
 
- Admin can view pending listings (via AdminClient)
+### Scheduler lifecycle safety
+- Status set to completed before payment attempt — DONE  
 
- Admin approve sets status correctly + schedules auction dates (assumed from current admin flow)
+============================================================
 
- Admin reject sets status + reason emailed to seller
+## SECTION E — Payments (Stripe)
 
- app/api/admin/reject-listing/route.ts updated (needs final prod test)
+### Winner charging
+- Off-session charge at auction end — DONE  
+- Safety switch DISABLE_WINNER_CHARGES=true implemented — DONE  
 
- Admin delete listing route exists
+### Charge failure handling
+- Listing updated to payment_required or payment_failed — DONE  
+- Failed transaction created (schema tolerant) — DONE  
+- Buyer + admin action-required emails sent — DONE  
+- Real-world failure testing (no card / declined / SCA required) — TODO  
 
- app/api/admin/delete-listing/route.ts now compiles as a proper module
+### Saved card system
+- /payment-method page exists (noindex) — DONE  
+- SetupIntent route works — DONE  
+- List-payment-methods route works — DONE  
+- has-payment-method route works — DONE  
 
- Admin gets notified when listing submitted (needs confirm/test)
+### Stripe webhook
+- setup_intent.succeeded sets default payment method — DONE  
+- payment_intent.succeeded marks transaction paid — DONE  
+- payment_intent.payment_failed marks transaction failed — DONE  
+- Full production verification in Stripe dashboard — TODO  
 
-D) Auction Lifecycle (Weekly)
+============================================================
 
- Scheduler security: CRON_SECRET required (Authorization: Bearer preferred; query/header supported)
+## SECTION F — Transactions (Seller and Buyer Workflow)
 
- Auction start job moves queued → live
+### Transaction creation
+- Transaction created only after successful Stripe charge — DONE  
+- Delivery address snapshot stored in transaction (delivery_*) — DONE  
 
- Repairs missing auction_start / auction_end using getAuctionWindow()
+### Seller flow
+- mark-dispatched route exists — DONE  
+- Seller-only authorization enforced — DONE  
+- Requires payment_status = paid — DONE  
+- Sets transaction_status = receipt_pending — DONE  
 
- Auction end job closes listing, determines outcome (bids/reserve)
+### Buyer flow
+- confirm-received route exists — DONE  
+- Buyer-only authorization enforced — DONE  
+- Requires payment_status = paid — DONE  
+- Sets transaction_status = complete and payout_status = ready — DONE  
 
- Reserve handling confirmed: if reserve not met → listing becomes not_sold
+### Pending work
+- Dashboard transactions UI build/JSX integrity — BLOCKER (fix build first)  
+- Seller email includes delivery address snapshot — TODO (needs confirm via real email)  
+- Admin can view/manage transactions — TODO  
 
- Relist-until-sold logic confirmed (if enabled → re-queues with next window dates)
+============================================================
 
- Completed listings are created for charging pipeline (status: completed)
+## SECTION G — Public Listing Page (SEO + Status Handling)
 
-E) Payments (Stripe)
+- SSR + ISR (revalidate=300) — DONE  
+- Canonical URL forced to production domain — DONE  
+- Non-public statuses return 404 — DONE  
 
- Winner payment is charged automatically at auction end (off-session) (in /api/auction-scheduler)
+### Lifecycle status handling on public page
+- completed → shows processing banner — DONE  
+- payment_required → shows action required banner — DONE  
+- payment_failed → shows failure banner — DONE  
+- not_sold → shows ended (not sold) banner — DONE  
 
- Safety switch added: DISABLE_WINNER_CHARGES=true/1 skips winner charging (safe testing)
+- Production UI verification of all above states — TODO  
 
- Charge-failure handling implemented:
+============================================================
 
- Listing updated to payment_failed / payment_required (best-effort)
+## SECTION H — Email Notifications
 
- Payment-failed transaction created (best-effort, schema tolerant)
+- Buyer "You won" email — DONE  
+- Seller "Your item sold" email — DONE  
+- Admin "Auction won / payment status" email — DONE  
+- Auto-relist email to seller — DONE  
+- Payment-required email — DONE  
+- Dispatch confirmation email — TODO  
+- Delivery received confirmation email — TODO  
 
- Buyer/admin “action required” emails sent (seller email optional/off by default)
+============================================================
 
- Needs real test cases (no card + declined + SCA required)
+## SAFETY NOTES
 
- Buyer saved payment method flow exists:
+- Running /api/auction-scheduler in production can charge real cards.  
+- Use DISABLE_WINNER_CHARGES=true while testing.  
+- CRON_SECRET required for scheduler access.  
+- Only switch Stripe to live mode after full test validation.  
 
- /payment-method page exists and is SEO-safe (noindex,nofollow)
+============================================================
 
- /api/stripe/create-setup-intent returns SetupIntent client secret (auth required)
+## RECOMMENDED TEST ORDER
 
- /api/stripe/list-payment-methods returns saved cards + default flag (auth required)
-
- /api/stripe/has-payment-method checks usable saved card (auth required)
-
- Stripe webhook route exists (/api/stripe/webhook):
-
- setup_intent.succeeded sets Stripe default payment method
-
- payment_intent.succeeded marks transaction paid (if a transaction is found)
-
- payment_intent.payment_failed marks transaction failed (best-effort)
-
- Stripe webhook fully verified in production (needs Stripe test + log confirmation)
-
-F) Transactions (Seller/Buyer Workflow)
-
- Transaction record created at auction end (only after Stripe charge succeeds)
-
- Seller dashboard: confirm dispatch route exists (/api/transactions/mark-dispatched)
-
- Seller-only (seller_email must match authed user)
-
- Requires payment_status=paid
-
- Moves transaction_status → receipt_pending and stores carrier/tracking/note (schema-tolerant)
-
- Buyer dashboard: confirm received route exists (/api/transactions/confirm-received)
-
- Buyer-only (buyer_email must match authed user)
-
- Requires payment_status=paid
-
- Allowed from receipt_pending/dispatch_sent; idempotent if already complete
-
- Marks transaction_status=complete and payout_status=ready (schema-tolerant)
-
- Delivery address snapshot fields are written into the transaction at creation (delivery_*)
-
- Seller “sold” email now includes buyer delivery details (when available)
-
- Needs live verification (confirm template renders snapshot in real email)
-
- Admin dashboard: can view/manage transactions (not built yet)
-
-G) Public Listing Page (SEO + Status Handling)
-
- Listing page is SSR + ISR (revalidate=300) for crawler-friendly HTML
-
- Canonical URL is forced to real domain in production
-
- Public access is blocked for non-public statuses (pending/rejected/etc → 404)
-
- Public page now supports correct “post-auction” outcomes (avoid generic “Auction ended”):
-
- Completed / winner charged / payment required / payment failed messaging shown correctly (needs final UI mapping check + prod test)
-
- Public indexable statuses reviewed and aligned with real lifecycle
-
-Note: current isPublicStatus() in app/listing/[id]/page.tsx only allows live|queued|sold — confirm if you also want completed or not_sold publicly visible.
-
-H) Email Notifications
-
- Buyer "Congratulations, you won" email (sent from scheduler after successful charge)
-
- Seller "Your item sold" email (sent from scheduler after successful charge)
-
- Admin "Auction won / payment status" email (sent from scheduler after successful charge) (if ADMIN_EMAIL set)
-
- Auto-relist email to seller (when relist_until_sold triggers)
-
- Payment-required emails implemented (when no card / payment fails)
-
- Dispatch confirmation email (not yet verified)
-
- Delivery received confirmation email (not yet verified)
-
-Notes / Decisions / Safety
-
-Reserve rule: confirmed — if reserve not met → not_sold; if relist_until_sold enabled → queued with next window dates
-
-Payment model: off-session charge at auction end (current)
-
-Delivery address source: buyer profile snapshot → transaction delivery_* fields (needs verification end-to-end)
-
-Safety: running /api/auction-scheduler in production can charge real cards if Stripe is live and winner has a saved payment method
-
-Mitigation: set DISABLE_WINNER_CHARGES=true/1 while testing
-
-Cron security: CRON_SECRET required (Authorization: Bearer <secret> preferred)
-
-Next Tests (Recommended Order)
-
-Keep DISABLE_WINNER_CHARGES=true and run scheduler to validate lifecycle transitions safely.
-
-Test /payment-method end-to-end: save card, confirm it shows as DEFAULT, confirm list-payment-methods works.
-
-In Stripe TEST mode, run a controlled auction end: winner charged → tx created → emails sent.
-
-Test failure paths: no saved card + declined card + SCA-required simulation; confirm tx/payment_failed + emails.
-
-Verify webhook logs in Vercel + confirm it updates tx payment_status when applicable.
+1. Keep DISABLE_WINNER_CHARGES=true and validate lifecycle transitions safely.  
+2. Test /payment-method end-to-end (add card, confirm default).  
+3. Use Stripe TEST mode to simulate auction end → verify charge, transaction creation, emails.  
+4. Test failure paths: no card, declined card, SCA required.  
+5. Verify Stripe webhook logs + Vercel logs confirm payment status updates.  

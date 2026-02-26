@@ -1,8 +1,7 @@
 // app/dashboard/page.tsx
 "use client";
 
-import type React from "react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ChangeEvent, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Client, Account, Databases, Storage, ID, Query } from "appwrite";
@@ -24,15 +23,11 @@ const storage = new Storage(client);
 // -----------------------------
 const LISTINGS_DB_ID =
   process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID ||
-  process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID ||
-  process.env.APPWRITE_LISTINGS_DATABASE_ID ||
   process.env.APPWRITE_LISTINGS_DATABASE_ID ||
   "690fc34a0000ce1baa63";
 
 const LISTINGS_COLLECTION_ID =
   process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_COLLECTION_ID ||
-  process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_COLLECTION_ID ||
-  process.env.APPWRITE_LISTINGS_COLLECTION_ID ||
   process.env.APPWRITE_LISTINGS_COLLECTION_ID ||
   "listings";
 
@@ -45,7 +40,9 @@ const TX_DB_ID = LISTINGS_DB_ID;
 const TX_COLLECTION_ID = "transactions";
 
 // Optional admin email (so we can redirect admins cleanly)
-const ADMIN_EMAIL = (process.env.NEXT_PUBLIC_ADMIN_EMAIL || "admin@auctionmycamera.co.uk").trim().toLowerCase();
+const ADMIN_EMAIL = (process.env.NEXT_PUBLIC_ADMIN_EMAIL || "admin@auctionmycamera.co.uk")
+  .trim()
+  .toLowerCase();
 
 // -----------------------------
 // Types
@@ -174,7 +171,14 @@ function isLiveStatus(s: string) {
 
 function isHistoryStatus(s: string) {
   const x = (s || "").toLowerCase();
-  return x === "sold" || x === "not_sold" || x === "ended" || x === "completed" || x === "complete";
+  return (
+    x === "sold" ||
+    x === "not_sold" ||
+    x === "ended" ||
+    x === "completed" ||
+    x === "complete" ||
+    x === "withdrawn"
+  );
 }
 
 function isFinishedTransaction(tx: Transaction) {
@@ -313,6 +317,25 @@ export default function DashboardPage() {
 
   const userEmail = user?.email ?? null;
 
+  // ✅ Edit queued listing modal
+  const [editingListing, setEditingListing] = useState<Listing | null>(null);
+  const [editError, setEditError] = useState("");
+  const [editSaving, setEditSaving] = useState(false);
+
+  const [editForm, setEditForm] = useState({
+    item_title: "",
+    gear_type: "",
+    brand: "",
+    model: "",
+    era: "",
+    condition: "",
+    description: "",
+    reserve_price: "",
+    starting_price: "",
+    buy_now: "",
+    relist_until_sold: false,
+  });
+
   // -----------------------------
   // Honor ?tab=transactions from email links
   // -----------------------------
@@ -368,16 +391,12 @@ export default function DashboardPage() {
     const results: Listing[] = [];
 
     try {
-      const r1 = await databases.listDocuments(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, [
-        Query.equal("seller_email", email),
-      ]);
+      const r1 = await databases.listDocuments(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, [Query.equal("seller_email", email)]);
       results.push(...((r1.documents || []) as any));
     } catch {}
 
     try {
-      const r2 = await databases.listDocuments(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, [
-        Query.equal("sellerEmail", email),
-      ]);
+      const r2 = await databases.listDocuments(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, [Query.equal("sellerEmail", email)]);
       results.push(...((r2.documents || []) as any));
     } catch {}
 
@@ -550,7 +569,7 @@ export default function DashboardPage() {
   // -----------------------------
   // Profile editing
   // -----------------------------
-  const handleProfileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleProfileChange = (e: ChangeEvent<HTMLInputElement>) => {
     if (!profile) return;
     const { name, value } = e.target;
     setProfile({ ...profile, [name]: value });
@@ -588,7 +607,7 @@ export default function DashboardPage() {
   // -----------------------------
   const validateNewPassword = (pwd: string) => /^(?=.*[A-Za-z])(?=.*\d).{8,}$/.test(pwd);
 
-  const handlePasswordChange = (e: React.FormEvent) => {
+  const handlePasswordChange = (e: FormEvent) => {
     e.preventDefault();
     setPasswordError("");
     setPasswordSuccess("");
@@ -776,7 +795,7 @@ export default function DashboardPage() {
   // -----------------------------
   // Sell form handlers
   // -----------------------------
-  const handleSellChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
+  const handleSellChange = (e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
     const target = e.target as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
     const { name, value, type } = target;
 
@@ -825,7 +844,7 @@ export default function DashboardPage() {
   // -----------------------------
   // Create listing via /api/listings (JWT auth)
   // -----------------------------
-  const handleSellSubmit = async (e: React.FormEvent) => {
+  const handleSellSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setSellError("");
 
@@ -956,6 +975,91 @@ export default function DashboardPage() {
   };
 
   // -----------------------------
+  // Edit queued listing (modal helpers)
+  // NOTE: These must NOT be nested inside other functions.
+  // -----------------------------
+  function openEditQueuedModal(l: Listing) {
+    setBannerError("");
+    setBannerSuccess("");
+    setEditError("");
+    setEditingListing(l);
+
+    setEditForm({
+      item_title: safeStr(l.item_title),
+      gear_type: safeStr(l.gear_type),
+      brand: safeStr(l.brand),
+      model: safeStr(l.model),
+      era: safeStr(l.era),
+      condition: safeStr(l.condition),
+      description: safeStr(l.description),
+      reserve_price: String(toNum(l.reserve_price, 0)),
+      starting_price: String(toNum(l.starting_price, 0)),
+      buy_now: String(toNum(l.buy_now, 0)),
+      relist_until_sold: !!l.relist_until_sold,
+    });
+  }
+
+  function closeEditQueuedModal() {
+    setEditingListing(null);
+    setEditError("");
+    setEditSaving(false);
+  }
+
+  async function saveQueuedEdit() {
+    if (!user?.email || !editingListing) return;
+
+    const reserve = parseFloat(String(editForm.reserve_price));
+    const starting = editForm.starting_price === "" ? 0 : parseFloat(String(editForm.starting_price));
+    const buyNow = editForm.buy_now === "" ? 0 : parseFloat(String(editForm.buy_now));
+
+    if (isNaN(reserve) || reserve < 10) {
+      setEditError("Minimum reserve price is £10.");
+      return;
+    }
+    if (!isNaN(starting) && starting > 0 && starting >= reserve) {
+      setEditError("Starting price must be lower than the reserve price.");
+      return;
+    }
+    if (!isNaN(buyNow) && buyNow > 0) {
+      const minBuyNow = Math.max(reserve, !isNaN(starting) && starting > 0 ? starting : 0);
+      if (buyNow < minBuyNow) {
+        setEditError("Buy Now price cannot be lower than your reserve price or starting price.");
+        return;
+      }
+    }
+
+    try {
+      setEditSaving(true);
+      setEditError("");
+      setBannerError("");
+      setBannerSuccess("");
+
+      await postListingAction("/api/listings/edit-queued", {
+        listingId: editingListing.$id,
+        item_title: safeStr(editForm.item_title),
+        gear_type: safeStr(editForm.gear_type),
+        brand: safeStr(editForm.brand),
+        model: safeStr(editForm.model),
+        era: safeStr(editForm.era),
+        condition: safeStr(editForm.condition),
+        description: safeStr(editForm.description),
+        reserve_price: reserve,
+        starting_price: !isNaN(starting) ? starting : 0,
+        buy_now: !isNaN(buyNow) ? buyNow : 0,
+        relist_until_sold: !!editForm.relist_until_sold,
+      });
+
+      setBannerSuccess("Updated — your queued listing has been edited.");
+      closeEditQueuedModal();
+      await refreshMyListings(user.email);
+    } catch (e: any) {
+      setEditError(e?.message || "Failed to update listing.");
+    } finally {
+      setEditSaving(false);
+    }
+  }
+
+  // -----------------------------
   // Withdraw queued listing (server route)
   // -----------------------------
   async function withdrawQueuedListing(listingId: string) {
@@ -988,54 +1092,41 @@ export default function DashboardPage() {
     } finally {
       setWithdrawingId(null);
     }
-  }
+  } // ✅ END withdrawQueuedListing
 
-  // -----------------------------
-  // Loading screen
-  // -----------------------------
-  if (initialLoading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-neutral-950">
-        <p className="text-neutral-200 text-lg">Loading your dashboard…</p>
-      </div>
-    );
-  }
-
-  // -----------------------------
-  // UI styles (camera theme)
-  // -----------------------------
+  // ✅ Style constants
   const accentText = "text-sky-300";
-  const accentBorder = "border-sky-700/50";
-  const accentBgSoft = "bg-sky-500/10";
+  const accentBgSoft = "bg-sky-900/20";
+  const accentBorder = "border-sky-700/40";
   const primaryBtn = "bg-sky-600 hover:bg-sky-700 text-white";
   const dangerBtn = "bg-rose-600 hover:bg-rose-700 text-white";
 
-  // -----------------------------
-  // Render
-  // -----------------------------
+  // ✅ Helper: refresh transactions for current user
+  async function refreshMyTransactions(email: string) {
+    const combined: Transaction[] = [];
+
+    try {
+      const txSeller = await databases.listDocuments(TX_DB_ID, TX_COLLECTION_ID, [Query.equal("seller_email", email)]);
+      combined.push(...((txSeller.documents || []) as any));
+    } catch {}
+
+    try {
+      const txBuyer = await databases.listDocuments(TX_DB_ID, TX_COLLECTION_ID, [Query.equal("buyer_email", email)]);
+      combined.push(...((txBuyer.documents || []) as any));
+    } catch {}
+
+    const byId = new Map<string, Transaction>();
+    combined.forEach((tx) => {
+      if (tx?.$id && !byId.has(tx.$id)) byId.set(tx.$id, tx);
+    });
+
+    setTransactions(Array.from(byId.values()));
+  }
+
+  // ✅ everything UI-related must be inside return()
   return (
     <div className="min-h-screen bg-neutral-950 py-8 px-4 text-neutral-100">
       <div className={`max-w-6xl mx-auto bg-neutral-900/60 rounded-2xl shadow-lg p-6 border ${accentBorder}`}>
-        {/* Header */}
-        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-6">
-          <div>
-            <h1 className={`text-2xl md:text-3xl font-bold ${accentText}`}>My Dashboard</h1>
-            <p className="text-sm text-neutral-300 mt-1">
-              Welcome, <span className="font-semibold">{profile?.first_name || user?.name || "User"}</span>.
-            </p>
-          </div>
-
-          <div className="flex flex-wrap gap-2 items-center self-start md:self-auto">
-            <button
-              onClick={handleLogout}
-              className="px-4 py-2 text-sm font-semibold rounded-md border border-rose-500/70 text-rose-200 hover:bg-rose-900/30 transition"
-              type="button"
-            >
-              Logout
-            </button>
-          </div>
-        </div>
-
         {/* Banners */}
         {bannerError && (
           <div className="flex items-center gap-2 bg-rose-900/30 text-rose-200 p-3 rounded-md mb-4 border border-rose-700/70">
@@ -1043,8 +1134,9 @@ export default function DashboardPage() {
             <span className="text-sm">{bannerError}</span>
           </div>
         )}
+
         {bannerSuccess && (
-          <div className="flex items-center gap-2 bg-emerald-900/25 text-emerald-200 p-3 rounded-md mb-4 border border-emerald-700/50">
+          <div className="flex items-center gap-2 bg-emerald-900/20 text-emerald-200 p-3 rounded-md mb-4 border border-emerald-700/40">
             <CheckCircleIcon className="w-5 h-5" />
             <span className="text-sm">{bannerSuccess}</span>
           </div>
@@ -1174,9 +1266,7 @@ export default function DashboardPage() {
                         onChange={(e) => setNewPassword(e.target.value)}
                         className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
                       />
-                      <p className="text-xs text-neutral-500 mt-1">
-                        Must include letters &amp; numbers, min 8 characters.
-                      </p>
+                      <p className="text-xs text-neutral-500 mt-1">Must include letters &amp; numbers, min 8 characters.</p>
                     </div>
 
                     <div>
@@ -1236,6 +1326,16 @@ export default function DashboardPage() {
                     {deleteLoading ? "Deleting…" : "Delete my account"}
                   </button>
                 </div>
+
+                <div className="mt-8 border-t border-neutral-800 pt-6 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={handleLogout}
+                    className="px-4 py-2 rounded-md bg-neutral-950/60 hover:bg-neutral-950 text-neutral-100 text-xs font-semibold border border-neutral-800"
+                  >
+                    Log out
+                  </button>
+                </div>
               </>
             )}
           </div>
@@ -1246,9 +1346,7 @@ export default function DashboardPage() {
           <div className="space-y-6">
             <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
               <h2 className={`text-xl font-bold ${accentText}`}>Sell an Item</h2>
-              <p className="text-xs text-neutral-400">
-                Submit your listing for approval. Fees only apply if your item sells.
-              </p>
+              <p className="text-xs text-neutral-400">Submit your listing for approval. Fees only apply if your item sells.</p>
             </div>
 
             {sellError && (
@@ -1355,7 +1453,6 @@ export default function DashboardPage() {
               {/* Photo Upload */}
               <div>
                 <label className="block text-sm font-medium text-neutral-200 mb-1">Photo (optional)</label>
-
                 <input
                   type="file"
                   accept="image/*"
@@ -1413,9 +1510,7 @@ export default function DashboardPage() {
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-neutral-400 mb-1">
-                    Buy Now Price (£) (optional)
-                  </label>
+                  <label className="block text-xs font-semibold text-neutral-400 mb-1">Buy Now Price (£) (optional)</label>
                   <input
                     type="number"
                     name="buy_now"
@@ -1429,9 +1524,7 @@ export default function DashboardPage() {
 
               {/* Fee preview */}
               <div className={`mt-4 p-4 ${accentBgSoft} border ${accentBorder} rounded-md space-y-2`}>
-                <h3 className="text-sm font-semibold text-sky-200">
-                  Fees &amp; Expected Return (based on your reserve)
-                </h3>
+                <h3 className="text-sm font-semibold text-sky-200">Fees &amp; Expected Return (based on your reserve)</h3>
 
                 <p className="text-xs text-neutral-200">
                   <strong>Commission rate:</strong> {commissionRate}% (estimate)
@@ -1560,9 +1653,7 @@ export default function DashboardPage() {
         {activeTab === "approvedQueued" && (
           <div className="space-y-4">
             <h2 className={`text-xl font-bold mb-2 ${accentText}`}>Approved / Queued</h2>
-            <p className="text-sm text-neutral-300 mb-1">
-              These listings are approved and queued for the next weekly auction.
-            </p>
+            <p className="text-sm text-neutral-300 mb-1">These listings are approved and queued for the next weekly auction.</p>
             <p className="text-xs text-neutral-400">
               You currently have <strong>{queuedListings.length}</strong> queued.
             </p>
@@ -1621,6 +1712,14 @@ export default function DashboardPage() {
 
                       <button
                         type="button"
+                        onClick={() => openEditQueuedModal(l)}
+                        className="inline-flex items-center px-4 py-2 rounded-md bg-sky-900/20 hover:bg-sky-900/30 text-sky-200 text-sm font-semibold border border-sky-700/50"
+                      >
+                        Edit
+                      </button>
+
+                      <button
+                        type="button"
                         onClick={() => withdrawQueuedListing(l.$id)}
                         disabled={withdrawingId === l.$id}
                         className="inline-flex items-center px-4 py-2 rounded-md bg-rose-900/30 hover:bg-rose-900/40 text-rose-200 text-sm font-semibold border border-rose-700/60 disabled:opacity-50"
@@ -1663,16 +1762,13 @@ export default function DashboardPage() {
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm text-neutral-200 mb-2">
                       <p>
                         <strong>Current bid:</strong>{" "}
-                        {typeof l.current_bid === "number"
-                          ? `£${l.current_bid.toLocaleString("en-GB")}`
-                          : "No bids yet"}
+                        {typeof l.current_bid === "number" ? `£${l.current_bid.toLocaleString("en-GB")}` : "No bids yet"}
                       </p>
                       <p>
                         <strong>Reserve:</strong> £{toNum(l.reserve_price).toLocaleString("en-GB")}
                       </p>
                       <p>
-                        <strong>Buy Now:</strong>{" "}
-                        {toNum(l.buy_now, 0) > 0 ? `£${toNum(l.buy_now).toLocaleString("en-GB")}` : "Not set"}
+                        <strong>Buy Now:</strong> {toNum(l.buy_now, 0) > 0 ? `£${toNum(l.buy_now).toLocaleString("en-GB")}` : "Not set"}
                       </p>
                     </div>
 
@@ -1689,8 +1785,8 @@ export default function DashboardPage() {
                       <a
                         href={`/listing/${l.$id}`}
                         target="_blank"
-                        className="inline-flex items-center px-4 py-2 rounded-md bg-neutral-950/60 hover:bg-neutral-950 text-neutral-100 text-sm font-semibold border border-neutral-800"
                         rel="noreferrer"
+                        className="inline-flex items-center px-4 py-2 rounded-md bg-neutral-950/60 hover:bg-neutral-950 text-neutral-100 text-sm font-semibold border border-neutral-800"
                       >
                         View public listing
                       </a>
@@ -1816,8 +1912,7 @@ export default function DashboardPage() {
                         <strong>Highest bid:</strong> £{toNum(l.current_bid, 0).toLocaleString("en-GB")}
                       </p>
                       <p>
-                        <strong>Auction ended:</strong>{" "}
-                        {l.auction_end ? new Date(l.auction_end).toLocaleString("en-GB") : "—"}
+                        <strong>Auction ended:</strong> {l.auction_end ? new Date(l.auction_end).toLocaleString("en-GB") : "—"}
                       </p>
                     </div>
 
@@ -1854,10 +1949,8 @@ export default function DashboardPage() {
                   const txStatusLower = String(tx.transaction_status || "").toLowerCase();
                   const paymentLower = String(tx.payment_status || "").toLowerCase();
 
-                  const isBuyer =
-                    String(tx.buyer_email || "").toLowerCase() === String(userEmail || "").toLowerCase();
-                  const isSeller =
-                    String(tx.seller_email || "").toLowerCase() === String(userEmail || "").toLowerCase();
+                  const isBuyer = String(tx.buyer_email || "").toLowerCase() === String(userEmail || "").toLowerCase();
+                  const isSeller = String(tx.seller_email || "").toLowerCase() === String(userEmail || "").toLowerCase();
 
                   const isComplete = ["complete", "completed"].includes(txStatusLower);
 
@@ -1865,21 +1958,15 @@ export default function DashboardPage() {
                     isSeller &&
                     !isComplete &&
                     paymentLower === "paid" &&
-                    ["dispatch_pending", "pending", "pending_documents", "dispatch_sent", "receipt_pending"].includes(
-                      txStatusLower
-                    );
+                    ["dispatch_pending", "pending", "pending_documents", "dispatch_sent", "receipt_pending"].includes(txStatusLower);
 
                   // Buyer can only confirm after dispatch (receipt_pending / dispatch_sent)
                   const canConfirmReceived =
-                    isBuyer &&
-                    !isComplete &&
-                    paymentLower === "paid" &&
-                    ["receipt_pending", "dispatch_sent"].includes(txStatusLower);
+                    isBuyer && !isComplete && paymentLower === "paid" && ["receipt_pending", "dispatch_sent"].includes(txStatusLower);
 
                   const statusChip = txStatusLabel(tx);
 
-                  const form =
-                    dispatchForms[tx.$id] || { carrier: "", tracking: "", note: "", saving: false, error: "" };
+                  const form = dispatchForms[tx.$id] || { carrier: "", tracking: "", note: "", saving: false, error: "" };
 
                   const { lines: deliveryLines, phone: deliveryPhone } = fmtAddressLines(tx);
 
@@ -1887,9 +1974,7 @@ export default function DashboardPage() {
                     <div key={tx.$id} className="border border-neutral-800 rounded-xl p-4 bg-neutral-900/40 shadow-sm">
                       <div className="flex justify-between items-start mb-2">
                         <div>
-                          <p className={`text-sm font-semibold ${accentText}`}>
-                            {tx.registration || tx.listing_id || "Transaction"}
-                          </p>
+                          <p className={`text-sm font-semibold ${accentText}`}>{tx.registration || tx.listing_id || "Transaction"}</p>
                           <p className="text-xs text-neutral-500">Transaction ID: {tx.$id}</p>
                           <p className="text-xs text-neutral-500">Role: {isSeller ? "Seller" : "Buyer"}</p>
                         </div>
@@ -1916,9 +2001,7 @@ export default function DashboardPage() {
                         <div className="flex flex-wrap gap-2 items-center">
                           <span
                             className={`px-2 py-1 rounded-md border ${
-                              paymentLower === "paid"
-                                ? "border-emerald-700/40 text-emerald-200"
-                                : "border-neutral-700 text-neutral-300"
+                              paymentLower === "paid" ? "border-emerald-700/40 text-emerald-200" : "border-neutral-700 text-neutral-300"
                             }`}
                           >
                             1) Paid
@@ -1942,7 +2025,7 @@ export default function DashboardPage() {
                         </div>
                       </div>
 
-                      {/* Seller: show delivery address + dispatch form */}
+                      {/* Seller block */}
                       {isSeller && paymentLower === "paid" && !isComplete && (
                         <div className="mt-4 border border-neutral-800 rounded-lg p-4 bg-neutral-950/30">
                           <h4 className="text-sm font-semibold text-neutral-100">Delivery details</h4>
@@ -1950,11 +2033,9 @@ export default function DashboardPage() {
                           {deliveryLines.length ? (
                             <div className="mt-2 text-sm text-neutral-200">
                               {deliveryLines.map((ln, i) => (
-                                <div key={i}>{ln}</div>
+                                <div key={`${tx.$id}-addr-${i}`}>{ln}</div>
                               ))}
-                              {deliveryPhone && (
-                                <div className="mt-1 text-xs text-neutral-400">Phone: {deliveryPhone}</div>
-                              )}
+                              {deliveryPhone && <div className="mt-1 text-xs text-neutral-400">Phone: {deliveryPhone}</div>}
                             </div>
                           ) : (
                             <p className="mt-2 text-xs text-neutral-400">No delivery address snapshot found on this transaction yet.</p>
@@ -1962,9 +2043,7 @@ export default function DashboardPage() {
 
                           <div className="mt-4">
                             <h5 className="text-sm font-semibold text-neutral-100">Confirm dispatch</h5>
-                            <p className="text-xs text-neutral-400 mt-1">
-                              Add the carrier and tracking number so the buyer can track delivery.
-                            </p>
+                            <p className="text-xs text-neutral-400 mt-1">Add the carrier and tracking number so the buyer can track delivery.</p>
 
                             {form.error && (
                               <p className="mt-2 bg-rose-900/30 text-rose-200 text-xs rounded-md px-3 py-2 border border-rose-700/70">
@@ -1978,10 +2057,11 @@ export default function DashboardPage() {
                                 <input
                                   value={form.carrier}
                                   onChange={(e) =>
-                                    setDispatchForms((p) => ({
-                                      ...p,
-                                      [tx.$id]: { ...form, carrier: e.target.value, error: "" },
-                                    }))
+                                    setDispatchForms((prev) => {
+                                      const current =
+                                        prev[tx.$id] || { carrier: "", tracking: "", note: "", saving: false, error: "" };
+                                      return { ...prev, [tx.$id]: { ...current, carrier: e.target.value, error: "" } };
+                                    })
                                   }
                                   placeholder="e.g. Royal Mail"
                                   className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
@@ -1993,10 +2073,11 @@ export default function DashboardPage() {
                                 <input
                                   value={form.tracking}
                                   onChange={(e) =>
-                                    setDispatchForms((p) => ({
-                                      ...p,
-                                      [tx.$id]: { ...form, tracking: e.target.value, error: "" },
-                                    }))
+                                    setDispatchForms((prev) => {
+                                      const current =
+                                        prev[tx.$id] || { carrier: "", tracking: "", note: "", saving: false, error: "" };
+                                      return { ...prev, [tx.$id]: { ...current, tracking: e.target.value, error: "" } };
+                                    })
                                   }
                                   placeholder="Tracking number"
                                   className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
@@ -2008,10 +2089,11 @@ export default function DashboardPage() {
                                 <input
                                   value={form.note}
                                   onChange={(e) =>
-                                    setDispatchForms((p) => ({
-                                      ...p,
-                                      [tx.$id]: { ...form, note: e.target.value, error: "" },
-                                    }))
+                                    setDispatchForms((prev) => {
+                                      const current =
+                                        prev[tx.$id] || { carrier: "", tracking: "", note: "", saving: false, error: "" };
+                                      return { ...prev, [tx.$id]: { ...current, note: e.target.value, error: "" } };
+                                    })
                                   }
                                   placeholder="Any extra info"
                                   className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
@@ -2028,10 +2110,11 @@ export default function DashboardPage() {
                                     setBannerError("");
                                     setBannerSuccess("");
 
-                                    setDispatchForms((p) => ({
-                                      ...p,
-                                      [tx.$id]: { ...form, saving: true, error: "" },
-                                    }));
+                                    setDispatchForms((prev) => {
+                                      const current =
+                                        prev[tx.$id] || { carrier: "", tracking: "", note: "", saving: false, error: "" };
+                                      return { ...prev, [tx.$id]: { ...current, saving: true, error: "" } };
+                                    });
 
                                     await postTxAction("/api/transactions/mark-dispatched", {
                                       txId: tx.$id,
@@ -2040,17 +2123,27 @@ export default function DashboardPage() {
                                       note: safeStr(form.note),
                                     });
 
+                                    setDispatchForms((prev) => {
+                                      const current =
+                                        prev[tx.$id] || { carrier: "", tracking: "", note: "", saving: false, error: "" };
+                                      return { ...prev, [tx.$id]: { ...current, saving: false, error: "" } };
+                                    });
+
                                     setBannerSuccess("Nice — marked as dispatched.");
-                                    window.location.reload();
+                                    if (userEmail) await refreshMyTransactions(userEmail);
                                   } catch (e: any) {
-                                    setDispatchForms((p) => ({
-                                      ...p,
-                                      [tx.$id]: {
-                                        ...form,
-                                        saving: false,
-                                        error: e?.message || "Failed to confirm dispatch.",
-                                      },
-                                    }));
+                                    setDispatchForms((prev) => {
+                                      const current =
+                                        prev[tx.$id] || { carrier: "", tracking: "", note: "", saving: false, error: "" };
+                                      return {
+                                        ...prev,
+                                        [tx.$id]: {
+                                          ...current,
+                                          saving: false,
+                                          error: e?.message || "Failed to confirm dispatch.",
+                                        },
+                                      };
+                                    });
                                   }
                                 }}
                                 className="px-4 py-2 rounded-md bg-sky-600 hover:bg-sky-700 text-white text-xs font-semibold disabled:opacity-50"
@@ -2064,7 +2157,7 @@ export default function DashboardPage() {
                         </div>
                       )}
 
-                      {/* Buyer: show tracking info + confirm received */}
+                      {/* Buyer block */}
                       {isBuyer && paymentLower === "paid" && !isComplete && (
                         <div className="mt-4 border border-neutral-800 rounded-lg p-4 bg-neutral-950/30">
                           <h4 className="text-sm font-semibold text-neutral-100">Delivery updates</h4>
@@ -2077,8 +2170,7 @@ export default function DashboardPage() {
                               <strong>Tracking:</strong> {safeStr(tx.seller_dispatch_tracking) || "—"}
                             </p>
                             <p>
-                              <strong>Dispatched:</strong>{" "}
-                              {tx.seller_dispatched_at ? formatLondon(tx.seller_dispatched_at) : "—"}
+                              <strong>Dispatched:</strong> {tx.seller_dispatched_at ? formatLondon(tx.seller_dispatched_at) : "—"}
                             </p>
                           </div>
 
@@ -2096,9 +2188,11 @@ export default function DashboardPage() {
                                 try {
                                   setBannerError("");
                                   setBannerSuccess("");
+
                                   await postTxAction("/api/transactions/confirm-received", { txId: tx.$id });
+
                                   setBannerSuccess("Thanks — marked as received.");
-                                  window.location.reload();
+                                  if (userEmail) await refreshMyTransactions(userEmail);
                                 } catch (e: any) {
                                   setBannerError(e?.message || "Failed to confirm receipt.");
                                 }
@@ -2113,13 +2207,12 @@ export default function DashboardPage() {
                         </div>
                       )}
 
-                      {/* If complete, show timestamps */}
+                      {/* Complete */}
                       {isComplete && (
                         <div className="mt-4 text-xs text-neutral-400 border border-neutral-800 rounded-lg p-3 bg-neutral-950/30">
                           <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
                             <div>
-                              <strong>Dispatched:</strong>{" "}
-                              {tx.seller_dispatched_at ? formatLondon(tx.seller_dispatched_at) : "—"}
+                              <strong>Dispatched:</strong> {tx.seller_dispatched_at ? formatLondon(tx.seller_dispatched_at) : "—"}
                             </div>
                             <div>
                               <strong>Received:</strong> {tx.buyer_received_at ? formatLondon(tx.buyer_received_at) : "—"}
@@ -2135,6 +2228,142 @@ export default function DashboardPage() {
                 })}
               </div>
             )}
+          </div>
+        )}
+
+        {/* EDIT QUEUED LISTING MODAL */}
+        {editingListing && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+            <div className="w-full max-w-2xl rounded-2xl border border-neutral-800 bg-neutral-950 text-neutral-100 shadow-xl">
+              <div className="p-5 border-b border-neutral-800 flex items-start justify-between gap-3">
+                <div>
+                  <h3 className="text-lg font-bold text-sky-200">Edit queued listing</h3>
+                  <p className="text-xs text-neutral-400 mt-1">{listingTitle(editingListing)}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={closeEditQueuedModal}
+                  className="px-3 py-1 rounded-md bg-neutral-900 hover:bg-neutral-800 text-neutral-200 text-xs font-semibold border border-neutral-800"
+                >
+                  Close
+                </button>
+              </div>
+
+              <div className="p-5 space-y-4">
+                {editError && (
+                  <div className="bg-rose-900/30 text-rose-200 text-sm rounded-md px-3 py-2 border border-rose-700/70">
+                    {editError}
+                  </div>
+                )}
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {[
+                    ["item_title", "Item title"],
+                    ["brand", "Brand (optional)"],
+                    ["model", "Model (optional)"],
+                    ["era", "Era (optional)"],
+                  ].map(([key, label]) => (
+                    <div key={key}>
+                      <label className="block text-xs font-semibold text-neutral-400 mb-1">{label}</label>
+                      <input
+                        value={(editForm as any)[key]}
+                        onChange={(e) => setEditForm((p) => ({ ...p, [key]: e.target.value }))}
+                        className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-900/40 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                      />
+                    </div>
+                  ))}
+
+                  <div>
+                    <label className="block text-xs font-semibold text-neutral-400 mb-1">Gear type</label>
+                    <select
+                      value={editForm.gear_type}
+                      onChange={(e) => setEditForm((p) => ({ ...p, gear_type: e.target.value }))}
+                      className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-900/40 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                    >
+                      <option value="">Select type</option>
+                      <option value="camera">Camera</option>
+                      <option value="lens">Lens</option>
+                      <option value="film_camera">Film camera</option>
+                      <option value="accessory">Accessory</option>
+                      <option value="other">Other</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-neutral-400 mb-1">Condition</label>
+                    <select
+                      value={editForm.condition}
+                      onChange={(e) => setEditForm((p) => ({ ...p, condition: e.target.value }))}
+                      className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-900/40 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                    >
+                      <option value="">Select condition</option>
+                      <option value="new">New</option>
+                      <option value="like_new">Like new</option>
+                      <option value="excellent">Excellent</option>
+                      <option value="good">Good</option>
+                      <option value="fair">Fair</option>
+                      <option value="spares_repairs">Spares / repairs</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-neutral-400 mb-1">Description</label>
+                  <textarea
+                    value={editForm.description}
+                    onChange={(e) => setEditForm((p) => ({ ...p, description: e.target.value }))}
+                    className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm min-h-[90px] bg-neutral-900/40 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                  />
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  {[
+                    ["reserve_price", "Reserve (£)"],
+                    ["starting_price", "Starting (£)"],
+                    ["buy_now", "Buy Now (£)"],
+                  ].map(([key, label]) => (
+                    <div key={key}>
+                      <label className="block text-xs font-semibold text-neutral-400 mb-1">{label}</label>
+                      <input
+                        type="number"
+                        value={(editForm as any)[key]}
+                        onChange={(e) => setEditForm((p) => ({ ...p, [key]: e.target.value }))}
+                        className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-900/40 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                        min={0}
+                      />
+                    </div>
+                  ))}
+                </div>
+
+                <label className="flex items-start gap-2 text-xs text-neutral-300">
+                  <input
+                    type="checkbox"
+                    checked={editForm.relist_until_sold}
+                    onChange={(e) => setEditForm((p) => ({ ...p, relist_until_sold: e.target.checked }))}
+                    className="mt-1 accent-sky-500"
+                  />
+                  <span>Relist automatically if it doesn’t sell.</span>
+                </label>
+              </div>
+
+              <div className="p-5 border-t border-neutral-800 flex flex-wrap gap-2 justify-end">
+                <button
+                  type="button"
+                  onClick={closeEditQueuedModal}
+                  className="px-4 py-2 rounded-md bg-neutral-900 hover:bg-neutral-800 text-neutral-200 text-sm font-semibold border border-neutral-800"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={editSaving}
+                  onClick={() => void saveQueuedEdit()}
+                  className="px-4 py-2 rounded-md bg-sky-600 hover:bg-sky-700 text-white text-sm font-semibold disabled:opacity-50"
+                >
+                  {editSaving ? "Saving…" : "Save changes"}
+                </button>
+              </div>
+            </div>
           </div>
         )}
       </div>

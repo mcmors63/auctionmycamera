@@ -19,8 +19,8 @@ const DATABASE_ID = process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID!;
 const LISTINGS_COLLECTION_ID = process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_COLLECTION_ID!;
 
 // ✅ Storage bucket for camera images (still used for sanity checks)
-const CAMERA_IMAGES_BUCKET_ID =
-  process.env.NEXT_PUBLIC_APPWRITE_CAMERA_IMAGES_BUCKET_ID || "";
+// (Not required for proxy URL generation)
+const CAMERA_IMAGES_BUCKET_ID = process.env.NEXT_PUBLIC_APPWRITE_CAMERA_IMAGES_BUCKET_ID || "";
 
 // -----------------------------
 // Types
@@ -161,8 +161,9 @@ function buildLocalImageProxyUrl(fileId: string) {
   const id = String(fileId || "").trim();
   if (!id) return null;
 
-  if (!CAMERA_IMAGES_BUCKET_ID) return null;
-
+  // ✅ IMPORTANT:
+  // The browser does NOT need the bucket ID to use our proxy route.
+  // The server route will handle bucket access. So do not block on CAMERA_IMAGES_BUCKET_ID here.
   return `/api/camera-image/${encodeURIComponent(id)}`;
 }
 
@@ -197,9 +198,7 @@ export default function ListingDetailsClient({ initial }: { initial: Listing }) 
   const [refreshNote, setRefreshNote] = useState<string | null>(null);
 
   const [outbidPopup, setOutbidPopup] = useState<null | { oldBid: number; newBid: number }>(null);
-  const [softClosePopup, setSoftClosePopup] = useState<null | { oldEnd: string; newEnd: string }>(
-    null
-  );
+  const [softClosePopup, setSoftClosePopup] = useState<null | { oldEnd: string; newEnd: string }>(null);
 
   const listingRef = useRef<Listing | null>(initial ?? null);
   useEffect(() => {
@@ -356,8 +355,7 @@ export default function ListingDetailsClient({ initial }: { initial: Listing }) 
       ? currentBidRaw
       : null;
 
-  const currentBidDisplay =
-    currentBidRaw == null ? (startingPrice != null ? "No bids yet" : money(0)) : money(currentBidRaw);
+  const currentBidDisplay = currentBidRaw == null ? (startingPrice != null ? "No bids yet" : money(0)) : money(currentBidRaw);
 
   // Banner + CTA logic for ended states (non-sold)
   const showEndedInfoBanner = !isSold && (isCompleted || isNotSold || isPaymentRequired || isPaymentFailed || endedByClock);
@@ -408,8 +406,7 @@ export default function ListingDetailsClient({ initial }: { initial: Listing }) 
       return {
         tone: "slate" as const,
         title: "Auction ended",
-        body:
-          "This auction has ended. If you participated, check your dashboard for any updates.",
+        body: "This auction has ended. If you participated, check your dashboard for any updates.",
         ctaPrimary: { href: "/dashboard?tab=transactions", label: "Go to dashboard" },
         ctaSecondary: { href: "/current-listings", label: "Browse current listings" },
       };
@@ -502,9 +499,7 @@ export default function ListingDetailsClient({ initial }: { initial: Listing }) 
                 Final Price: <span className="font-bold">{money(soldPrice)}</span>
               </p>
             ) : null}
-            <p className="text-sm opacity-90 mt-1">
-              {anyL.sold_via === "buy_now" ? "Bought via Buy Now" : "Sold at Auction"}
-            </p>
+            <p className="text-sm opacity-90 mt-1">{anyL.sold_via === "buy_now" ? "Bought via Buy Now" : "Sold at Auction"}</p>
           </div>
         )}
 
@@ -518,9 +513,7 @@ export default function ListingDetailsClient({ initial }: { initial: Listing }) 
               <Link
                 href={endedBanner.ctaPrimary.href}
                 className={`inline-flex items-center justify-center rounded-md px-5 py-3 font-semibold ${
-                  endedBanner.tone === "slate"
-                    ? "bg-black text-white hover:bg-gray-900"
-                    : "bg-black text-yellow-200 hover:bg-gray-900"
+                  endedBanner.tone === "slate" ? "bg-black text-white hover:bg-gray-900" : "bg-black text-yellow-200 hover:bg-gray-900"
                 }`}
               >
                 {endedBanner.ctaPrimary.label}
@@ -566,10 +559,7 @@ export default function ListingDetailsClient({ initial }: { initial: Listing }) 
                   ) : null}
 
                   <p className="text-xs text-gray-600">
-                    Reserve:{" "}
-                    <span className="font-semibold">
-                      {reserveMet === true ? "met" : reserveMet === false ? "not met" : "hidden"}
-                    </span>
+                    Reserve: <span className="font-semibold">{reserveMet === true ? "met" : reserveMet === false ? "not met" : "hidden"}</span>
                   </p>
 
                   {isPaymentRequired && (
@@ -608,11 +598,7 @@ export default function ListingDetailsClient({ initial }: { initial: Listing }) 
                       <span className="font-semibold">{isLive ? "Auction ends in:" : "Auction starts in:"}</span>
                     </p>
                     <div className="mt-1 inline-block">
-                      {isLive ? (
-                        <AuctionTimer mode="live" endTime={rawEndStr || undefined} />
-                      ) : (
-                        <AuctionTimer mode="coming" endTime={rawStartStr || undefined} />
-                      )}
+                      {isLive ? <AuctionTimer mode="live" endTime={rawEndStr || undefined} /> : <AuctionTimer mode="coming" endTime={rawStartStr || undefined} />}
                     </div>
                   </>
                 )

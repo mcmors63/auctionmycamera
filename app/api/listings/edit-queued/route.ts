@@ -8,21 +8,23 @@ export const dynamic = "force-dynamic";
 // -----------------------------
 // ENV
 // -----------------------------
-const endpoint = process.env.APPWRITE_ENDPOINT || process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT || "";
-const projectId = process.env.APPWRITE_PROJECT_ID || process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID || "";
-const apiKey = process.env.APPWRITE_API_KEY || "";
+const endpoint =
+  (process.env.APPWRITE_ENDPOINT || process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT || "").trim();
+const projectId =
+  (process.env.APPWRITE_PROJECT_ID || process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID || "").trim();
+const apiKey = (process.env.APPWRITE_API_KEY || "").trim();
 
 const LISTINGS_DB_ID =
-  process.env.APPWRITE_LISTINGS_DATABASE_ID ||
-  process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID ||
-  process.env.APPWRITE_DATABASE_ID ||
-  process.env.NEXT_PUBLIC_APPWRITE_DATABASE_ID ||
-  "";
+  (process.env.APPWRITE_LISTINGS_DATABASE_ID ||
+    process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID ||
+    process.env.APPWRITE_DATABASE_ID ||
+    process.env.NEXT_PUBLIC_APPWRITE_DATABASE_ID ||
+    "").trim();
 
 const LISTINGS_COLLECTION_ID =
-  process.env.APPWRITE_LISTINGS_COLLECTION_ID ||
-  process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_COLLECTION_ID ||
-  "listings";
+  (process.env.APPWRITE_LISTINGS_COLLECTION_ID ||
+    process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_COLLECTION_ID ||
+    "listings").trim();
 
 // -----------------------------
 // Helpers
@@ -134,6 +136,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: false, error: "listingId required" }, { status: 400 });
     }
 
+    // Strings (write as "" to avoid schema rejecting null)
     const item_title = safeString(body.item_title);
     const gear_type = safeString(body.gear_type);
     const brand = safeString(body.brand);
@@ -143,17 +146,16 @@ export async function POST(req: NextRequest) {
     const description = safeString(body.description);
 
     const reserve_price = toNumber(body.reserve_price, NaN);
-    const starting_price = body.starting_price === "" || body.starting_price == null ? 0 : toNumber(body.starting_price, NaN);
+    const starting_price =
+      body.starting_price === "" || body.starting_price == null ? 0 : toNumber(body.starting_price, NaN);
     const buy_now = body.buy_now === "" || body.buy_now == null ? 0 : toNumber(body.buy_now, NaN);
 
     if (!Number.isFinite(reserve_price) || reserve_price < 10) {
       return NextResponse.json({ ok: false, error: "Minimum reserve price is £10." }, { status: 400 });
     }
-
     if (!Number.isFinite(starting_price) || starting_price < 0) {
       return NextResponse.json({ ok: false, error: "Starting price must be a valid number (0+)." }, { status: 400 });
     }
-
     if (!Number.isFinite(buy_now) || buy_now < 0) {
       return NextResponse.json({ ok: false, error: "Buy Now must be a valid number (0+)." }, { status: 400 });
     }
@@ -207,7 +209,10 @@ export async function POST(req: NextRequest) {
 
     if (!isQueuedStatus(listing?.status)) {
       return NextResponse.json(
-        { ok: false, error: `Only queued listings can be edited. Current status: ${String(listing?.status || "unknown")}` },
+        {
+          ok: false,
+          error: `Only queued listings can be edited. Current status: ${String(listing?.status || "unknown")}`,
+        },
         { status: 400 }
       );
     }
@@ -221,17 +226,16 @@ export async function POST(req: NextRequest) {
       seller_last_edited_at: new Date().toISOString(),
     };
 
-    // Only write optional strings if those attributes exist OR schema-tolerant will drop them
-    payload.item_title = item_title || null;
-    payload.gear_type = gear_type || null;
-    payload.brand = brand || null;
-    payload.model = model || null;
-    payload.era = era || null;
-    payload.condition = condition || null;
-    payload.description = description || null;
+    // Optional strings (avoid null writes)
+    if (item_title) payload.item_title = item_title;
+if (gear_type) payload.gear_type = gear_type;
+if (brand) payload.brand = brand;
+if (model) payload.model = model;
+if (era) payload.era = era;
+if (condition) payload.condition = condition;
+if (description) payload.description = description;
 
-    // We do NOT touch status/auction dates here (admin controls schedule)
-    // But if you want to force it to remain queued:
+    // Do NOT touch status/auction dates here (admin controls schedule)
     if (has(listing, "status")) payload.status = listing.status;
 
     const updated = await updateDocSchemaTolerant(databases, LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, listingId, payload);
