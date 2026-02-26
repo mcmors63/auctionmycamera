@@ -73,6 +73,10 @@ export type Listing = {
   registration?: string | null;
   reg_number?: string | null;
 
+  // possible sale/payment markers (best-effort)
+  sale_status?: string | null;
+  payment_status?: string | null;
+
   [key: string]: any;
 };
 
@@ -176,6 +180,14 @@ function pickImageSrc(l: Listing) {
   }
 
   return pickFallbackImage(l);
+}
+
+function normStatus(s: any) {
+  return String(s || "").trim().toLowerCase();
+}
+
+function isLifecycleEndedStatus(statusLower: string) {
+  return ["sold", "completed", "not_sold", "payment_required", "payment_failed"].includes(statusLower);
 }
 
 export default function ListingDetailsClient({ initial }: { initial: Listing }) {
@@ -283,10 +295,16 @@ export default function ListingDetailsClient({ initial }: { initial: Listing }) 
 
   const anyL = listing as any;
 
-  const status = String(anyL.status || "");
-  const isLiveStatus = status === "live";
-  const isComing = status === "queued";
-  const isSold = status === "sold";
+  const statusLower = normStatus(anyL.status);
+  const isLiveStatus = statusLower === "live";
+  const isComing = statusLower === "queued";
+  const isSold = statusLower === "sold";
+
+  // New lifecycle states from scheduler
+  const isCompleted = statusLower === "completed"; // auction ended, processing / charging
+  const isNotSold = statusLower === "not_sold";
+  const isPaymentRequired = statusLower === "payment_required";
+  const isPaymentFailed = statusLower === "payment_failed";
 
   const name = getListingName(listing);
   const buyNow = pickBuyNow(listing);
@@ -308,8 +326,16 @@ export default function ListingDetailsClient({ initial }: { initial: Listing }) 
   const rawStartStr = String(anyL.auction_start ?? anyL.start_time ?? "");
 
   const endMs = parseMaybeDate(rawEndStr);
-  const auctionEnded = !!endMs && endMs <= Date.now();
 
+  // Clock-based ended (for live/queued)
+  const endedByClock = !!endMs && endMs <= Date.now();
+
+  // ✅ Treat these statuses as ended even if the end time is missing
+  const endedByStatus = isLifecycleEndedStatus(statusLower);
+
+  const auctionEnded = endedByClock || endedByStatus;
+
+  // "Live" should only be true when status is live AND not ended
   const isLive = isLiveStatus && !auctionEnded && !isSold;
 
   const extraLine =
@@ -333,6 +359,83 @@ export default function ListingDetailsClient({ initial }: { initial: Listing }) 
   const currentBidDisplay =
     currentBidRaw == null ? (startingPrice != null ? "No bids yet" : money(0)) : money(currentBidRaw);
 
+  // Banner + CTA logic for ended states (non-sold)
+  const showEndedInfoBanner = !isSold && (isCompleted || isNotSold || isPaymentRequired || isPaymentFailed || endedByClock);
+
+  const endedBanner = (() => {
+    if (isPaymentRequired) {
+      return {
+        tone: "amber" as const,
+        title: "Payment required",
+        body:
+          "The winner needs to add a saved card to complete payment. If you are the winner, add/verify your payment method in your account.",
+        ctaPrimary: { href: "/payment-method", label: "Manage payment method" },
+        ctaSecondary: { href: "/dashboard?tab=transactions", label: "Go to dashboard" },
+      };
+    }
+    if (isPaymentFailed) {
+      return {
+        tone: "rose" as const,
+        title: "Payment failed",
+        body:
+          "The winner’s payment could not be taken automatically. If you are the winner, update your saved card and we’ll attempt payment again.",
+        ctaPrimary: { href: "/payment-method", label: "Update saved card" },
+        ctaSecondary: { href: "/dashboard?tab=transactions", label: "Go to dashboard" },
+      };
+    }
+    if (isCompleted) {
+      return {
+        tone: "slate" as const,
+        title: "Auction ended (processing)",
+        body:
+          "This auction has ended and we’re processing the result. If you won, keep an eye on your dashboard for the next step.",
+        ctaPrimary: { href: "/dashboard?tab=transactions", label: "Go to dashboard" },
+        ctaSecondary: { href: "/current-listings", label: "Browse current listings" },
+      };
+    }
+    if (isNotSold) {
+      return {
+        tone: "slate" as const,
+        title: "Auction ended (not sold)",
+        body:
+          "This item didn’t sell in the last auction window. If you’re the seller, it may be re-listed depending on your auto-relist setting.",
+        ctaPrimary: { href: "/current-listings", label: "Browse current listings" },
+        ctaSecondary: { href: "/sell", label: "Sell camera gear" },
+      };
+    }
+    // ended-by-clock fallback
+    if (endedByClock) {
+      return {
+        tone: "slate" as const,
+        title: "Auction ended",
+        body:
+          "This auction has ended. If you participated, check your dashboard for any updates.",
+        ctaPrimary: { href: "/dashboard?tab=transactions", label: "Go to dashboard" },
+        ctaSecondary: { href: "/current-listings", label: "Browse current listings" },
+      };
+    }
+    return null;
+  })();
+
+  const chip = (() => {
+    if (isSold) return { label: "SOLD", cls: "bg-gray-200 text-gray-700" };
+    if (isPaymentRequired) return { label: "PAYMENT REQUIRED", cls: "bg-yellow-100 text-yellow-800" };
+    if (isPaymentFailed) return { label: "PAYMENT FAILED", cls: "bg-red-100 text-red-700" };
+    if (isCompleted) return { label: "PROCESSING", cls: "bg-gray-200 text-gray-700" };
+    if (isNotSold) return { label: "NOT SOLD", cls: "bg-gray-200 text-gray-700" };
+    if (isComing) return { label: "Queued", cls: "bg-yellow-100 text-yellow-800" };
+    if (isLive) return { label: "LIVE", cls: "bg-green-100 text-green-800" };
+    if (auctionEnded) return { label: "ENDED", cls: "bg-gray-200 text-gray-700" };
+    return { label: statusLower ? niceEnum(statusLower) : "Listing", cls: "bg-gray-200 text-gray-700" };
+  })();
+
+  const bannerToneClasses =
+    endedBanner?.tone === "amber"
+      ? "bg-yellow-500 text-black"
+      : endedBanner?.tone === "rose"
+      ? "bg-red-600 text-white"
+      : "bg-gray-200 text-gray-800";
+
   return (
     <main className="min-h-screen bg-black text-gray-100 py-10 px-4">
       <div className="max-w-5xl mx-auto bg-white rounded-2xl shadow-lg border border-yellow-100 overflow-hidden text-sm md:text-base">
@@ -343,26 +446,9 @@ export default function ListingDetailsClient({ initial }: { initial: Listing }) 
           </Link>
 
           <div className="flex items-center gap-3 text-xs">
-            {isSold && (
-              <span className="inline-flex items-center rounded-full bg-gray-200 px-3 py-1 font-semibold text-gray-700">
-                SOLD
-              </span>
-            )}
-            {isComing && !isSold && (
-              <span className="inline-flex items-center rounded-full bg-yellow-100 px-3 py-1 font-semibold text-yellow-800">
-                Queued
-              </span>
-            )}
-            {isLive && !isSold && (
-              <span className="inline-flex items-center rounded-full bg-green-100 px-3 py-1 font-semibold text-green-800">
-                LIVE
-              </span>
-            )}
-            {!isSold && auctionEnded && (
-              <span className="inline-flex items-center rounded-full bg-gray-200 px-3 py-1 font-semibold text-gray-700">
-                ENDED
-              </span>
-            )}
+            <span className={`inline-flex items-center rounded-full px-3 py-1 font-semibold ${chip.cls}`}>
+              {chip.label}
+            </span>
           </div>
         </div>
 
@@ -422,6 +508,34 @@ export default function ListingDetailsClient({ initial }: { initial: Listing }) 
           </div>
         )}
 
+        {/* Ended / processing banner */}
+        {showEndedInfoBanner && endedBanner && !isSold && (
+          <div className={`mx-6 my-4 p-5 rounded-xl shadow text-center ${bannerToneClasses}`}>
+            <p className="text-xl md:text-2xl font-extrabold">{endedBanner.title}</p>
+            <p className="text-sm md:text-base mt-2 opacity-90">{endedBanner.body}</p>
+
+            <div className="mt-4 flex flex-col sm:flex-row items-center justify-center gap-3">
+              <Link
+                href={endedBanner.ctaPrimary.href}
+                className={`inline-flex items-center justify-center rounded-md px-5 py-3 font-semibold ${
+                  endedBanner.tone === "slate"
+                    ? "bg-black text-white hover:bg-gray-900"
+                    : "bg-black text-yellow-200 hover:bg-gray-900"
+                }`}
+              >
+                {endedBanner.ctaPrimary.label}
+              </Link>
+
+              <Link
+                href={endedBanner.ctaSecondary.href}
+                className="inline-flex items-center justify-center rounded-md border border-black/20 bg-white/60 px-5 py-3 font-semibold text-black hover:bg-white"
+              >
+                {endedBanner.ctaSecondary.label}
+              </Link>
+            </div>
+          </div>
+        )}
+
         {/* Auction details */}
         <div className="mt-2 mx-6 mb-6 bg-gray-50 rounded-xl border border-gray-200 shadow-sm p-6">
           <h2 className="text-lg md:text-xl font-bold mb-4 text-yellow-600">Auction details</h2>
@@ -457,6 +571,17 @@ export default function ListingDetailsClient({ initial }: { initial: Listing }) 
                       {reserveMet === true ? "met" : reserveMet === false ? "not met" : "hidden"}
                     </span>
                   </p>
+
+                  {isPaymentRequired && (
+                    <p className="text-xs text-yellow-800 bg-yellow-100 border border-yellow-200 rounded-md px-3 py-2 mt-2">
+                      Winner payment is required to complete this sale.
+                    </p>
+                  )}
+                  {isPaymentFailed && (
+                    <p className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-md px-3 py-2 mt-2">
+                      Winner payment failed. If you’re the winner, update your saved card.
+                    </p>
+                  )}
                 </>
               ) : (
                 <p className="font-semibold text-gray-700">This auction has ended.</p>
@@ -466,7 +591,17 @@ export default function ListingDetailsClient({ initial }: { initial: Listing }) 
             <div className="space-y-2 md:text-right">
               {!isSold ? (
                 auctionEnded ? (
-                  <p className="font-semibold text-red-600">Auction ended</p>
+                  <p className="font-semibold text-red-600">
+                    {isCompleted
+                      ? "Auction ended (processing)"
+                      : isPaymentRequired
+                      ? "Auction ended (payment required)"
+                      : isPaymentFailed
+                      ? "Auction ended (payment failed)"
+                      : isNotSold
+                      ? "Auction ended (not sold)"
+                      : "Auction ended"}
+                  </p>
                 ) : (
                   <>
                     <p>
@@ -537,13 +672,25 @@ export default function ListingDetailsClient({ initial }: { initial: Listing }) 
                 </p>
               </div>
             ) : auctionEnded ? (
-              <p className="text-sm text-gray-700">
-                This auction has ended.{" "}
-                <Link href="/current-listings" className="text-blue-700 underline">
-                  Browse current listings
-                </Link>
-                .
-              </p>
+              <div className="flex flex-col gap-2">
+                <p className="text-sm text-gray-700">
+                  This auction has ended.{" "}
+                  <Link href="/current-listings" className="text-blue-700 underline">
+                    Browse current listings
+                  </Link>
+                  .
+                </p>
+
+                {(isPaymentRequired || isPaymentFailed || isCompleted) && (
+                  <p className="text-xs text-gray-600">
+                    If you took part, check{" "}
+                    <Link href="/dashboard?tab=transactions" className="text-blue-700 underline">
+                      your dashboard
+                    </Link>{" "}
+                    for updates.
+                  </p>
+                )}
+              </div>
             ) : (
               <p className="text-sm text-gray-700">
                 Bidding opens when this item goes live.{" "}

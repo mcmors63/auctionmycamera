@@ -132,9 +132,63 @@ function getListingName(l: Listing) {
   return "Camera gear listing";
 }
 
+/**
+ * ✅ Public visibility:
+ * - Keep the page accessible for legitimate “ended” states (people will have links)
+ * - But only INDEX the clean statuses (live/queued/sold)
+ */
 function isPublicStatus(status?: string) {
-  // ✅ Public statuses only (and indexable)
-  return status === "live" || status === "queued" || status === "sold";
+  const s = String(status || "").toLowerCase();
+  return [
+    "live",
+    "queued",
+    "sold",
+    "completed",         // ended, awaiting payment capture
+    "not_sold",          // ended, reserve not met / no winner
+    "payment_required",  // winner exists but needs a card
+    "payment_failed",    // attempted charge failed
+  ].includes(s);
+}
+
+function isIndexableStatus(status?: string) {
+  const s = String(status || "").toLowerCase();
+  return s === "live" || s === "queued" || s === "sold";
+}
+
+function statusTitleSuffix(status: string) {
+  const s = String(status || "").toLowerCase();
+  if (s === "queued") return "– Coming Soon";
+  if (s === "sold") return "– Sold";
+  if (s === "completed") return "– Auction ended (processing)";
+  if (s === "payment_required") return "– Payment required";
+  if (s === "payment_failed") return "– Payment failed";
+  if (s === "not_sold") return "– Auction ended";
+  return "– Camera Gear Auction";
+}
+
+function statusDescriptionSuffix(status: string) {
+  const s = String(status || "").toLowerCase();
+  if (s === "queued") return "This item is queued for the next weekly auction.";
+  if (s === "sold") return "This item has sold on AuctionMyCamera.";
+  if (s === "completed") return "The auction has ended and the result is being processed.";
+  if (s === "payment_required") return "The auction has ended and the winner needs to complete payment.";
+  if (s === "payment_failed") return "The auction has ended but payment could not be taken automatically.";
+  if (s === "not_sold") return "The auction has ended and this item did not sell.";
+  return null;
+}
+
+function schemaAvailability(status: string) {
+  const s = String(status || "").toLowerCase();
+  if (s === "sold") return "https://schema.org/SoldOut";
+  if (s === "queued") return "https://schema.org/PreOrder";
+  if (s === "live") return "https://schema.org/InStock";
+
+  // Ended states: treat as out of stock (clean + safe)
+  if (["completed", "payment_required", "payment_failed", "not_sold"].includes(s)) {
+    return "https://schema.org/OutOfStock";
+  }
+
+  return "https://schema.org/OutOfStock";
 }
 
 export async function generateMetadata({
@@ -157,12 +211,7 @@ export async function generateMetadata({
   const name = getListingName(listing);
   const buyNow = pickBuyNow(listing);
 
-  const titleBase =
-    status === "queued"
-      ? `${name} – Coming Soon | AuctionMyCamera`
-      : status === "sold"
-      ? `${name} – Sold | AuctionMyCamera`
-      : `${name} – Camera Gear Auction | AuctionMyCamera`;
+  const titleBase = `${name} ${statusTitleSuffix(status)} | AuctionMyCamera`;
 
   const descBits = [
     `Bid on ${name} on AuctionMyCamera.`,
@@ -173,22 +222,24 @@ export async function generateMetadata({
       ? `Starting price ${money(anyL.starting_price)}.`
       : null,
     buyNow ? `Buy Now available at ${money(buyNow)}.` : null,
-    status === "queued" ? "This item is queued for the next weekly auction." : null,
-    status === "sold" ? "This item has sold on AuctionMyCamera." : null,
+    statusDescriptionSuffix(status),
   ].filter(Boolean);
 
   const description = descBits.join(" ");
 
-  // ✅ Canonical always anchored to SITE_URL logic (prod = real domain)
   const canonical = `${SITE_URL}/listing/${anyL.$id}`;
 
-  const indexable = isPublicStatus(status);
+  const publicPage = isPublicStatus(status);
+  const indexable = publicPage && isIndexableStatus(status);
 
   return {
     title: titleBase,
     description,
     alternates: { canonical },
+
+    // ✅ Public page can exist, but only index clean statuses
     robots: indexable ? { index: true, follow: true } : { index: false, follow: false },
+
     openGraph: {
       title: titleBase,
       description,
@@ -216,7 +267,6 @@ export default async function ListingDetailsPage({
 
   const anyL = listing as any;
 
-  // If it’s in a non-public state (pending/rejected/etc), don’t expose it
   const status = String(anyL.status || "");
   if (!isPublicStatus(status)) return notFound();
 
@@ -238,16 +288,10 @@ export default async function ListingDetailsPage({
   const offer: any = {
     "@type": "Offer",
     priceCurrency: "GBP",
-    availability:
-      status === "sold"
-        ? "https://schema.org/SoldOut"
-        : status === "queued"
-        ? "https://schema.org/PreOrder"
-        : "https://schema.org/InStock",
+    availability: schemaAvailability(status),
     url: canonical,
   };
 
-  // Only include price if we have one (cleaner JSON-LD)
   if (typeof schemaPrice === "number") {
     offer.price = schemaPrice;
   }
