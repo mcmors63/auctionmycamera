@@ -1,14 +1,10 @@
 // app/api/stripe/create-setup-intent/route.ts
 import { NextResponse } from "next/server";
 import Stripe from "stripe";
-import {
-  Client as AppwriteClient,
-  Account,
-  Databases,
-  Query,
-} from "node-appwrite";
+import { Client as AppwriteClient, Account, Databases, Query } from "node-appwrite";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 // -----------------------------
 // Stripe (lazy singleton)
@@ -30,28 +26,29 @@ function stripeClient() {
 // -----------------------------
 // Appwrite (auth + optional profile cache)
 // -----------------------------
-const APPWRITE_ENDPOINT =
-  process.env.APPWRITE_ENDPOINT ||
-  process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT ||
-  "";
+function normalizeEndpoint(raw: string) {
+  const x = (raw || "").trim().replace(/\/+$/, "");
+  if (!x) return "";
+  return x.endsWith("/v1") ? x : `${x}/v1`;
+}
 
-const APPWRITE_PROJECT =
-  process.env.APPWRITE_PROJECT_ID ||
-  process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID ||
-  "";
+const APPWRITE_ENDPOINT = normalizeEndpoint(
+  process.env.APPWRITE_ENDPOINT || process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT || ""
+);
 
-const APPWRITE_API_KEY = process.env.APPWRITE_API_KEY || "";
+const APPWRITE_PROJECT = (process.env.APPWRITE_PROJECT_ID || process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID || "")
+  .trim();
+
+const APPWRITE_API_KEY = (process.env.APPWRITE_API_KEY || "").trim();
 
 // Optional profile cache
-const PROFILES_DB_ID =
-  process.env.APPWRITE_PROFILES_DATABASE_ID ||
+const PROFILES_DB_ID = (process.env.APPWRITE_PROFILES_DATABASE_ID ||
   process.env.NEXT_PUBLIC_APPWRITE_PROFILES_DATABASE_ID ||
-  "";
+  "").trim();
 
-const PROFILES_COLLECTION_ID =
-  process.env.APPWRITE_PROFILES_COLLECTION_ID ||
+const PROFILES_COLLECTION_ID = (process.env.APPWRITE_PROFILES_COLLECTION_ID ||
   process.env.NEXT_PUBLIC_APPWRITE_PROFILES_COLLECTION_ID ||
-  "";
+  "").trim();
 
 function getBearerJwt(req: Request) {
   const auth = req.headers.get("authorization") || "";
@@ -64,10 +61,7 @@ async function getAuthedUser(jwt: string): Promise<{ email: string; userId: stri
     throw new Error("Appwrite env missing (APPWRITE_ENDPOINT / APPWRITE_PROJECT_ID).");
   }
 
-  const c = new AppwriteClient()
-    .setEndpoint(APPWRITE_ENDPOINT)
-    .setProject(APPWRITE_PROJECT)
-    .setJWT(jwt);
+  const c = new AppwriteClient().setEndpoint(APPWRITE_ENDPOINT).setProject(APPWRITE_PROJECT).setJWT(jwt);
 
   const account = new Account(c);
   const me = await account.get();
@@ -81,20 +75,11 @@ async function getAuthedUser(jwt: string): Promise<{ email: string; userId: stri
 }
 
 function getProfilesDbOrNull() {
-  if (
-    !APPWRITE_ENDPOINT ||
-    !APPWRITE_PROJECT ||
-    !APPWRITE_API_KEY ||
-    !PROFILES_DB_ID ||
-    !PROFILES_COLLECTION_ID
-  ) {
+  if (!APPWRITE_ENDPOINT || !APPWRITE_PROJECT || !APPWRITE_API_KEY || !PROFILES_DB_ID || !PROFILES_COLLECTION_ID) {
     return null;
   }
 
-  const client = new AppwriteClient()
-    .setEndpoint(APPWRITE_ENDPOINT)
-    .setProject(APPWRITE_PROJECT)
-    .setKey(APPWRITE_API_KEY);
+  const client = new AppwriteClient().setEndpoint(APPWRITE_ENDPOINT).setProject(APPWRITE_PROJECT).setKey(APPWRITE_API_KEY);
 
   return { databases: new Databases(client) };
 }
@@ -211,32 +196,29 @@ export async function POST(req: Request) {
       metadata: {
         purpose: "setup_card",
         email,
-        userId, // ✅ canonical
-        appwriteUserId: userId, // ✅ keep for backwards compatibility
+        userId,
+        appwriteUserId: userId, // backwards-compatible
       },
     });
 
     if (!setupIntent.client_secret) {
       console.error("[create-setup-intent] no client_secret on SetupIntent", setupIntent.id);
-      return NextResponse.json(
-        { error: "Failed to create setup intent (no client secret)." },
-        { status: 500 }
-      );
+      return NextResponse.json({ error: "Failed to create setup intent (no client secret)." }, { status: 500 });
     }
 
     return NextResponse.json({ clientSecret: setupIntent.client_secret }, { status: 200 });
   } catch (err: any) {
     console.error("[create-setup-intent] error:", err);
 
-    // If env missing, keep it explicit
     if (String(err?.message || "").includes("STRIPE_SECRET_KEY is not set")) {
       return NextResponse.json({ error: "Stripe is not configured on the server." }, { status: 500 });
     }
 
     const status = /Not authenticated|Invalid session/i.test(err?.message || "") ? 401 : 500;
-    return NextResponse.json(
-      { error: err?.message || "Failed to create setup intent." },
-      { status }
-    );
+    return NextResponse.json({ error: err?.message || "Failed to create setup intent." }, { status });
   }
+}
+
+export async function OPTIONS() {
+  return new NextResponse(null, { status: 204 });
 }

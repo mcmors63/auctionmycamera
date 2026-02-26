@@ -4,6 +4,7 @@ import Stripe from "stripe";
 import { Client as AppwriteClient, Databases, Query, Account } from "node-appwrite";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 // -----------------------------
 // STRIPE
@@ -20,11 +21,9 @@ const stripe = STRIPE_SECRET_KEY ? new Stripe(STRIPE_SECRET_KEY) : null;
 function normalizeAppwriteEndpoint(raw: string) {
   const x = (raw || "").trim().replace(/\/+$/, "");
   if (!x) return "";
-  if (x.endsWith("/v1")) return x;
-  return `${x}/v1`;
+  return x.endsWith("/v1") ? x : `${x}/v1`;
 }
 
-// ✅ Server-first (server route), public fallback
 const APPWRITE_ENDPOINT = normalizeAppwriteEndpoint(
   process.env.APPWRITE_ENDPOINT || process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT || ""
 );
@@ -36,15 +35,13 @@ const APPWRITE_PROJECT = (
 const APPWRITE_API_KEY = (process.env.APPWRITE_API_KEY || "").trim();
 
 // Optional profile cache
-const PROFILES_DB_ID =
-  (process.env.APPWRITE_PROFILES_DATABASE_ID ||
-    process.env.NEXT_PUBLIC_APPWRITE_PROFILES_DATABASE_ID ||
-    "").trim();
+const PROFILES_DB_ID = (
+  process.env.APPWRITE_PROFILES_DATABASE_ID || process.env.NEXT_PUBLIC_APPWRITE_PROFILES_DATABASE_ID || ""
+).trim();
 
-const PROFILES_COLLECTION_ID =
-  (process.env.APPWRITE_PROFILES_COLLECTION_ID ||
-    process.env.NEXT_PUBLIC_APPWRITE_PROFILES_COLLECTION_ID ||
-    "").trim();
+const PROFILES_COLLECTION_ID = (
+  process.env.APPWRITE_PROFILES_COLLECTION_ID || process.env.NEXT_PUBLIC_APPWRITE_PROFILES_COLLECTION_ID || ""
+).trim();
 
 function getBearerJwt(req: Request) {
   const auth = req.headers.get("authorization") || "";
@@ -69,11 +66,7 @@ async function requireAuthedUser(req: Request) {
   }
 
   try {
-    const c = new AppwriteClient()
-      .setEndpoint(APPWRITE_ENDPOINT)
-      .setProject(APPWRITE_PROJECT)
-      .setJWT(jwt);
-
+    const c = new AppwriteClient().setEndpoint(APPWRITE_ENDPOINT).setProject(APPWRITE_PROJECT).setJWT(jwt);
     const account = new Account(c);
     const user = await account.get();
     return { ok: true as const, user };
@@ -90,11 +83,7 @@ function getProfilesDbOrNull() {
   if (!APPWRITE_ENDPOINT || !APPWRITE_PROJECT || !APPWRITE_API_KEY) return null;
   if (!PROFILES_DB_ID || !PROFILES_COLLECTION_ID) return null;
 
-  const client = new AppwriteClient()
-    .setEndpoint(APPWRITE_ENDPOINT)
-    .setProject(APPWRITE_PROJECT)
-    .setKey(APPWRITE_API_KEY);
-
+  const client = new AppwriteClient().setEndpoint(APPWRITE_ENDPOINT).setProject(APPWRITE_PROJECT).setKey(APPWRITE_API_KEY);
   return { databases: new Databases(client) };
 }
 
@@ -106,6 +95,59 @@ async function findProfileByEmail(databases: Databases, email: string) {
   return (res.documents[0] as any) || null;
 }
 
+async function safeSyncStripeCustomerId(databases: Databases, profileId: string, stripeCustomerId: string) {
+  try {
+    await databases.updateDocument(PROFILES_DB_ID, PROFILES_COLLECTION_ID, profileId, {
+      stripe_customer_id: stripeCustomerId,
+    });
+  } catch (e: any) {
+    const msg = String(e?.message || "");
+    if (/Unknown attribute:\s*stripe_customer_id/i.test(msg)) {
+      // Schema doesn't have it — not fatal
+      return;
+    }
+    console.warn("[list-payment-methods] failed to sync customer id:", e);
+  }
+}
+
+async function getDefaultPaymentMethodId(customerId: string) {
+  if (!stripe) return null;
+
+  try {
+    const customer = await stripe.customers.retrieve(customerId);
+
+    if ("deleted" in customer) return null;
+
+    const defPm = customer.invoice_settings?.default_payment_method as
+      | string
+      | { id: string }
+      | null
+      | undefined;
+
+    if (typeof defPm === "string" && defPm) return defPm;
+    if (defPm && typeof defPm === "object" && typeof (defPm as any).id === "string") return (defPm as any).id;
+  } catch {
+    // ignore
+  }
+
+  return null;
+}
+
+async function customerHasAnyCard(customerId: string) {
+  if (!stripe) return false;
+
+  const def = await getDefaultPaymentMethodId(customerId);
+  if (def) return true;
+
+  const pmList = await stripe.paymentMethods.list({
+    customer: customerId,
+    type: "card",
+    limit: 1,
+  });
+
+  return pmList.data.length > 0;
+}
+
 // -----------------------------
 // POST /api/stripe/list-payment-methods
 // Auth: Authorization: Bearer <Appwrite JWT>
@@ -114,16 +156,13 @@ async function findProfileByEmail(databases: Databases, email: string) {
 export async function POST(req: Request) {
   try {
     if (!stripe) {
-      return NextResponse.json(
-        { ok: false, error: "Stripe is not configured on the server." },
-        { status: 500 }
-      );
+      return NextResponse.json({ ok: false, error: "Stripe is not configured on the server." }, { status: 500 });
     }
 
     const auth = await requireAuthedUser(req);
     if (!auth.ok) return auth.res;
 
-    const userEmail = (auth.user as any)?.email as string | undefined;
+    const userEmail = String((auth.user as any)?.email || "").trim();
     if (!userEmail) {
       return NextResponse.json({ ok: false, error: "Could not determine user email." }, { status: 401 });
     }
@@ -142,22 +181,43 @@ export async function POST(req: Request) {
       }
     }
 
-    // Resolve customerId: profile first, else Stripe lookup by email
-    let customerIdUsed: string | null = stripeCustomerId;
+    // Resolve customerId:
+    // 1) try cached id if it actually has a card
+    // 2) else search all customers by email and pick one with a card
+    let customerIdUsed: string | null = null;
+
+    if (stripeCustomerId) {
+      try {
+        if (await customerHasAnyCard(stripeCustomerId)) {
+          customerIdUsed = stripeCustomerId;
+        }
+      } catch (e) {
+        console.warn("[list-payment-methods] stored customer check failed:", stripeCustomerId, e);
+      }
+    }
 
     if (!customerIdUsed) {
       const customers = await stripe.customers.list({ email: userEmail, limit: 10 });
-      customerIdUsed = customers.data[0]?.id || null;
+
+      for (const c of customers.data) {
+        try {
+          if (await customerHasAnyCard(c.id)) {
+            customerIdUsed = c.id;
+            break;
+          }
+        } catch (e) {
+          console.warn("[list-payment-methods] customer card check failed:", c.id, e);
+        }
+      }
+
+      // If none have cards, still fall back to the first customer (so you can show empty state reliably)
+      if (!customerIdUsed) {
+        customerIdUsed = customers.data[0]?.id || null;
+      }
 
       // Sync into profile if possible
       if (customerIdUsed && aw && profile?.$id && profile.stripe_customer_id !== customerIdUsed) {
-        try {
-          await aw.databases.updateDocument(PROFILES_DB_ID, PROFILES_COLLECTION_ID, profile.$id, {
-            stripe_customer_id: customerIdUsed,
-          });
-        } catch (syncErr) {
-          console.warn("[list-payment-methods] failed to sync customer id:", syncErr);
-        }
+        await safeSyncStripeCustomerId(aw.databases, profile.$id, customerIdUsed);
       }
     }
 
@@ -165,20 +225,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ ok: true, paymentMethods: [] }, { status: 200 });
     }
 
-    // Default payment method (if set)
-    const customer = await stripe.customers.retrieve(customerIdUsed);
-    let defaultPmId: string | null = null;
-
-    if (!("deleted" in customer)) {
-      const defPm = customer.invoice_settings?.default_payment_method as
-        | string
-        | { id: string }
-        | null
-        | undefined;
-
-      if (typeof defPm === "string") defaultPmId = defPm;
-      else if (defPm && typeof defPm === "object") defaultPmId = defPm.id;
-    }
+    const defaultPmId = await getDefaultPaymentMethodId(customerIdUsed);
 
     const pmList = await stripe.paymentMethods.list({
       customer: customerIdUsed,
@@ -194,12 +241,13 @@ export async function POST(req: Request) {
       isDefault: defaultPmId ? pm.id === defaultPmId : false,
     }));
 
-    return NextResponse.json({ ok: true, paymentMethods }, { status: 200 });
+    return NextResponse.json({ ok: true, paymentMethods, customerId: customerIdUsed }, { status: 200 });
   } catch (err: any) {
     console.error("[list-payment-methods] error:", err);
-    return NextResponse.json(
-      { ok: false, error: err?.message || "Failed to list payment methods." },
-      { status: 500 }
-    );
+    return NextResponse.json({ ok: false, error: err?.message || "Failed to list payment methods." }, { status: 500 });
   }
+}
+
+export async function OPTIONS() {
+  return new NextResponse(null, { status: 204 });
 }
