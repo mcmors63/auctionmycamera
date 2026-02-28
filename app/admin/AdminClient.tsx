@@ -49,7 +49,7 @@ type AdminTab =
   | "rejected"
   | "payments" // ✅ audit: unpaid/failed
   | "dispatch" // ✅ dispatch_pending
-  | "receipt"  // ✅ receipt_pending
+  | "receipt" // ✅ receipt_pending
   | "complete";
 
 type TxFilterPayment = "all" | "paid" | "unpaid" | "failed";
@@ -565,6 +565,13 @@ export default function AdminClient() {
   const filteredTransactions = useMemo(() => {
     let rows = [...transactions];
 
+    // ✅ HARD RULE: admin dashboard lists must exclude archived transactions
+    // We do this client-side to avoid schema/index surprises.
+    rows = rows.filter((tx) => {
+      const v = (tx as any)?.archived;
+      return !(v === true || String(v).toLowerCase() === "true");
+    });
+
     const p = txPaymentFilter;
     if (p !== "all") {
       rows = rows.filter((tx) => {
@@ -671,19 +678,12 @@ export default function AdminClient() {
             ))}
           </div>
 
-          <Link
-            href="/admin/auction-manager"
-            className="ml-auto pb-2 font-semibold text-neutral-600 hover:text-orange-700"
-          >
+          <Link href="/admin/auction-manager" className="ml-auto pb-2 font-semibold text-neutral-600 hover:text-orange-700">
             Auction Manager
           </Link>
         </div>
 
-        {message && (
-          <p className="bg-green-100 text-green-700 p-3 rounded-md my-4 font-semibold">
-            {message}
-          </p>
-        )}
+        {message && <p className="bg-green-100 text-green-700 p-3 rounded-md my-4 font-semibold">{message}</p>}
 
         {loading && <p className="text-center text-neutral-600 mt-10 text-lg">Loading…</p>}
 
@@ -728,18 +728,15 @@ export default function AdminClient() {
                         </p>
 
                         <p>
-                          <strong>Reserve:</strong>{" "}
-                          {formatMoney(typeof doc.reserve_price === "number" ? doc.reserve_price : 0)}
+                          <strong>Reserve:</strong> {formatMoney(typeof doc.reserve_price === "number" ? doc.reserve_price : 0)}
                         </p>
 
                         <p>
-                          <strong>Starting price:</strong>{" "}
-                          {formatMoney(typeof doc.starting_price === "number" ? doc.starting_price : 0)}
+                          <strong>Starting price:</strong> {formatMoney(typeof doc.starting_price === "number" ? doc.starting_price : 0)}
                         </p>
 
                         <p>
-                          <strong>Buy Now:</strong>{" "}
-                          {typeof buyNow === "number" ? formatMoney(buyNow) : "—"}
+                          <strong>Buy Now:</strong> {typeof buyNow === "number" ? formatMoney(buyNow) : "—"}
                         </p>
 
                         <p className="mt-2">
@@ -936,18 +933,24 @@ export default function AdminClient() {
                             £{commissionAmount.toLocaleString("en-GB")} ({commissionRate}%)
                           </td>
 
-                          <td className="py-2 px-2 whitespace-nowrap font-semibold">
-                            £{sellerPayout.toLocaleString("en-GB")}
-                          </td>
+                          <td className="py-2 px-2 whitespace-nowrap font-semibold">£{sellerPayout.toLocaleString("en-GB")}</td>
 
                           <td className="py-2 px-2 whitespace-nowrap">
-                            <span className={`inline-flex items-center border rounded-full px-2 py-0.5 text-xs ${badgeClass(paymentBadgeKind(paymentStatus) as any)}`}>
+                            <span
+                              className={`inline-flex items-center border rounded-full px-2 py-0.5 text-xs ${badgeClass(
+                                paymentBadgeKind(paymentStatus) as any
+                              )}`}
+                            >
                               {paymentStatus}
                             </span>
                           </td>
 
                           <td className="py-2 px-2 whitespace-nowrap">
-                            <span className={`inline-flex items-center border rounded-full px-2 py-0.5 text-xs ${badgeClass(txStatusBadgeKind(txStatus) as any)}`}>
+                            <span
+                              className={`inline-flex items-center border rounded-full px-2 py-0.5 text-xs ${badgeClass(
+                                txStatusBadgeKind(txStatus) as any
+                              )}`}
+                            >
                               {txStatus}
                             </span>
                           </td>
@@ -962,9 +965,7 @@ export default function AdminClient() {
                             )}
                           </td>
 
-                          <td className="py-2 px-2 whitespace-nowrap">
-                            {formatDateTime(txUpdated(tx) || txCreated(tx))}
-                          </td>
+                          <td className="py-2 px-2 whitespace-nowrap">{formatDateTime(txUpdated(tx) || txCreated(tx))}</td>
 
                           <td className="py-2 px-2 text-center whitespace-nowrap">
                             <a href={`/admin/transaction/${tx.$id}`} className="text-xs text-blue-600 underline">

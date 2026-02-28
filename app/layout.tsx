@@ -17,6 +17,9 @@ const BRAND_TEMPLATE = "%s | AuctionMyCamera";
 const BRAND_DESCRIPTION =
   "Buy and sell cameras, lenses and photography gear through weekly auctions.";
 
+// ✅ Bing verification token (safe to be public)
+const BING_VERIFICATION = "3AD4012E062C1636310720768FA73650";
+
 function isProdEnv() {
   if (process.env.VERCEL_ENV) return process.env.VERCEL_ENV === "production";
   return process.env.NODE_ENV === "production";
@@ -72,9 +75,13 @@ export const metadata: Metadata = {
     description: BRAND_DESCRIPTION,
   },
 
-  ...(GOOGLE_VERIFICATION
-    ? { verification: { google: GOOGLE_VERIFICATION } }
-    : {}),
+  // ✅ Search engine verification tags (Google + Bing)
+  verification: {
+    ...(GOOGLE_VERIFICATION ? { google: GOOGLE_VERIFICATION } : {}),
+    other: {
+      "msvalidate.01": BING_VERIFICATION,
+    },
+  },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
