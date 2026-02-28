@@ -43,15 +43,17 @@ const BLOG_COLLECTION_ID =
 // ✅ Absolute canonical for SEO clarity
 const blogCanonical = SITE_URL ? `${SITE_URL}/blog` : "/blog";
 
+// ✅ Keep meta description in the safe 120–155 character range
+const BLOG_DESCRIPTION =
+  "Guides and practical advice for buying and selling camera gear at auction in the UK — cameras, lenses, accessories, pricing and safety checks.";
+
 export const metadata: Metadata = {
   title: "Blog | AuctionMyCamera",
-  description:
-    "Guides, tips and practical advice for buying and selling camera gear — lenses, bodies, accessories and more.",
+  description: BLOG_DESCRIPTION,
   alternates: { canonical: blogCanonical },
   openGraph: {
     title: "Blog | AuctionMyCamera",
-    description:
-      "Guides, tips and practical advice for buying and selling camera gear — lenses, bodies, accessories and more.",
+    description: BLOG_DESCRIPTION,
     url: blogCanonical,
     type: "website",
     siteName: "AuctionMyCamera",
@@ -59,8 +61,7 @@ export const metadata: Metadata = {
   twitter: {
     card: "summary_large_image",
     title: "Blog | AuctionMyCamera",
-    description:
-      "Guides, tips and practical advice for buying and selling camera gear — lenses, bodies, accessories and more.",
+    description: BLOG_DESCRIPTION,
   },
 };
 

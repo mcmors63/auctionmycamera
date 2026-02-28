@@ -8,10 +8,13 @@ const SITE_URL = (process.env.NEXT_PUBLIC_SITE_URL || "https://auctionmycamera.c
   ""
 );
 
+// ✅ Safe-length description and consistent across meta/OG/Twitter.
+const COOKIES_DESCRIPTION =
+  "How AuctionMyCamera uses cookies and similar technologies to keep your account secure, run auctions, support payments and improve the website.";
+
 export const metadata: Metadata = {
   title: "Cookie Policy | AuctionMyCamera",
-  description:
-    "How AuctionMyCamera.co.uk uses cookies and similar technologies to keep your account secure, run auctions, support payments, and improve the website.",
+  description: COOKIES_DESCRIPTION,
   robots: {
     index: true,
     follow: true,
@@ -21,11 +24,15 @@ export const metadata: Metadata = {
   },
   openGraph: {
     title: "Cookie Policy | AuctionMyCamera",
-    description:
-      "How AuctionMyCamera.co.uk uses cookies and similar technologies to keep your account secure, run auctions, support payments, and improve the website.",
+    description: COOKIES_DESCRIPTION,
     url: `${SITE_URL}/cookies`,
     siteName: "AuctionMyCamera",
     type: "website",
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "Cookie Policy | AuctionMyCamera",
+    description: COOKIES_DESCRIPTION,
   },
 };
 

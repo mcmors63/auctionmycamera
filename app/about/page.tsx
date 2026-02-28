@@ -11,17 +11,19 @@ const SITE_URL = normalizeBaseUrl(
   process.env.NEXT_PUBLIC_SITE_URL || "https://auctionmycamera.co.uk"
 );
 
+// ✅ Keep meta description in a safe 120–155 character range, and reuse everywhere.
+const ABOUT_DESCRIPTION =
+  "Learn about AuctionMyCamera — a premium UK marketplace for cameras, lenses and photography gear, with weekly auctions, secure Stripe payments and clear selling steps.";
+
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
   title: "About | AuctionMyCamera",
-  description:
-    "Learn more about AuctionMyCamera — a premium UK marketplace for cameras, lenses and photography gear, with weekly auctions and secure payments.",
+  description: ABOUT_DESCRIPTION,
   alternates: { canonical: `${SITE_URL}/about` },
   robots: { index: true, follow: true },
   openGraph: {
     title: "About | AuctionMyCamera",
-    description:
-      "Learn more about AuctionMyCamera — a premium UK marketplace for cameras, lenses and photography gear, with weekly auctions and secure payments.",
+    description: ABOUT_DESCRIPTION,
     url: `${SITE_URL}/about`,
     siteName: "AuctionMyCamera",
     type: "website",
@@ -29,8 +31,7 @@ export const metadata: Metadata = {
   twitter: {
     card: "summary_large_image",
     title: "About | AuctionMyCamera",
-    description:
-      "Learn more about AuctionMyCamera — a premium UK marketplace for cameras, lenses and photography gear, with weekly auctions and secure payments.",
+    description: ABOUT_DESCRIPTION,
   },
 };
 

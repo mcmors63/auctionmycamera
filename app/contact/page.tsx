@@ -7,11 +7,26 @@ const SITE_URL = (process.env.NEXT_PUBLIC_SITE_URL || "https://auctionmycamera.c
   ""
 );
 
+// ✅ Keep meta description in the safe 120–155 character range.
+const CONTACT_DESCRIPTION =
+  "Contact AuctionMyCamera for help with listings, weekly auctions, bidding, payments, delivery or collection. We’ll get back to you as soon as possible.";
+
 export const metadata: Metadata = {
   title: "Contact Us | AuctionMyCamera",
-  description:
-    "Get in touch with AuctionMyCamera if you have questions about listings, auctions, delivery/collection or deals.",
+  description: CONTACT_DESCRIPTION,
   alternates: { canonical: `${SITE_URL}/contact` },
+  openGraph: {
+    title: "Contact Us | AuctionMyCamera",
+    description: CONTACT_DESCRIPTION,
+    url: `${SITE_URL}/contact`,
+    siteName: "AuctionMyCamera",
+    type: "website",
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "Contact Us | AuctionMyCamera",
+    description: CONTACT_DESCRIPTION,
+  },
 };
 
 export default function ContactPage() {

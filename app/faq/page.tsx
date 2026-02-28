@@ -7,24 +7,25 @@ const SITE_URL = (process.env.NEXT_PUBLIC_SITE_URL || "https://auctionmycamera.c
   ""
 );
 
+// ✅ Keep meta description in the safe 120–155 character range and reuse everywhere.
+const FAQ_DESCRIPTION =
+  "FAQs for AuctionMyCamera: how weekly auctions work, bidding rules, saved-card payments, delivery or collection, disputes, safety checks and account rules.";
+
 export const metadata: Metadata = {
   title: "FAQ | AuctionMyCamera",
-  description:
-    "Common questions about buying and selling cameras, lenses and photography gear with AuctionMyCamera — auctions, bidding, payments, delivery, disputes, safety and account rules.",
+  description: FAQ_DESCRIPTION,
   alternates: { canonical: `${SITE_URL}/faq` },
   openGraph: {
     type: "website",
     url: `${SITE_URL}/faq`,
     title: "FAQ | AuctionMyCamera",
-    description:
-      "FAQs covering weekly auctions, bidding rules, payments, delivery/collection, disputes, safety and account rules on AuctionMyCamera.",
+    description: FAQ_DESCRIPTION,
     siteName: "AuctionMyCamera",
   },
   twitter: {
     card: "summary_large_image",
     title: "FAQ | AuctionMyCamera",
-    description:
-      "FAQs covering auctions, bidding rules, payments, delivery/collection, disputes, safety and account rules on AuctionMyCamera.",
+    description: FAQ_DESCRIPTION,
   },
 };
 

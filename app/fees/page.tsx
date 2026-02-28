@@ -7,23 +7,25 @@ const SITE_URL = (process.env.NEXT_PUBLIC_SITE_URL || "https://auctionmycamera.c
   ""
 );
 
+// ✅ Keep meta description in the safe 120–155 character range and reuse everywhere.
+const FEES_DESCRIPTION =
+  "Clear fees for buying and selling camera gear: any listing fee shown before you publish, tiered commission on sales, delivery terms and payout timing.";
+
 export const metadata: Metadata = {
   title: "Fees | AuctionMyCamera",
-  description:
-    "Clear, transparent information on listing fees (if any), commission, delivery costs, and payout timing at AuctionMyCamera.",
+  description: FEES_DESCRIPTION,
   alternates: { canonical: `${SITE_URL}/fees` },
   openGraph: {
     type: "website",
     url: `${SITE_URL}/fees`,
     title: "Fees | AuctionMyCamera",
-    description:
-      "Simple, transparent fees for buying and selling cameras, lenses and photography gear — listing, commission, delivery, and payout timing.",
+    description: FEES_DESCRIPTION,
+    siteName: "AuctionMyCamera",
   },
   twitter: {
     card: "summary_large_image",
     title: "Fees | AuctionMyCamera",
-    description:
-      "Simple, transparent fees for buying and selling cameras, lenses and photography gear — listing, commission, delivery, and payout timing.",
+    description: FEES_DESCRIPTION,
   },
 };
 
