@@ -1,7 +1,7 @@
 // app/admin/AdminClient.tsx
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Client, Account, Databases, Query } from "appwrite";
 import { useRouter } from "next/navigation";
 import AdminAuctionTimer from "../components/ui/AdminAuctionTimer";
@@ -37,7 +37,37 @@ const TRANSACTIONS_COLLECTION_ID =
   process.env.NEXT_PUBLIC_APPWRITE_TRANSACTIONS_TABLE_ID ||
   "transactions";
 
-type AdminTab = "pending" | "queued" | "live" | "rejected" | "soldPending" | "complete";
+/**
+ * Tabs:
+ * - Listings: pending, queued, live, rejected
+ * - Transactions: payments (audit), dispatch, receipt, complete
+ */
+type AdminTab =
+  | "pending"
+  | "queued"
+  | "live"
+  | "rejected"
+  | "payments" // ✅ audit: unpaid/failed
+  | "dispatch" // ✅ dispatch_pending
+  | "receipt"  // ✅ receipt_pending
+  | "complete";
+
+type TxFilterPayment = "all" | "paid" | "unpaid" | "failed";
+type TxFilterStatus = "all" | "dispatch_pending" | "receipt_pending" | "complete" | "payment_failed";
+
+const LISTING_TABS: { key: AdminTab; label: string }[] = [
+  { key: "pending", label: "Pending Approval" },
+  { key: "queued", label: "Approved / Queued" },
+  { key: "live", label: "Live" },
+  { key: "rejected", label: "Rejected" },
+];
+
+const TX_TABS: { key: AdminTab; label: string }[] = [
+  { key: "payments", label: "Payments Audit" },
+  { key: "dispatch", label: "Dispatch Pending" },
+  { key: "receipt", label: "Receipt Pending" },
+  { key: "complete", label: "Complete" },
+];
 
 // Public listing statuses – these match isIndexableStatus() on /listing/[id]
 const PUBLIC_LISTING_STATUSES = new Set(["queued", "live", "sold"]);
@@ -122,6 +152,39 @@ function trimReason(s: string) {
   return v.length > 800 ? v.slice(0, 800) + "…" : v;
 }
 
+function txItemLabel(tx: any) {
+  return (
+    tx?.item_title ||
+    tx?.title ||
+    [tx?.brand, tx?.model].filter(Boolean).join(" ") ||
+    tx?.registration ||
+    "—"
+  );
+}
+
+function badgeClass(kind: "ok" | "warn" | "bad" | "neutral") {
+  if (kind === "ok") return "bg-emerald-100 text-emerald-800 border-emerald-200";
+  if (kind === "warn") return "bg-amber-100 text-amber-900 border-amber-200";
+  if (kind === "bad") return "bg-red-100 text-red-800 border-red-200";
+  return "bg-neutral-100 text-neutral-800 border-neutral-200";
+}
+
+function paymentBadgeKind(paymentStatus: string) {
+  const s = String(paymentStatus || "").toLowerCase();
+  if (s === "paid") return "ok";
+  if (s === "unpaid") return "warn";
+  if (s === "failed") return "bad";
+  return "neutral";
+}
+
+function txStatusBadgeKind(txStatus: string) {
+  const s = String(txStatus || "").toLowerCase();
+  if (s === "complete") return "ok";
+  if (s === "dispatch_pending" || s === "receipt_pending") return "warn";
+  if (s === "payment_failed") return "bad";
+  return "neutral";
+}
+
 export default function AdminClient() {
   const router = useRouter();
 
@@ -135,6 +198,15 @@ export default function AdminClient() {
   const [message, setMessage] = useState("");
 
   const [selectedListing, setSelectedListing] = useState<any>(null);
+
+  // ✅ Audit filters (client-side, so no schema/index assumptions needed)
+  const [txPaymentFilter, setTxPaymentFilter] = useState<TxFilterPayment>("all");
+  const [txStatusFilter, setTxStatusFilter] = useState<TxFilterStatus>("all");
+  const [txSearch, setTxSearch] = useState("");
+
+  const isTxTab = useMemo(() => {
+    return activeTab === "payments" || activeTab === "dispatch" || activeTab === "receipt" || activeTab === "complete";
+  }, [activeTab]);
 
   // ------------------------------------------------------
   // VERIFY ADMIN LOGIN
@@ -184,9 +256,8 @@ export default function AdminClient() {
           return;
         }
 
-        if (activeTab === "soldPending" || activeTab === "complete") {
-          const txStatus = activeTab === "soldPending" ? "pending" : "complete";
-
+        // Transactions tabs
+        if (isTxTab) {
           if (!TRANSACTIONS_DB_ID || !TRANSACTIONS_COLLECTION_ID) {
             setMessage(
               "Missing Appwrite env for transactions. Set NEXT_PUBLIC_APPWRITE_TRANSACTIONS_DATABASE_ID and NEXT_PUBLIC_APPWRITE_TRANSACTIONS_COLLECTION_ID."
@@ -196,27 +267,61 @@ export default function AdminClient() {
             return;
           }
 
-          const res = await databases.listDocuments(TRANSACTIONS_DB_ID, TRANSACTIONS_COLLECTION_ID, [
-            Query.equal("transaction_status", txStatus),
-            Query.orderDesc("$updatedAt"),
-            Query.limit(200),
-          ]);
+          // ✅ Use REAL transaction_status values from your scheduler
+          const txQueries: string[] = [Query.orderDesc("$updatedAt"), Query.limit(250)];
 
+          if (activeTab === "dispatch") txQueries.push(Query.equal("transaction_status", "dispatch_pending"));
+          if (activeTab === "receipt") txQueries.push(Query.equal("transaction_status", "receipt_pending"));
+          if (activeTab === "complete") txQueries.push(Query.equal("transaction_status", "complete"));
+
+          /**
+           * payments tab = audit the “action required” cases
+           * - payment_status = unpaid
+           * - OR transaction_status = payment_failed
+           *
+           * Appwrite doesn’t support OR well in a single query,
+           * so we do two small queries and merge unique.
+           */
+          if (activeTab === "payments") {
+            const [unpaidRes, failedRes] = await Promise.all([
+              databases.listDocuments(TRANSACTIONS_DB_ID, TRANSACTIONS_COLLECTION_ID, [
+                Query.equal("payment_status", "unpaid"),
+                Query.orderDesc("$updatedAt"),
+                Query.limit(250),
+              ]),
+              databases.listDocuments(TRANSACTIONS_DB_ID, TRANSACTIONS_COLLECTION_ID, [
+                Query.equal("transaction_status", "payment_failed"),
+                Query.orderDesc("$updatedAt"),
+                Query.limit(250),
+              ]),
+            ]);
+
+            const byId = new Map<string, any>();
+            for (const d of unpaidRes.documents) byId.set(d.$id, d);
+            for (const d of failedRes.documents) byId.set(d.$id, d);
+
+            setTransactions(Array.from(byId.values()));
+            setListings([]);
+            return;
+          }
+
+          const res = await databases.listDocuments(TRANSACTIONS_DB_ID, TRANSACTIONS_COLLECTION_ID, txQueries);
           setTransactions(res.documents);
           setListings([]);
-        } else {
-          // Seller submissions use status "pending_approval"
-          const statusFilter = activeTab === "pending" ? "pending_approval" : activeTab;
-
-          const res = await databases.listDocuments(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, [
-            Query.equal("status", statusFilter),
-            Query.orderDesc("$updatedAt"),
-            Query.limit(200),
-          ]);
-
-          setListings(res.documents);
-          setTransactions([]);
+          return;
         }
+
+        // Listing tabs
+        const statusFilter = activeTab === "pending" ? "pending_approval" : activeTab;
+
+        const res = await databases.listDocuments(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, [
+          Query.equal("status", statusFilter),
+          Query.orderDesc("$updatedAt"),
+          Query.limit(200),
+        ]);
+
+        setListings(res.documents);
+        setTransactions([]);
       } catch (err) {
         console.error("Failed to load admin data:", err);
         setMessage("Failed to load data from Appwrite (check DB/Collection IDs + permissions + schema).");
@@ -226,7 +331,7 @@ export default function AdminClient() {
     };
 
     load();
-  }, [authState, activeTab]);
+  }, [authState, activeTab, isTxTab]);
 
   // ------------------------------------------------------
   // APPROVE LISTING (server-only)
@@ -383,6 +488,7 @@ export default function AdminClient() {
 
   // ------------------------------------------------------
   // MARK LISTING SOLD
+  // (This looks like legacy/manual tooling; leaving as-is for now.)
   // ------------------------------------------------------
   const markListingSold = async (doc: any) => {
     const title = getListingTitle(doc);
@@ -454,6 +560,58 @@ export default function AdminClient() {
   };
 
   // ------------------------------------------------------
+  // Derived: filtered transactions (client-side)
+  // ------------------------------------------------------
+  const filteredTransactions = useMemo(() => {
+    let rows = [...transactions];
+
+    const p = txPaymentFilter;
+    if (p !== "all") {
+      rows = rows.filter((tx) => {
+        const paymentStatus = String(tx.payment_status || "").toLowerCase();
+        const txStatus = String(tx.transaction_status || "").toLowerCase();
+
+        if (p === "paid") return paymentStatus === "paid";
+        if (p === "unpaid") return paymentStatus === "unpaid";
+        if (p === "failed") return paymentStatus === "failed" || txStatus === "payment_failed";
+        return true;
+      });
+    }
+
+    const s = txStatusFilter;
+    if (s !== "all") {
+      rows = rows.filter((tx) => String(tx.transaction_status || "").toLowerCase() === s);
+    }
+
+    const q = txSearch.trim().toLowerCase();
+    if (q) {
+      rows = rows.filter((tx) => {
+        const hay = [
+          txItemLabel(tx),
+          tx.listing_id || tx.plate_id,
+          tx.seller_email,
+          tx.buyer_email,
+          tx.stripe_payment_intent_id,
+          tx.payment_failure_reason,
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+        return hay.includes(q);
+      });
+    }
+
+    // newest first
+    rows.sort((a, b) => {
+      const at = Date.parse(txUpdated(a) || txCreated(a) || a.$createdAt || "");
+      const bt = Date.parse(txUpdated(b) || txCreated(b) || b.$createdAt || "");
+      return (Number.isFinite(bt) ? bt : 0) - (Number.isFinite(at) ? at : 0);
+    });
+
+    return rows;
+  }, [transactions, txPaymentFilter, txStatusFilter, txSearch]);
+
+  // ------------------------------------------------------
   // UI
   // ------------------------------------------------------
   if (authState === "checking") {
@@ -468,7 +626,7 @@ export default function AdminClient() {
 
   return (
     <div className="min-h-screen bg-neutral-50 py-10 px-6">
-      <div className="max-w-5xl mx-auto bg-white rounded-2xl p-8 shadow-lg border border-neutral-200">
+      <div className="max-w-6xl mx-auto bg-white rounded-2xl p-8 shadow-lg border border-neutral-200">
         {/* HEADER */}
         <div className="flex justify-between items-center mb-6">
           <div className="flex flex-col gap-1">
@@ -482,24 +640,36 @@ export default function AdminClient() {
         </div>
 
         {/* TABS */}
-        <div className="flex flex-wrap gap-6 border-b pb-3">
-          {(["pending", "queued", "live", "rejected", "soldPending", "complete"] as AdminTab[]).map((t) => (
-            <button
-              key={t}
-              className={`pb-2 font-semibold ${
-                activeTab === t ? "border-b-4 border-orange-500 text-orange-700" : "text-neutral-500"
-              }`}
-              onClick={() => setActiveTab(t)}
-            >
-              {t === "queued"
-                ? "Approved / Queued"
-                : t === "soldPending"
-                ? "Sold / Pending"
-                : t === "complete"
-                ? "Complete"
-                : t.charAt(0).toUpperCase() + t.slice(1)}
-            </button>
-          ))}
+        <div className="flex flex-wrap gap-3 border-b pb-3 items-end">
+          <div className="flex flex-wrap gap-3">
+            {LISTING_TABS.map((t) => (
+              <button
+                key={t.key}
+                className={`pb-2 font-semibold ${
+                  activeTab === t.key ? "border-b-4 border-orange-500 text-orange-700" : "text-neutral-500"
+                }`}
+                onClick={() => setActiveTab(t.key)}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+
+          <div className="mx-2 hidden md:block text-neutral-300">|</div>
+
+          <div className="flex flex-wrap gap-3">
+            {TX_TABS.map((t) => (
+              <button
+                key={t.key}
+                className={`pb-2 font-semibold ${
+                  activeTab === t.key ? "border-b-4 border-orange-500 text-orange-700" : "text-neutral-500"
+                }`}
+                onClick={() => setActiveTab(t.key)}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
 
           <Link
             href="/admin/auction-manager"
@@ -509,12 +679,16 @@ export default function AdminClient() {
           </Link>
         </div>
 
-        {message && <p className="bg-green-100 text-green-700 p-3 rounded-md my-4 font-semibold">{message}</p>}
+        {message && (
+          <p className="bg-green-100 text-green-700 p-3 rounded-md my-4 font-semibold">
+            {message}
+          </p>
+        )}
 
         {loading && <p className="text-center text-neutral-600 mt-10 text-lg">Loading…</p>}
 
         {/* LISTINGS VIEW */}
-        {!loading && activeTab !== "soldPending" && activeTab !== "complete" && (
+        {!loading && !isTxTab && (
           <>
             {listings.length === 0 ? (
               <p className="text-sm text-neutral-600 mt-6">No listings in this tab.</p>
@@ -554,7 +728,8 @@ export default function AdminClient() {
                         </p>
 
                         <p>
-                          <strong>Reserve:</strong> {formatMoney(typeof doc.reserve_price === "number" ? doc.reserve_price : 0)}
+                          <strong>Reserve:</strong>{" "}
+                          {formatMoney(typeof doc.reserve_price === "number" ? doc.reserve_price : 0)}
                         </p>
 
                         <p>
@@ -563,7 +738,8 @@ export default function AdminClient() {
                         </p>
 
                         <p>
-                          <strong>Buy Now:</strong> {typeof buyNow === "number" ? formatMoney(buyNow) : "—"}
+                          <strong>Buy Now:</strong>{" "}
+                          {typeof buyNow === "number" ? formatMoney(buyNow) : "—"}
                         </p>
 
                         <p className="mt-2">
@@ -641,15 +817,66 @@ export default function AdminClient() {
         )}
 
         {/* TRANSACTIONS VIEW */}
-        {!loading && (activeTab === "soldPending" || activeTab === "complete") && (
+        {!loading && isTxTab && (
           <div className="mt-6">
-            <h2 className="text-xl font-bold mb-2 text-orange-700">
-              {activeTab === "soldPending" ? "Sold / Pending (Payment & Admin)" : "Completed Transactions"}
-            </h2>
+            <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-3 mb-3">
+              <div>
+                <h2 className="text-xl font-bold text-orange-700">
+                  {activeTab === "payments"
+                    ? "Payments Audit (Action required)"
+                    : activeTab === "dispatch"
+                    ? "Dispatch Pending"
+                    : activeTab === "receipt"
+                    ? "Receipt Pending"
+                    : "Completed Transactions"}
+                </h2>
+                <p className="text-xs text-neutral-500 mt-1">
+                  These rows come from the Transactions collection (payment + fulfilment audit trail).
+                </p>
+              </div>
 
-            {transactions.length === 0 ? (
+              <div className="flex flex-col md:flex-row gap-2 md:items-center">
+                <input
+                  className="border rounded-md px-3 py-2 text-sm"
+                  placeholder="Search email, listing id, PaymentIntent…"
+                  value={txSearch}
+                  onChange={(e) => setTxSearch(e.target.value)}
+                />
+
+                <select
+                  className="border rounded-md px-3 py-2 text-sm"
+                  value={txPaymentFilter}
+                  onChange={(e) => setTxPaymentFilter(e.target.value as TxFilterPayment)}
+                >
+                  <option value="all">All payments</option>
+                  <option value="paid">Paid</option>
+                  <option value="unpaid">Unpaid</option>
+                  <option value="failed">Failed</option>
+                </select>
+
+                <select
+                  className="border rounded-md px-3 py-2 text-sm"
+                  value={txStatusFilter}
+                  onChange={(e) => setTxStatusFilter(e.target.value as TxFilterStatus)}
+                >
+                  <option value="all">All statuses</option>
+                  <option value="dispatch_pending">Dispatch pending</option>
+                  <option value="receipt_pending">Receipt pending</option>
+                  <option value="complete">Complete</option>
+                  <option value="payment_failed">Payment failed</option>
+                </select>
+              </div>
+            </div>
+
+            {filteredTransactions.length === 0 ? (
               <p className="text-sm text-neutral-600">
-                {activeTab === "soldPending" ? "No sold items waiting." : "No completed transactions yet."}
+                {activeTab === "payments"
+                  ? "No payment issues found."
+                  : activeTab === "dispatch"
+                  ? "No dispatch-pending transactions."
+                  : activeTab === "receipt"
+                  ? "No receipt-pending transactions."
+                  : "No completed transactions yet."}
               </p>
             ) : (
               <div className="overflow-x-auto rounded-xl border border-neutral-200 bg-white shadow-sm">
@@ -657,38 +884,49 @@ export default function AdminClient() {
                   <thead className="bg-neutral-100 text-neutral-700">
                     <tr>
                       <th className="py-2 px-2">Item</th>
-                      <th className="py-2 px-2">Listing ID</th>
-                      <th className="py-2 px-2">Seller Email</th>
-                      <th className="py-2 px-2">Buyer Email</th>
-                      <th className="py-2 px-2">Sale Price</th>
+                      <th className="py-2 px-2">Listing</th>
+                      <th className="py-2 px-2">Seller</th>
+                      <th className="py-2 px-2">Buyer</th>
+                      <th className="py-2 px-2">Sale</th>
                       <th className="py-2 px-2">Commission</th>
-                      <th className="py-2 px-2">Seller Payout</th>
-                      <th className="py-2 px-2">Payment Status</th>
-                      <th className="py-2 px-2">Transaction Status</th>
-                      <th className="py-2 px-2">Created</th>
+                      <th className="py-2 px-2">Payout</th>
+                      <th className="py-2 px-2">Payment</th>
+                      <th className="py-2 px-2">Status</th>
+                      <th className="py-2 px-2">PaymentIntent</th>
                       <th className="py-2 px-2">Updated</th>
                       <th className="py-2 px-2 text-center">Action</th>
                     </tr>
                   </thead>
 
                   <tbody className="divide-y divide-neutral-200">
-                    {transactions.map((tx) => {
-                      const item =
-                        tx.item_title ||
-                        tx.title ||
-                        [tx.brand, tx.model].filter(Boolean).join(" ") ||
-                        tx.registration ||
-                        "-";
-
+                    {filteredTransactions.map((tx) => {
                       const salePrice = safeNumber(tx.sale_price) ?? 0;
                       const commissionAmount = safeNumber(tx.commission_amount) ?? 0;
                       const commissionRate = safeNumber(tx.commission_rate) ?? 0;
                       const sellerPayout = safeNumber(tx.seller_payout) ?? 0;
 
+                      const paymentStatus = String(tx.payment_status || "—");
+                      const txStatus = String(tx.transaction_status || "—");
+                      const pi = String(tx.stripe_payment_intent_id || "").trim();
+
                       return (
                         <tr key={tx.$id} className="hover:bg-neutral-50">
-                          <td className="py-2 px-2 whitespace-nowrap">{item}</td>
-                          <td className="py-2 px-2 whitespace-nowrap">{tx.listing_id || tx.plate_id || "-"}</td>
+                          <td className="py-2 px-2 whitespace-nowrap">{txItemLabel(tx)}</td>
+
+                          <td className="py-2 px-2 whitespace-nowrap">
+                            {tx.listing_id || tx.plate_id || "-"}
+                            {tx.listing_id ? (
+                              <a
+                                href={`/listing/${tx.listing_id}`}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="ml-2 text-xs text-blue-600 underline"
+                              >
+                                View listing
+                              </a>
+                            ) : null}
+                          </td>
+
                           <td className="py-2 px-2 whitespace-nowrap">{tx.seller_email || "-"}</td>
                           <td className="py-2 px-2 whitespace-nowrap">{tx.buyer_email || "-"}</td>
 
@@ -702,11 +940,31 @@ export default function AdminClient() {
                             £{sellerPayout.toLocaleString("en-GB")}
                           </td>
 
-                          <td className="py-2 px-2 whitespace-nowrap">{tx.payment_status || "pending"}</td>
-                          <td className="py-2 px-2 whitespace-nowrap">{tx.transaction_status || "pending"}</td>
+                          <td className="py-2 px-2 whitespace-nowrap">
+                            <span className={`inline-flex items-center border rounded-full px-2 py-0.5 text-xs ${badgeClass(paymentBadgeKind(paymentStatus) as any)}`}>
+                              {paymentStatus}
+                            </span>
+                          </td>
 
-                          <td className="py-2 px-2 whitespace-nowrap">{formatDateTime(txCreated(tx))}</td>
-                          <td className="py-2 px-2 whitespace-nowrap">{formatDateTime(txUpdated(tx))}</td>
+                          <td className="py-2 px-2 whitespace-nowrap">
+                            <span className={`inline-flex items-center border rounded-full px-2 py-0.5 text-xs ${badgeClass(txStatusBadgeKind(txStatus) as any)}`}>
+                              {txStatus}
+                            </span>
+                          </td>
+
+                          <td className="py-2 px-2 whitespace-nowrap">
+                            {pi ? (
+                              <span title={pi} className="font-mono text-[11px] md:text-xs">
+                                {pi.length > 18 ? `${pi.slice(0, 10)}…${pi.slice(-6)}` : pi}
+                              </span>
+                            ) : (
+                              "—"
+                            )}
+                          </td>
+
+                          <td className="py-2 px-2 whitespace-nowrap">
+                            {formatDateTime(txUpdated(tx) || txCreated(tx))}
+                          </td>
 
                           <td className="py-2 px-2 text-center whitespace-nowrap">
                             <a href={`/admin/transaction/${tx.$id}`} className="text-xs text-blue-600 underline">

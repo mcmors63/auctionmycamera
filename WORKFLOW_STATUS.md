@@ -12,7 +12,7 @@ Repo: auctionmycamera.co.uk (Next.js + Appwrite + Stripe)
 - Profile update works — DONE  
 - Password change works — DONE  
 - "Copy JWT (testing)" removed — DONE  
-- Delete account workflow verified end-to-end — TODO  
+- Delete account workflow verified end-to-end — TODO (needs real deletion test in production)
 
 ============================================================
 
@@ -22,8 +22,8 @@ Repo: auctionmycamera.co.uk (Next.js + Appwrite + Stripe)
 - Listing appears in Awaiting / Approved+Queued / Live tabs — DONE  
 
 ### Queued listing controls
-- Seller can edit queued listing — PARTIAL (route folder exists but not committed/wired/tested)  
-- Seller can withdraw queued listing — PARTIAL (withdraw route exists; dashboard wiring + test pending)  
+- Seller can edit queued listing — DONE (dashboard wired + route working; needs production validation)  
+- Seller can withdraw queued listing — DONE (status=withdrawn only; dashboard wired; needs production validation)  
 
 - Listing images verified in production — TODO  
 
@@ -38,11 +38,11 @@ Repo: auctionmycamera.co.uk (Next.js + Appwrite + Stripe)
 
 - Admin dashboard exists and reachable — DONE  
 - Admin can view pending listings — DONE  
-- Admin approve sets status + schedules auction dates — DONE (needs final production test)  
-- Admin reject sets status + emails seller — DONE (needs confirm in live)  
+- Admin approve sets status + schedules auction dates — DONE (needs final production lifecycle test)  
+- Admin reject sets status + emails seller — DONE (needs confirm in live environment)  
 
 ### Admin tools
-- Admin delete listing route exists — PARTIAL (folder exists untracked; commit + UI wiring + test pending)  
+- Admin delete listing route exists — PARTIAL (route folder exists; commit + UI wiring + test pending)  
 - Admin notified when listing submitted — TODO  
 
 ============================================================
@@ -50,7 +50,7 @@ Repo: auctionmycamera.co.uk (Next.js + Appwrite + Stripe)
 ## SECTION D — Auction Lifecycle (Weekly Scheduler)
 
 - Scheduler protected by CRON_SECRET — DONE  
-- Auction start moves queued to live — DONE (needs live validation run)  
+- Auction start moves queued → live — DONE (needs live cron validation run)  
 - Queued date repair via getAuctionWindow() — DONE  
 - Auction end closes listing and determines outcome — DONE  
 
@@ -58,8 +58,9 @@ Repo: auctionmycamera.co.uk (Next.js + Appwrite + Stripe)
 - If reserve not met → status = not_sold — DONE  
 - If relist_until_sold enabled → re-queues listing — DONE  
 
-### Scheduler lifecycle safety
+### Lifecycle safety
 - Status set to completed before payment attempt — DONE  
+- DISABLE_WINNER_CHARGES safeguard available — DONE  
 
 ============================================================
 
@@ -108,8 +109,8 @@ Repo: auctionmycamera.co.uk (Next.js + Appwrite + Stripe)
 - Sets transaction_status = complete and payout_status = ready — DONE  
 
 ### Pending work
-- Dashboard transactions UI build/JSX integrity — BLOCKER (fix build first)  
-- Seller email includes delivery address snapshot — TODO (needs confirm via real email)  
+- Dashboard transactions UI needs full production test — TODO  
+- Seller email includes delivery address snapshot — TODO (confirm via real email)  
 - Admin can view/manage transactions — TODO  
 
 ============================================================
@@ -126,7 +127,7 @@ Repo: auctionmycamera.co.uk (Next.js + Appwrite + Stripe)
 - payment_failed → shows failure banner — DONE  
 - not_sold → shows ended (not sold) banner — DONE  
 
-- Production UI verification of all above states — TODO  
+- Production UI verification of all states — TODO  
 
 ============================================================
 

@@ -174,6 +174,10 @@ const EXTRA_FEE_GBP = 0;
 // -----------------------------
 // SMALL HELPERS
 // -----------------------------
+function roundTo2(n: number) {
+  return Math.round(n * 100) / 100;
+}
+
 function getNumeric(value: any): number {
   if (typeof value === "number") return value;
   if (typeof value === "string") {
@@ -382,10 +386,10 @@ async function createTransactionForWinner(params: {
   const sellerEmail = String(listing.seller_email || listing.sellerEmail || "").trim();
 
   const commissionRate = getNumeric(listing.commission_rate); // %
-  const salePrice = Math.round(finalBidAmount);
+  const salePrice = roundTo2(finalBidAmount); // ✅ keep pennies
 
-  const commissionAmount = Math.round(commissionRate > 0 ? (salePrice * commissionRate) / 100 : 0);
-  const sellerPayout = Math.max(0, salePrice - commissionAmount - EXTRA_FEE_GBP);
+  const commissionAmount = roundTo2(commissionRate > 0 ? (salePrice * commissionRate) / 100 : 0);
+  const sellerPayout = roundTo2(Math.max(0, salePrice - commissionAmount - EXTRA_FEE_GBP));
 
   const delivery = {
     delivery_first_name: buyerProfile?.first_name || "",
@@ -404,12 +408,12 @@ async function createTransactionForWinner(params: {
     buyer_email: winnerEmail,
     buyer_id: winnerUserId,
 
-    sale_price: salePrice,
+    sale_price: salePrice, // ✅
 
     commission_rate: commissionRate,
-    commission_amount: commissionAmount,
+    commission_amount: commissionAmount, // ✅
 
-    seller_payout: sellerPayout,
+    seller_payout: sellerPayout, // ✅
 
     dvla_fee: 0,
 
@@ -479,7 +483,7 @@ async function createPaymentFailedTransaction(params: {
     buyer_email: winnerEmail,
     buyer_id: winnerUserId,
 
-    sale_price: Math.round(finalBidAmount),
+    sale_price: roundTo2(finalBidAmount), // ✅ keep pennies
 
     payment_status: "unpaid",
     transaction_status: "payment_failed",
@@ -994,7 +998,7 @@ End:   ${fmtLondon(end)}
         continue;
       }
 
-      const finalBidAmount = winningAmount || currentBid;
+      const finalBidAmount = roundTo2(winningAmount || currentBid);
       const totalToCharge = finalBidAmount;
       const amountInPence = Math.round(totalToCharge * 100);
 
@@ -1029,8 +1033,10 @@ End:   ${fmtLondon(end)}
         const paymentMethod = await pickPaymentMethodForCustomer(customer.id);
 
         if (!paymentMethod) {
+          // ✅ align listing.status with public page + workflow
           try {
             await databases.updateDocument(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, lid, {
+              status: "payment_required",
               sale_status: "payment_required",
               payment_status: "unpaid",
               buyer_email: winnerEmail,
@@ -1106,8 +1112,10 @@ End:   ${fmtLondon(end)}
         } catch {}
 
         if (intent.status !== "succeeded") {
+          // ✅ align listing.status with public page + workflow
           try {
             await databases.updateDocument(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, lid, {
+              status: "payment_failed",
               sale_status: "payment_failed",
               payment_status: "unpaid",
               buyer_email: winnerEmail,
@@ -1156,8 +1164,8 @@ End:   ${fmtLondon(end)}
         try {
           const commissionRate = getNumeric(listing.commission_rate);
           const soldPrice = finalBidAmount;
-          const saleFee = commissionRate > 0 ? (soldPrice * commissionRate) / 100 : 0;
-          const sellerNetAmount = Math.max(0, soldPrice - saleFee);
+          const saleFee = roundTo2(commissionRate > 0 ? (soldPrice * commissionRate) / 100 : 0);
+          const sellerNetAmount = roundTo2(Math.max(0, soldPrice - saleFee));
 
           await databases.updateDocument(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, lid, {
             status: "sold",
@@ -1223,8 +1231,10 @@ End:   ${fmtLondon(end)}
         const piId =
           anyErr?.raw?.payment_intent?.id || anyErr?.payment_intent?.id || anyErr?.paymentIntentId || "";
 
+        // ✅ align listing.status with public page + workflow
         try {
           await databases.updateDocument(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, lid, {
+            status: "payment_failed",
             sale_status: "payment_failed",
             payment_status: "unpaid",
             buyer_email: winnerEmail,
