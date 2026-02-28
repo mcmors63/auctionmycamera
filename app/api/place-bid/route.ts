@@ -254,6 +254,14 @@ type Listing = {
   seller_email?: string | null;
   sellerEmail?: string | null;
 
+  owner_email?: string | null;
+  ownerEmail?: string | null;
+
+  owner_id?: string | null;
+  ownerId?: string | null;
+  seller_id?: string | null;
+  sellerId?: string | null;
+
   highest_bidder?: string | null;
   last_bidder?: string | null;
 
@@ -264,6 +272,30 @@ function isLiveStatus(status: unknown) {
   const s = String(status || "").toLowerCase().trim();
   // ✅ accept both styles so AuctionMyPlate/AuctionMyCamera clones don’t fight
   return s === "live" || s === "active";
+}
+
+function normalizeEmailLower(v: unknown) {
+  return String(v || "").trim().toLowerCase();
+}
+
+function getSellerEmailFromListing(listing: Listing) {
+  return (
+    listing.seller_email ||
+    listing.sellerEmail ||
+    listing.owner_email ||
+    listing.ownerEmail ||
+    null
+  );
+}
+
+function getSellerIdFromListing(listing: Listing) {
+  return (
+    listing.seller_id ||
+    listing.sellerId ||
+    listing.owner_id ||
+    listing.ownerId ||
+    null
+  );
 }
 
 async function sendBidEmails(options: { listing: Listing; bidAmount: number; bidderEmail: string }) {
@@ -283,12 +315,7 @@ async function sendBidEmails(options: { listing: Listing; bidAmount: number; bid
     maximumFractionDigits: 2,
   })}`;
 
-  const sellerEmail =
-    listing.seller_email ||
-    listing.sellerEmail ||
-    listing.owner_email ||
-    listing.ownerEmail ||
-    null;
+  const sellerEmail = getSellerEmailFromListing(listing);
 
   const fromAddress = normalizeEmailAddress(EMAIL_FROM);
 
@@ -345,6 +372,10 @@ function getBidIncrement(current: number): number {
   return 1000;
 }
 
+function roundTo2(n: number) {
+  return Math.round(n * 100) / 100;
+}
+
 // -----------------------------
 // POST /api/place-bid
 // Body: { listingId, amount }
@@ -369,12 +400,13 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
     }
 
+    // ✅ Require saved card BEFORE bidding (server-side enforcement)
     const pm = await hasSavedCardForEmail(bidderEmail);
     if (!pm.has) {
       return NextResponse.json(
         {
           error: "You must add a card before you can bid.",
-          code: "no_payment_method",
+          code: "NO_PAYMENT_METHOD",
         },
         { status: 403 }
       );
@@ -388,11 +420,13 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Missing listingId or amount." }, { status: 400 });
     }
 
-    const bidAmount = typeof amountRaw === "string" ? parseFloat(amountRaw) : Number(amountRaw);
-
-    if (!Number.isFinite(bidAmount) || bidAmount <= 0) {
+    const amountNum = typeof amountRaw === "string" ? parseFloat(amountRaw) : Number(amountRaw);
+    if (!Number.isFinite(amountNum) || amountNum <= 0) {
       return NextResponse.json({ error: "Invalid bid amount." }, { status: 400 });
     }
+
+    // ✅ Normalize to 2dp (until we migrate to integer pence everywhere)
+    const bidAmount = roundTo2(amountNum);
 
     // Load listing
     const listing = (await databases.getDocument(
@@ -403,6 +437,24 @@ export async function POST(req: Request) {
 
     if (!listing || !isLiveStatus(listing.status)) {
       return NextResponse.json({ error: "Auction is not live." }, { status: 400 });
+    }
+
+    // ✅ Prevent seller self-bidding (email + id checks)
+    const sellerEmailLower = normalizeEmailLower(getSellerEmailFromListing(listing));
+    const bidderEmailLower = normalizeEmailLower(bidderEmail);
+    if (sellerEmailLower && bidderEmailLower && sellerEmailLower === bidderEmailLower) {
+      return NextResponse.json(
+        { error: "You cannot bid on your own listing.", code: "SELLER_CANNOT_BID" },
+        { status: 403 }
+      );
+    }
+
+    const sellerId = String(getSellerIdFromListing(listing) || "").trim();
+    if (sellerId && bidderId && sellerId === bidderId) {
+      return NextResponse.json(
+        { error: "You cannot bid on your own listing.", code: "SELLER_CANNOT_BID" },
+        { status: 403 }
+      );
     }
 
     // Soft close
@@ -437,12 +489,20 @@ export async function POST(req: Request) {
     const effectiveBaseBid =
       listing.current_bid != null ? Number(listing.current_bid) : Number(listing.starting_price ?? 0);
 
-    const increment = getBidIncrement(effectiveBaseBid);
-    const minimumAllowed = effectiveBaseBid + increment;
+    const baseBid = roundTo2(effectiveBaseBid);
+    const increment = getBidIncrement(baseBid);
+    const minimumAllowed = roundTo2(baseBid + increment);
 
     if (bidAmount < minimumAllowed) {
       return NextResponse.json(
-        { error: `Minimum bid is £${minimumAllowed.toLocaleString("en-GB")}` },
+        {
+          error: `Minimum bid is £${minimumAllowed.toLocaleString("en-GB", {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2,
+          })}`,
+          code: "BID_TOO_LOW",
+          minimumAllowed,
+        },
         { status: 400 }
       );
     }
