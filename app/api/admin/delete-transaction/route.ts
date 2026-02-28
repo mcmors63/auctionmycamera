@@ -1,13 +1,13 @@
 // app/api/admin/delete-transaction/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { Client, Databases } from "node-appwrite";
+import { requireAdmin } from "@/lib/requireAdmin";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 // -----------------------------
 // ENV (server-side)
-// Prefer server envs first, then public fallbacks (non-breaking).
 // -----------------------------
 const endpoint =
   process.env.APPWRITE_ENDPOINT ||
@@ -20,9 +20,6 @@ const projectId =
   "";
 
 const apiKey = process.env.APPWRITE_API_KEY || "";
-
-// Optional: if set, require ?token=... or header x-admin-token
-const ADMIN_DELETE_TX_SECRET = (process.env.ADMIN_DELETE_TX_SECRET || "").trim();
 
 // Transactions DB/collection (camera first, legacy fallback)
 const TX_DB_ID =
@@ -78,51 +75,34 @@ async function updateDocSchemaTolerant(
     }
   }
 
-  // Last resort: update only status fields (most schemas have these)
-  const minimal: Record<string, any> = {
-    transaction_status: payload.transaction_status,
-    payment_status: payload.payment_status,
-  };
+  // Last resort: only write a minimal audit flag if possible
+  const minimal: Record<string, any> = {};
+  if ("archived" in payload) minimal.archived = payload.archived;
+  if ("archived_reason" in payload) minimal.archived_reason = payload.archived_reason;
+  if ("archived_at" in payload) minimal.archived_at = payload.archived_at;
+
   return await databases.updateDocument(dbId, colId, docId, minimal);
 }
 
 // -----------------------------
-// POST  /api/admin/delete-transaction
+// POST /api/admin/delete-transaction
 // Body: { txId?: string, transactionId?: string, reason: string }
 // Soft delete (archive) – no hard delete
-// Optional auth: if ADMIN_DELETE_TX_SECRET is set, require token.
 // -----------------------------
 export async function POST(req: NextRequest) {
   try {
+    // ✅ Real admin gate: session-based (same as your other admin routes)
+    const admin = await requireAdmin(req);
+    if (!admin.ok) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
     if (!endpoint || !projectId || !apiKey) {
-      console.error("❌ DELETE-TX: Missing Appwrite config");
-      return NextResponse.json(
-        { error: "Server Appwrite config missing." },
-        { status: 500 }
-      );
+      return NextResponse.json({ error: "Server Appwrite config missing." }, { status: 500 });
     }
 
     if (!TX_DB_ID || !TX_COLLECTION_ID) {
-      console.error("❌ DELETE-TX: Missing transactions DB/collection config", {
-        TX_DB_ID,
-        TX_COLLECTION_ID,
-      });
-      return NextResponse.json(
-        { error: "Server transactions configuration incomplete." },
-        { status: 500 }
-      );
-    }
-
-    // Optional protection: enable by setting ADMIN_DELETE_TX_SECRET in env
-    if (ADMIN_DELETE_TX_SECRET) {
-      const { searchParams } = new URL(req.url);
-      const tokenFromQuery = (searchParams.get("token") || "").trim();
-      const tokenFromHeader = (req.headers.get("x-admin-token") || "").trim();
-      const token = tokenFromQuery || tokenFromHeader;
-
-      if (token !== ADMIN_DELETE_TX_SECRET) {
-        return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
-      }
+      return NextResponse.json({ error: "Server transactions configuration incomplete." }, { status: 500 });
     }
 
     let body: any;
@@ -140,72 +120,52 @@ export async function POST(req: NextRequest) {
     const reason = String(body?.reason || "").trim();
 
     if (!txId) {
-      return NextResponse.json(
-        { error: "txId or transactionId is required." },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "txId or transactionId is required." }, { status: 400 });
     }
     if (!reason) {
-      return NextResponse.json(
-        { error: "A delete reason is required." },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "A reason is required." }, { status: 400 });
     }
 
     const databases = getServerDatabases();
     if (!databases) {
-      return NextResponse.json(
-        { error: "Server Appwrite client could not be initialised." },
-        { status: 500 }
-      );
+      return NextResponse.json({ error: "Server Appwrite client could not be initialised." }, { status: 500 });
     }
 
-    // Load existing doc so we can keep payment_status if present
-    const existing: any = await databases.getDocument(
-      TX_DB_ID,
-      TX_COLLECTION_ID,
-      txId
-    );
+    // Load existing doc (so we can keep important fields intact)
+    const existing: any = await databases.getDocument(TX_DB_ID, TX_COLLECTION_ID, txId);
 
     const nowIso = new Date().toISOString();
 
-    // Soft delete payload (schema tolerant; extra keys will be stripped if missing)
+    /**
+     * ✅ Archive strategy:
+     * - DO NOT invent a new transaction_status like "deleted"
+     * - Keep fulfilment + payment fields as they are
+     * - Add archive flags + reason (schema-tolerant)
+     */
     const updatePayload: Record<string, any> = {
-      transaction_status: "deleted",
-      payment_status: existing?.payment_status || "pending",
+      // keep these intact if they exist
+      transaction_status: existing?.transaction_status,
+      payment_status: existing?.payment_status,
 
-      // Optional audit fields (safe if schema has them)
-      is_deleted: true,
-      deleted_reason: reason,
-      deleted_at: nowIso,
+      // archive flags (will be kept if schema has them)
+      archived: true,
+      archived_reason: reason,
+      archived_at: nowIso,
+
+      // optional timestamp (schema tolerant)
       updated_at: nowIso,
     };
 
-    const updated = await updateDocSchemaTolerant(
-      databases,
-      TX_DB_ID,
-      TX_COLLECTION_ID,
-      txId,
-      updatePayload
-    );
+    const updated = await updateDocSchemaTolerant(databases, TX_DB_ID, TX_COLLECTION_ID, txId, updatePayload);
 
-    return NextResponse.json(
-      { ok: true, transaction: updated },
-      { status: 200 }
-    );
+    return NextResponse.json({ ok: true, transaction: updated }, { status: 200 });
   } catch (err: any) {
-    console.error("❌ DELETE-TX error:", err);
-    return NextResponse.json(
-      { error: err?.message || "Failed to delete (archive) transaction." },
-      { status: 500 }
-    );
+    console.error("delete-transaction error:", err);
+    return NextResponse.json({ error: err?.message || "Failed to archive transaction." }, { status: 500 });
   }
 }
 
-// Small debug helper – safe to leave
+// Optional smoke-test
 export async function GET() {
-  return NextResponse.json(
-    { ok: true, route: "admin/delete-transaction" },
-    { status: 200 }
-  );
+  return NextResponse.json({ ok: true, route: "admin/delete-transaction" }, { status: 200 });
 }

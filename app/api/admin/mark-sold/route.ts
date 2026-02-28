@@ -134,13 +134,15 @@ async function createDocSchemaTolerant(
     }
   }
 
+  // ✅ Fallback with correct “real” statuses so admin tabs work
   return await databases.createDocument(dbId, colId, ID.unique(), {
     listing_id: payload.listing_id,
     seller_email: payload.seller_email,
     buyer_email: payload.buyer_email || "",
     sale_price: payload.sale_price,
-    payment_status: payload.payment_status || "pending",
-    transaction_status: payload.transaction_status || "pending",
+
+    payment_status: payload.payment_status || "paid",
+    transaction_status: payload.transaction_status || "dispatch_pending",
   });
 }
 
@@ -261,8 +263,9 @@ export async function POST(req: NextRequest) {
       commission_amount: commissionAmount,
       seller_payout: sellerPayout,
 
-      payment_status: "pending",
-      transaction_status: "pending",
+      // ✅ IMPORTANT: use the “real” statuses your Admin tabs expect
+      payment_status: "paid",
+      transaction_status: "dispatch_pending",
 
       created_at: nowIso,
       updated_at: nowIso,
