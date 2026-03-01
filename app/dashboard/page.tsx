@@ -39,8 +39,12 @@ const LISTINGS_COLLECTION_ID =
   "listings";
 
 // ✅ IMPORTANT: Dashboard must use the SAME env vars as registration.
-const PROFILES_DB_ID = (process.env.NEXT_PUBLIC_APPWRITE_PROFILES_DATABASE_ID || "").trim();
-const PROFILES_COLLECTION_ID = (process.env.NEXT_PUBLIC_APPWRITE_PROFILES_COLLECTION_ID || "").trim();
+const PROFILES_DB_ID = (
+  process.env.NEXT_PUBLIC_APPWRITE_PROFILES_DATABASE_ID || ""
+).trim();
+const PROFILES_COLLECTION_ID = (
+  process.env.NEXT_PUBLIC_APPWRITE_PROFILES_COLLECTION_ID || ""
+).trim();
 
 // Transactions are optional in AuctionMyCamera for now
 const TX_DB_ID = LISTINGS_DB_ID;
@@ -96,10 +100,6 @@ type Listing = {
   withdraw_after_current?: boolean;
 
   current_bid?: number;
-
-  // Images
-  image_id?: string | null;
-  image_ids?: string[] | null;
 };
 
 type Transaction = {
@@ -149,11 +149,7 @@ type Transaction = {
   payout_status?: string;
 };
 
-type SellPhotoItem = {
-  localId: string;
-  file: File;
-  url: string;
-};
+type SellPreview = { id: string; file: File; url: string };
 
 // -----------------------------
 // Helpers
@@ -168,7 +164,10 @@ function toNum(v: any, fallback = 0) {
 }
 
 function formatMoney(n: number) {
-  return n.toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return n.toLocaleString("en-GB", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
 }
 
 function isAwaitingStatus(s: string) {
@@ -224,9 +223,18 @@ function formatLondon(iso?: string) {
 }
 
 function fmtAddressLines(tx: Transaction) {
-  const name = [safeStr(tx.delivery_first_name), safeStr(tx.delivery_surname)].filter(Boolean).join(" ").trim();
-  const l1 = [safeStr(tx.delivery_house), safeStr(tx.delivery_street)].filter(Boolean).join(" ").trim();
-  const l2 = [safeStr(tx.delivery_town), safeStr(tx.delivery_county)].filter(Boolean).join(", ").trim();
+  const name = [safeStr(tx.delivery_first_name), safeStr(tx.delivery_surname)]
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+  const l1 = [safeStr(tx.delivery_house), safeStr(tx.delivery_street)]
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+  const l2 = [safeStr(tx.delivery_town), safeStr(tx.delivery_county)]
+    .filter(Boolean)
+    .join(", ")
+    .trim();
   const pc = safeStr(tx.delivery_postcode);
   const phone = safeStr(tx.delivery_phone);
 
@@ -300,8 +308,8 @@ export default function DashboardPage() {
     relist_until_sold: false,
   });
 
-  // ✅ Photos (MULTI)
-  const [sellPhotos, setSellPhotos] = useState<SellPhotoItem[]>([]);
+  // ✅ Photos (multi)
+  const [sellPhotos, setSellPhotos] = useState<SellPreview[]>([]);
   const sellPhotoInputRef = useRef<HTMLInputElement | null>(null);
 
   // Fee preview
@@ -352,6 +360,78 @@ export default function DashboardPage() {
     buy_now: "",
     relist_until_sold: false,
   });
+
+  // -----------------------------
+  // Multi-photo helpers
+  // -----------------------------
+  function resetSellPhotoInput() {
+    if (sellPhotoInputRef.current) sellPhotoInputRef.current.value = "";
+  }
+
+  function addSellPhotosFromFileList(fileList: FileList | null) {
+    if (!fileList || fileList.length === 0) return;
+
+    const MAX_FILES = 8;
+    const MAX_MB = 10;
+
+    const incoming = Array.from(fileList).filter((f) =>
+      (f.type || "").toLowerCase().startsWith("image/")
+    );
+
+    const filtered = incoming.filter((f) => f.size <= MAX_MB * 1024 * 1024);
+
+    setSellPhotos((prev) => {
+      const remaining = Math.max(0, MAX_FILES - prev.length);
+      const take = filtered.slice(0, remaining);
+
+      if (take.length === 0) return prev;
+
+      const next = take.map((file) => ({
+        id: `${Date.now()}_${Math.random().toString(16).slice(2)}`,
+        file,
+        url: URL.createObjectURL(file),
+      }));
+
+      // ✅ APPEND (this stops “replace” behaviour)
+      return [...prev, ...next];
+    });
+
+    resetSellPhotoInput();
+  }
+
+  function removeSellPhoto(id: string) {
+    setSellPhotos((prev) => {
+      const hit = prev.find((p) => p.id === id);
+      if (hit) {
+        try {
+          URL.revokeObjectURL(hit.url);
+        } catch {}
+      }
+      return prev.filter((p) => p.id !== id);
+    });
+  }
+
+  function clearSellPhotos() {
+    setSellPhotos((prev) => {
+      prev.forEach((p) => {
+        try {
+          URL.revokeObjectURL(p.url);
+        } catch {}
+      });
+      return [];
+    });
+    resetSellPhotoInput();
+  }
+
+  // Cleanup previews on unmount
+  useEffect(() => {
+    return () => {
+      try {
+        sellPhotos.forEach((p) => URL.revokeObjectURL(p.url));
+      } catch {}
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // -----------------------------
   // Honor ?tab=transactions from email links
@@ -408,12 +488,16 @@ export default function DashboardPage() {
     const results: Listing[] = [];
 
     try {
-      const r1 = await databases.listDocuments(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, [Query.equal("seller_email", email)]);
+      const r1 = await databases.listDocuments(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, [
+        Query.equal("seller_email", email),
+      ]);
       results.push(...((r1.documents || []) as any));
     } catch {}
 
     try {
-      const r2 = await databases.listDocuments(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, [Query.equal("sellerEmail", email)]);
+      const r2 = await databases.listDocuments(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, [
+        Query.equal("sellerEmail", email),
+      ]);
       results.push(...((r2.documents || []) as any));
     } catch {}
 
@@ -835,70 +919,32 @@ export default function DashboardPage() {
     }
   };
 
-  function genLocalId() {
-    try {
-      // modern browsers
-      // @ts-ignore
-      if (crypto?.randomUUID) return crypto.randomUUID();
-    } catch {}
-    return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-  }
-
-  function clearSellPhotos() {
-    setSellPhotos((prev) => {
-      prev.forEach((p) => {
-        try {
-          URL.revokeObjectURL(p.url);
-        } catch {}
-      });
-      return [];
-    });
-    if (sellPhotoInputRef.current) sellPhotoInputRef.current.value = "";
-  }
-
-  // Clean up previews on unmount (safety)
-  useEffect(() => {
-    return () => {
-      sellPhotos.forEach((p) => {
-        try {
-          URL.revokeObjectURL(p.url);
-        } catch {}
-      });
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
   // -----------------------------
-  // Upload photos for dashboard sell (MULTI)
-  // Returns both:
-  // - image_ids (array)
-  // - image_id (first image for legacy single-image pages)
+  // Upload photos for dashboard sell (multi)
   // -----------------------------
-  async function uploadDashboardPhotosIfProvided(): Promise<{ imageIds: string[]; imageId: string | null }> {
-    if (!sellPhotos.length) return { imageIds: [], imageId: null };
+  async function uploadDashboardPhotosIfProvided(): Promise<string[]> {
+    if (!sellPhotos.length) return [];
 
     const bucketId = (process.env.NEXT_PUBLIC_APPWRITE_CAMERA_IMAGES_BUCKET_ID || "").trim();
-
     if (!bucketId) {
       alert("Camera image bucket not configured.");
-      return { imageIds: [], imageId: null };
+      return [];
     }
 
-    try {
-      const ids: string[] = [];
+    const ids: string[] = [];
 
-      // Upload in order selected
-      for (const p of sellPhotos.slice(0, 10)) {
+    try {
+      for (const p of sellPhotos) {
         const file = await storage.createFile(bucketId, ID.unique(), p.file);
         ids.push(file.$id);
       }
-
-      return { imageIds: ids, imageId: ids[0] || null };
     } catch (err) {
       console.error("Photo upload failed:", err);
       alert("Failed to upload one or more images.");
-      return { imageIds: [], imageId: null };
+      return [];
     }
+
+    return ids;
   }
 
   // -----------------------------
@@ -964,7 +1010,7 @@ export default function DashboardPage() {
         return;
       }
 
-      const uploaded = await uploadDashboardPhotosIfProvided();
+      const uploadedImageIds = await uploadDashboardPhotosIfProvided();
 
       const res = await fetch("/api/listings", {
         method: "POST",
@@ -985,9 +1031,9 @@ export default function DashboardPage() {
           starting_price: !isNaN(starting) ? starting : 0,
           buy_now: !isNaN(buyNow) ? buyNow : 0,
 
-          // ✅ MULTI
-          image_id: uploaded.imageId, // keep legacy single image field
-          image_ids: uploaded.imageIds.length ? uploaded.imageIds : null,
+          // ✅ Back-compat + multi
+          image_id: uploadedImageIds[0] || null,
+          image_ids: uploadedImageIds.length ? uploadedImageIds : null,
 
           relist_until_sold: !!sellForm.relist_until_sold,
         }),
@@ -1169,12 +1215,16 @@ export default function DashboardPage() {
     const combined: Transaction[] = [];
 
     try {
-      const txSeller = await databases.listDocuments(TX_DB_ID, TX_COLLECTION_ID, [Query.equal("seller_email", email)]);
+      const txSeller = await databases.listDocuments(TX_DB_ID, TX_COLLECTION_ID, [
+        Query.equal("seller_email", email),
+      ]);
       combined.push(...((txSeller.documents || []) as any));
     } catch {}
 
     try {
-      const txBuyer = await databases.listDocuments(TX_DB_ID, TX_COLLECTION_ID, [Query.equal("buyer_email", email)]);
+      const txBuyer = await databases.listDocuments(TX_DB_ID, TX_COLLECTION_ID, [
+        Query.equal("buyer_email", email),
+      ]);
       combined.push(...((txBuyer.documents || []) as any));
     } catch {}
 
@@ -1184,6 +1234,19 @@ export default function DashboardPage() {
     });
 
     setTransactions(Array.from(byId.values()));
+  }
+
+  // -----------------------------
+  // Loading state
+  // -----------------------------
+  if (initialLoading) {
+    return (
+      <div className="min-h-screen bg-neutral-950 py-10 px-4 text-neutral-100">
+        <div className="max-w-4xl mx-auto rounded-2xl border border-neutral-800 bg-neutral-900/40 p-6">
+          <p className="text-sm text-neutral-300">Loading dashboard…</p>
+        </div>
+      </div>
+    );
   }
 
   // ✅ everything UI-related must be inside return()
@@ -1245,7 +1308,8 @@ export default function DashboardPage() {
               <p className="text-neutral-300">
                 No profile found for your account.
                 <br />
-                This usually means your dashboard is pointing at a different Appwrite database/collection than your registration.
+                This usually means your dashboard is pointing at a different Appwrite database/collection than your
+                registration.
                 <br />
                 Check your env vars: <strong>NEXT_PUBLIC_APPWRITE_PROFILES_DATABASE_ID</strong> and{" "}
                 <strong>NEXT_PUBLIC_APPWRITE_PROFILES_COLLECTION_ID</strong>.
@@ -1432,22 +1496,24 @@ export default function DashboardPage() {
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold text-neutral-400 mb-1">Gear type</label>
-                  <select
-                    name="gear_type"
-                    value={sellForm.gear_type}
-                    onChange={handleSellChange}
-                    className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
-                  >
-                    <option value="">Select type</option>
-                    <option value="camera">Camera</option>
-                    <option value="lens">Lens</option>
-                    <option value="film_camera">Film camera</option>
-                    <option value="accessory">Accessory</option>
-                    <option value="other">Other</option>
-                  </select>
-                </div>
-
+  <label className="block text-xs font-semibold text-neutral-400 mb-1">
+    Gear type
+  </label>
+  <select
+    name="gear_type"
+    value={sellForm.gear_type}
+    onChange={handleSellChange}
+    className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
+  >
+   <option value="">Select type</option>
+   <option value="camera">Camera</option>
+   <option value="lens">Lens</option>
+   <option value="film_camera">Film camera</option>
+  <option value="bundle">Bundle</option>
+  <option value="accessory">Accessory</option>
+  <option value="other">Other</option>
+  </select>
+</div>
                 <div>
                   <label className="block text-xs font-semibold text-neutral-400 mb-1">Brand (optional)</label>
                   <input
@@ -1512,83 +1578,55 @@ export default function DashboardPage() {
                 />
               </div>
 
-              {/* ✅ Photo Upload (MULTI) */}
+              {/* Photos Upload (multi) */}
               <div>
-                <label className="block text-sm font-medium text-neutral-200 mb-1">Photos (optional)</label>
+                <div className="flex items-center justify-between gap-3">
+                  <label className="block text-sm font-medium text-neutral-200 mb-1">Photos (optional)</label>
+                  <span className="text-[11px] text-neutral-400">
+                    {sellPhotos.length ? `${sellPhotos.length} selected` : "Up to 8 images"}
+                  </span>
+                </div>
+
                 <input
                   ref={sellPhotoInputRef}
                   type="file"
                   accept="image/*"
                   multiple
-                  onChange={(e) => {
-                    const files = Array.from(e.target.files || []);
-                    if (!files.length) return;
-
-                    setSellPhotos((prev) => {
-                      const room = Math.max(0, 10 - prev.length); // max 10
-                      const toAdd = files.slice(0, room).map((file) => ({
-                        localId: genLocalId(),
-                        file,
-                        url: URL.createObjectURL(file),
-                      }));
-                      return [...prev, ...toAdd];
-                    });
-
-                    setSellError("");
-
-                    // allow picking same file again later
-                    if (sellPhotoInputRef.current) sellPhotoInputRef.current.value = "";
-                  }}
+                  onChange={(e) => addSellPhotosFromFileList(e.target.files)}
                   className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100"
                 />
 
-                <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-neutral-400">
-                  <span>
-                    {sellPhotos.length}/10 selected
-                  </span>
-                  {sellPhotos.length > 0 && (
-                    <button
-                      type="button"
-                      onClick={() => clearSellPhotos()}
-                      className="px-2 py-1 rounded-md bg-neutral-950/60 hover:bg-neutral-950 text-neutral-200 border border-neutral-800"
-                    >
-                      Clear all
-                    </button>
-                  )}
-                </div>
-
                 {sellPhotos.length > 0 && (
-                  <div className="mt-3 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3">
-                    {sellPhotos.map((p) => (
-                      <div key={p.localId} className="relative">
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img
-                          src={p.url}
-                          alt="Preview"
-                          className="h-28 w-full rounded-lg border border-neutral-700 object-cover"
-                          loading="lazy"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setSellPhotos((prev) => {
-                              const target = prev.find((x) => x.localId === p.localId);
-                              if (target) {
-                                try {
-                                  URL.revokeObjectURL(target.url);
-                                } catch {}
-                              }
-                              return prev.filter((x) => x.localId !== p.localId);
-                            });
-                          }}
-                          className="absolute top-2 right-2 px-2 py-1 rounded-md bg-black/70 hover:bg-black text-white text-[10px] font-semibold border border-white/10"
-                          title="Remove photo"
+                  <>
+                    <div className="mt-3 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+                      {sellPhotos.map((p) => (
+                        <div
+                          key={p.id}
+                          className="relative rounded-lg border border-neutral-800 bg-neutral-950/30 overflow-hidden"
                         >
-                          Remove
-                        </button>
-                      </div>
-                    ))}
-                  </div>
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img src={p.url} alt="Preview" className="h-28 w-full object-cover" />
+                          <button
+                            type="button"
+                            onClick={() => removeSellPhoto(p.id)}
+                            className="absolute top-2 right-2 px-2 py-1 rounded-md bg-black/70 text-white text-[11px] font-semibold border border-white/10 hover:bg-black/80"
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="mt-3">
+                      <button
+                        type="button"
+                        onClick={clearSellPhotos}
+                        className="px-3 py-2 rounded-md bg-neutral-950/60 hover:bg-neutral-950 text-neutral-100 text-xs font-semibold border border-neutral-800"
+                      >
+                        Clear all photos
+                      </button>
+                    </div>
+                  </>
                 )}
               </div>
 
@@ -1764,7 +1802,9 @@ export default function DashboardPage() {
         {activeTab === "approvedQueued" && (
           <div className="space-y-4">
             <h2 className={`text-xl font-bold mb-2 ${accentText}`}>Approved / Queued</h2>
-            <p className="text-sm text-neutral-300 mb-1">These listings are approved and queued for the next weekly auction.</p>
+            <p className="text-sm text-neutral-300 mb-1">
+              These listings are approved and queued for the next weekly auction.
+            </p>
             <p className="text-xs text-neutral-400">
               You currently have <strong>{queuedListings.length}</strong> queued.
             </p>
@@ -2075,7 +2115,6 @@ export default function DashboardPage() {
                       txStatusLower
                     );
 
-                  // Buyer can only confirm after dispatch (receipt_pending / dispatch_sent)
                   const canConfirmReceived =
                     isBuyer && !isComplete && paymentLower === "paid" && ["receipt_pending", "dispatch_sent"].includes(txStatusLower);
 
@@ -2118,9 +2157,7 @@ export default function DashboardPage() {
                         <div className="flex flex-wrap gap-2 items-center">
                           <span
                             className={`px-2 py-1 rounded-md border ${
-                              paymentLower === "paid"
-                                ? "border-emerald-700/40 text-emerald-200"
-                                : "border-neutral-700 text-neutral-300"
+                              paymentLower === "paid" ? "border-emerald-700/40 text-emerald-200" : "border-neutral-700 text-neutral-300"
                             }`}
                           >
                             1) Paid
@@ -2157,9 +2194,7 @@ export default function DashboardPage() {
                               {deliveryPhone && <div className="mt-1 text-xs text-neutral-400">Phone: {deliveryPhone}</div>}
                             </div>
                           ) : (
-                            <p className="mt-2 text-xs text-neutral-400">
-                              No delivery address snapshot found on this transaction yet.
-                            </p>
+                            <p className="mt-2 text-xs text-neutral-400">No delivery address snapshot found on this transaction yet.</p>
                           )}
 
                           <div className="mt-4">
@@ -2293,7 +2328,8 @@ export default function DashboardPage() {
                               <strong>Tracking:</strong> {safeStr(tx.seller_dispatch_tracking) || "—"}
                             </p>
                             <p>
-                              <strong>Dispatched:</strong> {tx.seller_dispatched_at ? formatLondon(tx.seller_dispatched_at) : "—"}
+                              <strong>Dispatched:</strong>{" "}
+                              {tx.seller_dispatched_at ? formatLondon(tx.seller_dispatched_at) : "—"}
                             </p>
                           </div>
 
@@ -2398,21 +2434,25 @@ export default function DashboardPage() {
                   ))}
 
                   <div>
-                    <label className="block text-xs font-semibold text-neutral-400 mb-1">Gear type</label>
-                    <select
-                      value={editForm.gear_type}
-                      onChange={(e) => setEditForm((p) => ({ ...p, gear_type: e.target.value }))}
-                      className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-900/40 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
-                    >
-                      <option value="">Select type</option>
-                      <option value="camera">Camera</option>
-                      <option value="lens">Lens</option>
-                      <option value="film_camera">Film camera</option>
-                      <option value="accessory">Accessory</option>
-                      <option value="other">Other</option>
-                    </select>
-                  </div>
-
+  <label className="block text-xs font-semibold text-neutral-400 mb-1">
+    Gear type
+  </label>
+  <select
+    value={editForm.gear_type}
+    onChange={(e) =>
+      setEditForm((p) => ({ ...p, gear_type: e.target.value }))
+    }
+    className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-900/40 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
+  >
+    <option value="">Select type</option>
+    <option value="camera">Camera</option>
+    <option value="lens">Lens</option>
+    <option value="film_camera">Film camera</option>
+    <option value="bundle">Bundle</option>
+    <option value="accessory">Accessory</option>
+    <option value="other">Other</option>
+  </select>
+</div>
                   <div>
                     <label className="block text-xs font-semibold text-neutral-400 mb-1">Condition</label>
                     <select
@@ -2489,10 +2529,6 @@ export default function DashboardPage() {
               </div>
             </div>
           </div>
-        )}
-
-        {initialLoading && (
-          <p className="text-xs text-neutral-400 mt-6">Loading…</p>
         )}
       </div>
     </div>
