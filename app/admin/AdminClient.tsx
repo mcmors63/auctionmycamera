@@ -345,14 +345,28 @@ export default function AdminClient() {
     const title = getListingTitle(selectedListing);
 
     try {
-      const res = await authedFetch("/api/approve-listing", {
+      // IMPORTANT: use the same /api/admin/* namespace as reject/delete
+      const res = await authedFetch("/api/admin/approve-listing", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          // always include the ID in a couple of common shapes
           listingId: selectedListing.$id,
+          id: selectedListing.$id,
+
+          // seller email
           sellerEmail: selectedListing.seller_email || selectedListing.sellerEmail,
+          seller_email: selectedListing.seller_email || selectedListing.sellerEmail,
+
+          // admin notes
+          adminNotes: selectedListing.admin_notes || selectedListing.interesting_fact || "",
+          admin_notes: selectedListing.admin_notes || selectedListing.interesting_fact || "",
           interesting_fact: selectedListing.admin_notes || selectedListing.interesting_fact || "",
+
+          // prices (both naming styles)
+          startingPrice: Number(selectedListing.starting_price) || 0,
           starting_price: Number(selectedListing.starting_price) || 0,
+          reservePrice: Number(selectedListing.reserve_price) || 0,
           reserve_price: Number(selectedListing.reserve_price) || 0,
         }),
       });
@@ -373,6 +387,18 @@ export default function AdminClient() {
       setMessage(`Listing "${title}" approved & queued.`);
       setSelectedListing(null);
       setActiveTab("queued");
+
+      // Refresh queued list immediately (so you see it move)
+      try {
+        const updated = await databases.listDocuments(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, [
+          Query.equal("status", "queued"),
+          Query.orderDesc("$updatedAt"),
+          Query.limit(200),
+        ]);
+        setListings(updated.documents);
+      } catch (e) {
+        console.warn("Post-approve refresh failed (non-fatal):", e);
+      }
     } catch (err: any) {
       console.error(err);
       alert(err?.message || "Failed to approve listing.");
