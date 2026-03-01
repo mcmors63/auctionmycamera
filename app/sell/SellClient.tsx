@@ -18,6 +18,7 @@ type GearType =
   | "tripod"
   | "bag"
   | "other";
+
 type Era = "modern" | "vintage" | "antique";
 type Condition = "new" | "like_new" | "excellent" | "good" | "fair" | "parts";
 
@@ -78,6 +79,19 @@ function formatLondon(dt: Date) {
   });
 }
 
+function toIntPriceGBP(raw: FormDataEntryValue | null): number | null {
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return null;
+  // We store whole pounds as integers in Appwrite
+  return Math.round(n);
+}
+
+function toBool(raw: FormDataEntryValue | null): boolean {
+  if (raw == null) return false;
+  const v = String(raw).trim().toLowerCase();
+  return v === "true" || v === "1" || v === "on" || v === "yes";
+}
+
 export default function SellClient() {
   const router = useRouter();
 
@@ -107,9 +121,7 @@ export default function SellClient() {
       } catch {
         if (!alive) return;
         setUser(null);
-        router.replace(
-          `/login-or-register?next=${encodeURIComponent("/sell")}`
-        );
+        router.replace(`/login-or-register?next=${encodeURIComponent("/sell")}`);
       } finally {
         if (!alive) return;
         setLoadingUser(false);
@@ -210,30 +222,43 @@ export default function SellClient() {
     const condition = String(formData.get("condition") || "good") as Condition;
     const description = String(formData.get("description") || "").trim();
 
-    const starting_price_raw = formData.get("starting_price");
-    const reserve_price_raw = formData.get("reserve_price");
+    const starting_price = toIntPriceGBP(formData.get("starting_price"));
+    const reserve_price = toIntPriceGBP(formData.get("reserve_price"));
+    const buy_now = toIntPriceGBP(formData.get("buy_now"));
 
-    const shutter_count_raw = formData.get("shutter_count");
+    const relist_until_sold = toBool(formData.get("relist_until_sold"));
+
+    const shutter_count_raw = String(formData.get("shutter_count") || "").trim();
     const lens_mount = String(formData.get("lens_mount") || "").trim();
     const focal_length = String(formData.get("focal_length") || "").trim();
     const max_aperture = String(formData.get("max_aperture") || "").trim();
 
-    const starting_price = Number(starting_price_raw);
-    const reserve_price = Number(reserve_price_raw);
-
-    if (!item_title || !starting_price_raw || !reserve_price_raw) {
+    if (!item_title || starting_price === null || reserve_price === null) {
       alert("⚠️ Please fill in the item title, starting price, and reserve price.");
       return;
     }
 
-    if (!Number.isFinite(starting_price) || starting_price < 0) {
-      alert("⚠️ Starting price must be a valid number.");
+    if (starting_price < 0) {
+      alert("⚠️ Starting price must be 0 or more.");
       return;
     }
 
-    if (!Number.isFinite(reserve_price) || reserve_price < 0) {
-      alert("⚠️ Reserve price must be a valid number.");
+    if (reserve_price < 10) {
+      alert("⚠️ Minimum reserve price is £10.");
       return;
+    }
+
+    if (starting_price > 0 && starting_price >= reserve_price) {
+      alert("⚠️ Starting price must be lower than the reserve price.");
+      return;
+    }
+
+    if (buy_now != null && buy_now > 0) {
+      const min = Math.max(reserve_price, starting_price);
+      if (buy_now < min) {
+        alert("⚠️ Buy Now must be at least the reserve/starting price.");
+        return;
+      }
     }
 
     const w = getAuctionWindow();
@@ -242,8 +267,6 @@ export default function SellClient() {
 
     const auction_start = start.toISOString();
     const auction_end = end.toISOString();
-
-    const legacy_listing_ref = `AMC${String(Date.now()).slice(-6)}`;
 
     const photoFile = (formData.get("photo") as File | null) || null;
 
@@ -256,38 +279,60 @@ export default function SellClient() {
         if (!image_id) throw new Error("Photo upload failed (no file id returned).");
       }
 
+      // IMPORTANT:
+      // Your Appwrite collection contains BOTH snake_case and camelCase columns.
+      // Until schema is cleaned, send BOTH so fields stop being NULL.
       const payload: Record<string, unknown> = {
-        sellerEmail: user.email,
         owner_id: user.$id,
 
+        // Seller email (both styles)
+        seller_email: user.email,
+        sellerEmail: user.email,
+
+        // Title/label (both styles)
         item_title,
+        registration: item_title,
+
+        // Gear type (both styles)
         gear_type,
+        gearType: gear_type,
+
         era,
+        condition,
+
         brand: brand || null,
         model: model || null,
-        condition,
         description: description || null,
 
-        // ✅ store as string-friendly values (API will stringify if needed)
-        shutter_count:
-          shutter_count_raw && String(shutter_count_raw).trim() !== ""
-            ? String(shutter_count_raw).trim()
-            : null,
+        // details (strings in schema)
+        shutter_count: shutter_count_raw ? shutter_count_raw : null,
         lens_mount: lens_mount || null,
         focal_length: focal_length || null,
         max_aperture: max_aperture || null,
 
+        // image refs
         image_id: image_id || null,
+        imageId: image_id || null,
+        image_url: null,
 
+        // prices (both styles)
         starting_price,
-        reserve_price,
+        startingPrice: starting_price,
 
+        reserve_price,
+        reservePrice: reserve_price,
+
+        buy_now: buy_now && buy_now > 0 ? buy_now : 0,
+        buyNow: buy_now && buy_now > 0 ? buy_now : 0,
+
+        // relist (both styles)
+        relist_until_sold,
+        relistUntilSold: relist_until_sold,
+
+        // auction dates (your API currently ignores these on create and sets null,
+        // but sending doesn't hurt; keeps future-compatible)
         auction_start,
         auction_end,
-
-        reg_number: legacy_listing_ref,
-        plate_status: "available",
-        expiry_date: null,
       };
 
       const jwt = await getJwtOrThrow();
@@ -331,7 +376,11 @@ export default function SellClient() {
       setGearType("camera");
     } catch (error: any) {
       console.error("Error submitting listing:", error);
-      alert(`❌ Failed to submit listing.\n\n${String(error?.message || "Please try again.")}`);
+      alert(
+        `❌ Failed to submit listing.\n\n${String(
+          error?.message || "Please try again."
+        )}`
+      );
     } finally {
       setSubmitting(false);
     }
@@ -393,14 +442,20 @@ export default function SellClient() {
 
         <div className="mt-3 rounded-2xl border border-border bg-card p-4">
           <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-            {previewWindow.isLive ? "Current auction window (UK time)" : "Upcoming auction window (UK time)"}
+            {previewWindow.isLive
+              ? "Current auction window (UK time)"
+              : "Upcoming auction window (UK time)"}
           </p>
           <p className="mt-1 text-sm">
             <span className="font-semibold">Starts:</span>{" "}
-            <span className="text-muted-foreground">{formatLondon(previewWindow.start)}</span>
+            <span className="text-muted-foreground">
+              {formatLondon(previewWindow.start)}
+            </span>
             <br />
             <span className="font-semibold">Ends:</span>{" "}
-            <span className="text-muted-foreground">{formatLondon(previewWindow.end)}</span>
+            <span className="text-muted-foreground">
+              {formatLondon(previewWindow.end)}
+            </span>
           </p>
         </div>
 
@@ -410,7 +465,9 @@ export default function SellClient() {
 
         {!user.emailVerification && (
           <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 p-4">
-            <p className="text-sm font-semibold text-amber-900">Verify your email to list items</p>
+            <p className="text-sm font-semibold text-amber-900">
+              Verify your email to list items
+            </p>
             <p className="mt-1 text-xs text-amber-800">
               You’re logged in, but your email isn’t verified yet. Verify it first,
               then come back here to submit your listing.
@@ -476,6 +533,7 @@ export default function SellClient() {
               <option value="bag">Bag / Case</option>
               <option value="other">Other</option>
             </select>
+            <p className={hintBase}>Bundle = camera + lens (we show both detail sections).</p>
           </div>
 
           <div>
@@ -567,13 +625,54 @@ export default function SellClient() {
         <div className="grid sm:grid-cols-2 gap-4">
           <div>
             <label className={labelBase}>Starting price (£)</label>
-            <input name="starting_price" type="number" placeholder="0" className={inputBase} required min={0} step="1" />
+            <input
+              name="starting_price"
+              type="number"
+              placeholder="0"
+              className={inputBase}
+              required
+              min={0}
+              step="1"
+            />
           </div>
 
           <div>
             <label className={labelBase}>Reserve price (£)</label>
-            <input name="reserve_price" type="number" placeholder="0" className={inputBase} required min={0} step="1" />
-            <p className={hintBase}>Minimum you’re happy to accept.</p>
+            <input
+              name="reserve_price"
+              type="number"
+              placeholder="10"
+              className={inputBase}
+              required
+              min={10}
+              step="1"
+            />
+            <p className={hintBase}>Minimum you’re happy to accept (min £10).</p>
+          </div>
+        </div>
+
+        <div className="grid sm:grid-cols-2 gap-4">
+          <div>
+            <label className={labelBase}>Buy Now (optional) (£)</label>
+            <input
+              name="buy_now"
+              type="number"
+              placeholder="0"
+              className={inputBase}
+              min={0}
+              step="1"
+            />
+            <p className={hintBase}>Leave blank/0 if not offering Buy Now.</p>
+          </div>
+
+          <div className="rounded-2xl border border-border bg-card p-4">
+            <label className="flex items-center gap-2 text-sm font-semibold text-foreground">
+              <input type="checkbox" name="relist_until_sold" className="h-4 w-4" />
+              Relist until sold
+            </label>
+            <p className={hintBase}>
+              If reserve isn’t met, the listing can roll into the next auction window.
+            </p>
           </div>
         </div>
 

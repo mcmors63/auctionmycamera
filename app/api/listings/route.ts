@@ -44,7 +44,10 @@ const SMTP_USER = (process.env.SMTP_USER || "").trim();
 const SMTP_PASS = process.env.SMTP_PASS || "";
 const FROM_EMAIL = (process.env.FROM_EMAIL || "").trim();
 const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || "").trim();
-const SITE_URL = (process.env.NEXT_PUBLIC_SITE_URL || "https://auctionmycamera.co.uk").replace(/\/+$/, "");
+const SITE_URL = (process.env.NEXT_PUBLIC_SITE_URL || "https://auctionmycamera.co.uk").replace(
+  /\/+$/,
+  ""
+);
 
 // -----------------------------
 // Helpers
@@ -241,7 +244,6 @@ async function sendAdminNewListingEmail(params: {
 
 function normalizeGearType(raw: string) {
   const v = String(raw || "").trim().toLowerCase();
-  // accept known values; otherwise store null (schema-tolerant)
   const allowed = new Set([
     "camera",
     "lens",
@@ -304,7 +306,10 @@ export async function POST(req: NextRequest) {
     // -----------------------------
     // Fields (camera-first)
     // -----------------------------
-    const itemTitle = safeString(body.item_title || body.title || body.itemTitle);
+    // Accept both "item_title" and legacy "registration"
+    const itemTitle = safeString(
+      body.item_title || body.title || body.itemTitle || body.registration
+    );
 
     const gearTypeRaw = safeString(body.gear_type || body.gearType);
     const gearType = normalizeGearType(gearTypeRaw);
@@ -330,11 +335,11 @@ export async function POST(req: NextRequest) {
         ? imageIdsRaw.map((x: any) => safeString(x)).filter(Boolean).slice(0, 10)
         : null;
 
-    // Optional relist
-    const relistUntilSold = !!body.relist_until_sold;
+    // Optional relist (accept both)
+    const relistUntilSold = !!(body.relist_until_sold ?? body.relistUntilSold);
 
     // -----------------------------
-    // Prices (match dashboard rules)
+    // Prices
     // -----------------------------
     const reservePrice = isBlank(body.reserve_price ?? body.reservePrice)
       ? NaN
@@ -376,7 +381,6 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // Display label compatibility (you use `registration` as a label in places)
     const displayName = itemTitle || [brand, model].filter(Boolean).join(" ") || `Listing ${Date.now()}`;
 
     const databases = getAdminDatabases();
@@ -386,18 +390,29 @@ export async function POST(req: NextRequest) {
 
     const permissions = buildCreatePermissions(ownerId);
 
+    // IMPORTANT:
+    // Your Appwrite collection contains BOTH snake_case and camelCase columns.
+    // To stop NULL fields immediately, write BOTH consistently.
     const data: Record<string, any> = {
       // label / legacy compatibility
       registration: displayName,
+      item_title: itemTitle || null,
 
       // Ownership / seller
-      seller_email: sellerEmail,
       owner_id: ownerId,
 
-      // Pricing
+      seller_email: sellerEmail,
+      sellerEmail: sellerEmail,
+
+      // Pricing (both styles)
       starting_price: startingPrice,
+      startingPrice: startingPrice,
+
       reserve_price: reservePrice,
+      reservePrice: reservePrice,
+
       buy_now: buyNow,
+      buyNow: buyNow,
 
       // Lifecycle
       status: "pending_approval",
@@ -405,11 +420,13 @@ export async function POST(req: NextRequest) {
       auction_end: null,
       current_bid: 0,
 
-      // Camera fields
-      item_title: itemTitle || null,
+      // Camera fields (also keep camel fallbacks harmlessly)
       gear_type: gearType || null,
+      gearType: gearType || null,
+
       era: era || null,
       condition: condition || null,
+
       brand: brand || null,
       model: model || null,
       description: description || null,
@@ -424,8 +441,9 @@ export async function POST(req: NextRequest) {
       image_id: imageId || null,
       image_ids: imageIds || null,
 
-      // Relist
+      // Relist (both styles)
       relist_until_sold: relistUntilSold,
+      relistUntilSold: relistUntilSold,
     };
 
     let created: any;
@@ -444,15 +462,21 @@ export async function POST(req: NextRequest) {
 
       const minimal: Record<string, any> = {
         registration: displayName,
-        seller_email: sellerEmail,
+        item_title: itemTitle || null,
+
         owner_id: ownerId,
+
+        seller_email: sellerEmail,
+        sellerEmail: sellerEmail,
+
         starting_price: startingPrice,
         reserve_price: reservePrice,
         buy_now: buyNow,
+
         status: "pending_approval",
+
         image_id: imageId || null,
         relist_until_sold: relistUntilSold,
-        // Keep gear_type if possible (helps admin + browsing)
         gear_type: gearType || null,
       };
 
@@ -467,8 +491,9 @@ export async function POST(req: NextRequest) {
       } catch {
         const ultra: Record<string, any> = {
           registration: displayName,
-          seller_email: sellerEmail,
           owner_id: ownerId,
+          seller_email: sellerEmail,
+          sellerEmail: sellerEmail,
           starting_price: startingPrice,
           reserve_price: reservePrice,
           buy_now: buyNow,
