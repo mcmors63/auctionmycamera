@@ -44,8 +44,9 @@ export type Listing = {
 
   // New approach (Appwrite Storage)
   image_id?: string | null;
+  image_ids?: string[] | null;
 
-  shutter_count?: number | null;
+  shutter_count?: number | string | null;
   lens_mount?: string | null;
   focal_length?: string | null;
   max_aperture?: string | null;
@@ -160,25 +161,37 @@ function isUpdateEvent(events: string[] | undefined) {
 function buildLocalImageProxyUrl(fileId: string) {
   const id = String(fileId || "").trim();
   if (!id) return null;
-
-  // ✅ IMPORTANT:
-  // The browser does NOT need the bucket ID to use our proxy route.
-  // The server route will handle bucket access. So do not block on CAMERA_IMAGES_BUCKET_ID here.
   return `/api/camera-image/${encodeURIComponent(id)}`;
 }
 
-// ✅ Prefer: image_url (public) -> image_id (proxy) -> fallback
+function firstImageId(l: Listing): string | null {
+  const anyL = l as any;
+
+  // Prefer multi-images if present
+  const ids = anyL.image_ids ?? anyL.imageIds;
+  if (Array.isArray(ids) && ids.length) {
+    const first = String(ids[0] || "").trim();
+    if (first) return first;
+  }
+
+  const single = String(anyL.image_id || anyL.imageId || "").trim();
+  if (single) return single;
+
+  return null;
+}
+
+// ✅ Prefer: image_ids[0] (proxy) -> image_id (proxy) -> image_url -> fallback
 function pickImageSrc(l: Listing) {
   const anyL = l as any;
 
-  const explicit = String(anyL.image_url || "").trim();
-  if (explicit) return explicit;
-
-  const id = String(anyL.image_id || "").trim();
+  const id = firstImageId(l);
   if (id) {
     const url = buildLocalImageProxyUrl(id);
     if (url) return url;
   }
+
+  const explicit = String(anyL.image_url || "").trim();
+  if (explicit) return explicit;
 
   return pickFallbackImage(l);
 }
@@ -208,7 +221,6 @@ export default function ListingDetailsClient({ initial }: { initial: Listing }) 
   // ✅ FIX: hooks must run before any early return
   const imgSrc = useMemo(() => {
     if (listing) return pickImageSrc(listing);
-    // fallback if listing missing (rare)
     return pickFallbackImage(initial);
   }, [listing, initial]);
 
@@ -338,8 +350,8 @@ export default function ListingDetailsClient({ initial }: { initial: Listing }) 
   const isLive = isLiveStatus && !auctionEnded && !isSold;
 
   const extraLine =
-    String(anyL.gear_type || "").toLowerCase() === "camera" && typeof anyL.shutter_count === "number"
-      ? `Shutter count: ${anyL.shutter_count.toLocaleString("en-GB")}`
+    String(anyL.gear_type || "").toLowerCase() === "camera" && String(anyL.shutter_count || "").trim()
+      ? `Shutter count: ${String(anyL.shutter_count).trim()}`
       : String(anyL.gear_type || "").toLowerCase() === "lens"
       ? [anyL.lens_mount ? `Mount: ${anyL.lens_mount}` : "", anyL.focal_length || "", anyL.max_aperture || ""]
           .filter(Boolean)
@@ -355,7 +367,8 @@ export default function ListingDetailsClient({ initial }: { initial: Listing }) 
       ? currentBidRaw
       : null;
 
-  const currentBidDisplay = currentBidRaw == null ? (startingPrice != null ? "No bids yet" : money(0)) : money(currentBidRaw);
+  const currentBidDisplay =
+    currentBidRaw == null ? (startingPrice != null ? "No bids yet" : money(0)) : money(currentBidRaw);
 
   // Banner + CTA logic for ended states (non-sold)
   const showEndedInfoBanner = !isSold && (isCompleted || isNotSold || isPaymentRequired || isPaymentFailed || endedByClock);
@@ -401,7 +414,6 @@ export default function ListingDetailsClient({ initial }: { initial: Listing }) 
         ctaSecondary: { href: "/sell", label: "Sell camera gear" },
       };
     }
-    // ended-by-clock fallback
     if (endedByClock) {
       return {
         tone: "slate" as const,
@@ -484,7 +496,8 @@ export default function ListingDetailsClient({ initial }: { initial: Listing }) 
               loading="lazy"
               onError={(e) => {
                 const el = e.currentTarget as HTMLImageElement;
-                el.src = pickFallbackImage(listing);
+                const fallback = pickFallbackImage(listing);
+                if (el.src !== fallback) el.src = fallback;
               }}
             />
           </div>
@@ -499,7 +512,9 @@ export default function ListingDetailsClient({ initial }: { initial: Listing }) 
                 Final Price: <span className="font-bold">{money(soldPrice)}</span>
               </p>
             ) : null}
-            <p className="text-sm opacity-90 mt-1">{anyL.sold_via === "buy_now" ? "Bought via Buy Now" : "Sold at Auction"}</p>
+            <p className="text-sm opacity-90 mt-1">
+              {anyL.sold_via === "buy_now" ? "Bought via Buy Now" : "Sold at Auction"}
+            </p>
           </div>
         )}
 
@@ -513,7 +528,9 @@ export default function ListingDetailsClient({ initial }: { initial: Listing }) 
               <Link
                 href={endedBanner.ctaPrimary.href}
                 className={`inline-flex items-center justify-center rounded-md px-5 py-3 font-semibold ${
-                  endedBanner.tone === "slate" ? "bg-black text-white hover:bg-gray-900" : "bg-black text-yellow-200 hover:bg-gray-900"
+                  endedBanner.tone === "slate"
+                    ? "bg-black text-white hover:bg-gray-900"
+                    : "bg-black text-yellow-200 hover:bg-gray-900"
                 }`}
               >
                 {endedBanner.ctaPrimary.label}
@@ -559,7 +576,10 @@ export default function ListingDetailsClient({ initial }: { initial: Listing }) 
                   ) : null}
 
                   <p className="text-xs text-gray-600">
-                    Reserve: <span className="font-semibold">{reserveMet === true ? "met" : reserveMet === false ? "not met" : "hidden"}</span>
+                    Reserve:{" "}
+                    <span className="font-semibold">
+                      {reserveMet === true ? "met" : reserveMet === false ? "not met" : "hidden"}
+                    </span>
                   </p>
 
                   {isPaymentRequired && (
@@ -598,7 +618,11 @@ export default function ListingDetailsClient({ initial }: { initial: Listing }) 
                       <span className="font-semibold">{isLive ? "Auction ends in:" : "Auction starts in:"}</span>
                     </p>
                     <div className="mt-1 inline-block">
-                      {isLive ? <AuctionTimer mode="live" endTime={rawEndStr || undefined} /> : <AuctionTimer mode="coming" endTime={rawStartStr || undefined} />}
+                      {isLive ? (
+                        <AuctionTimer mode="live" endTime={rawEndStr || undefined} />
+                      ) : (
+                        <AuctionTimer mode="coming" endTime={rawStartStr || undefined} />
+                      )}
                     </div>
                   </>
                 )
