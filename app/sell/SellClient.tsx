@@ -11,6 +11,7 @@ import { getAuctionWindow } from "@/lib/getAuctionWindow";
 type GearType =
   | "camera"
   | "lens"
+  | "bundle"
   | "accessory"
   | "film"
   | "lighting"
@@ -135,7 +136,8 @@ export default function SellClient() {
       // Appwrite will append ?userId=...&secret=...
       const base = getSiteUrl();
       const redirectUrl = `${base || window.location.origin}/api/verify`;
-  
+      void redirectUrl; // keep lint happy if you wire it later
+
       setVerifyMsg("✅ Verification email sent. Check your inbox (and spam).");
     } catch (err) {
       console.error("Failed to send verification email:", err);
@@ -276,7 +278,14 @@ export default function SellClient() {
         }
       }
 
-      // ✅ Payload: server must trust auth, but keep legacy-safe fields
+      // ✅ Payload
+      // IMPORTANT: Your Appwrite schema shows shutter_count etc as STRING fields.
+      // So we send them as strings (or null) to avoid type mismatch later.
+      const shutterCountString =
+        shutter_count_raw && String(shutter_count_raw).trim() !== ""
+          ? String(shutter_count_raw).trim()
+          : null;
+
       const payload: Record<string, unknown> = {
         // (Server ignores these and uses the authed user anyway, but harmless)
         sellerEmail: user.email,
@@ -290,15 +299,13 @@ export default function SellClient() {
         model: model || null,
         condition,
         description: description || null,
-        shutter_count:
-          shutter_count_raw && String(shutter_count_raw).trim() !== ""
-            ? Number(shutter_count_raw)
-            : null,
+
+        shutter_count: shutterCountString,
         lens_mount: lens_mount || null,
         focal_length: focal_length || null,
         max_aperture: max_aperture || null,
 
-        // ✅ Photo reference (new)
+        // ✅ Photo reference
         image_id: image_id || null,
 
         // Pricing
@@ -411,6 +418,9 @@ export default function SellClient() {
     );
   }
 
+  const showCameraDetails = gearType === "camera" || gearType === "bundle";
+  const showLensDetails = gearType === "lens" || gearType === "bundle";
+
   return (
     <div className="max-w-xl mx-auto px-4 py-10">
       <div className="mb-6">
@@ -506,6 +516,7 @@ export default function SellClient() {
             >
               <option value="camera">Camera</option>
               <option value="lens">Lens</option>
+              <option value="bundle">Bundle</option>
               <option value="accessory">Accessory</option>
               <option value="film">Film</option>
               <option value="lighting">Lighting</option>
@@ -550,24 +561,24 @@ export default function SellClient() {
           <p className={hintBase}>Be honest — it reduces disputes and improves buyer confidence.</p>
         </div>
 
-        {gearType === "camera" && (
+        {showCameraDetails && (
           <div className="rounded-2xl border border-border bg-card p-4">
             <p className="text-sm font-semibold">Camera details (optional)</p>
             <div className="mt-3">
               <label className={labelBase}>Shutter count (optional)</label>
               <input
                 name="shutter_count"
-                type="number"
+                type="text"
+                inputMode="numeric"
                 placeholder="e.g. 12345"
                 className={inputBase}
-                min={0}
               />
               <p className={hintBase}>If you know it, buyers love seeing this.</p>
             </div>
           </div>
         )}
 
-        {gearType === "lens" && (
+        {showLensDetails && (
           <div className="rounded-2xl border border-border bg-card p-4">
             <p className="text-sm font-semibold">Lens details (optional)</p>
             <div className="mt-3 grid sm:grid-cols-3 gap-4">

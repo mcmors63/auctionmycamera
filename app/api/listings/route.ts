@@ -58,6 +58,19 @@ function safeString(v: any) {
   return typeof v === "string" ? v.trim() : "";
 }
 
+function toNullableString(v: any) {
+  if (v == null) return null;
+  if (typeof v === "string") {
+    const t = v.trim();
+    return t ? t : null;
+  }
+  if (typeof v === "number" && Number.isFinite(v)) {
+    // Appwrite schema shows these fields as STRING, so stringify safely.
+    return String(v);
+  }
+  return null;
+}
+
 function isBlank(v: any) {
   return v == null || (typeof v === "string" && v.trim() === "");
 }
@@ -129,6 +142,15 @@ function emailConfigured() {
   return !!(SMTP_HOST && SMTP_USER && SMTP_PASS && FROM_EMAIL && ADMIN_EMAIL);
 }
 
+function escapeHtml(input: string) {
+  return input
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
 async function sendAdminNewListingEmail(params: {
   listingId: string;
   displayName: string;
@@ -151,14 +173,14 @@ async function sendAdminNewListingEmail(params: {
   const transporter = nodemailer.createTransport({
     host: SMTP_HOST,
     port: SMTP_PORT,
-    secure: SMTP_PORT === 465, // true for 465
+    secure: SMTP_PORT === 465,
     auth: {
       user: SMTP_USER,
       pass: SMTP_PASS,
     },
   });
 
-  const adminLink = `${SITE_URL}/admin`; // adjust if your admin page is different
+  const adminLink = `${SITE_URL}/admin`;
 
   const subject = `New listing submitted: ${params.displayName}`;
   const text = [
@@ -217,13 +239,21 @@ async function sendAdminNewListingEmail(params: {
   });
 }
 
-function escapeHtml(input: string) {
-  return input
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
+function normalizeGearType(raw: string) {
+  const v = String(raw || "").trim().toLowerCase();
+  // accept known values; otherwise store null (schema-tolerant)
+  const allowed = new Set([
+    "camera",
+    "lens",
+    "bundle",
+    "accessory",
+    "film",
+    "lighting",
+    "tripod",
+    "bag",
+    "other",
+  ]);
+  return allowed.has(v) ? v : "";
 }
 
 // -----------------------------
@@ -275,12 +305,21 @@ export async function POST(req: NextRequest) {
     // Fields (camera-first)
     // -----------------------------
     const itemTitle = safeString(body.item_title || body.title || body.itemTitle);
-    const gearType = safeString(body.gear_type || body.gearType);
+
+    const gearTypeRaw = safeString(body.gear_type || body.gearType);
+    const gearType = normalizeGearType(gearTypeRaw);
+
     const era = safeString(body.era);
     const condition = safeString(body.condition);
     const brand = safeString(body.brand);
     const model = safeString(body.model);
     const description = safeString(body.description);
+
+    // ✅ Camera/Lens detail fields (Appwrite schema shows STRING)
+    const shutterCount = toNullableString(body.shutter_count ?? body.shutterCount);
+    const lensMount = toNullableString(body.lens_mount ?? body.lensMount);
+    const focalLength = toNullableString(body.focal_length ?? body.focalLength);
+    const maxAperture = toNullableString(body.max_aperture ?? body.maxAperture);
 
     // Photo references
     const imageId = safeString(body.image_id || body.imageId);
@@ -319,7 +358,6 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Buy Now must be a valid number (0+)." }, { status: 400 });
     }
 
-    // ✅ enforce your UI rule
     if (reservePrice < 10) {
       return NextResponse.json({ error: "Minimum reserve price is £10." }, { status: 400 });
     }
@@ -376,6 +414,12 @@ export async function POST(req: NextRequest) {
       model: model || null,
       description: description || null,
 
+      // ✅ Details
+      shutter_count: shutterCount,
+      lens_mount: lensMount,
+      focal_length: focalLength,
+      max_aperture: maxAperture,
+
       // Photos
       image_id: imageId || null,
       image_ids: imageIds || null,
@@ -408,6 +452,8 @@ export async function POST(req: NextRequest) {
         status: "pending_approval",
         image_id: imageId || null,
         relist_until_sold: relistUntilSold,
+        // Keep gear_type if possible (helps admin + browsing)
+        gear_type: gearType || null,
       };
 
       try {
@@ -456,7 +502,6 @@ export async function POST(req: NextRequest) {
       }
     } catch (emailErr: any) {
       console.error("⚠️ Admin email notification failed:", emailErr?.message || emailErr);
-      // Do NOT fail the listing creation if email fails.
     }
 
     return NextResponse.json({ ok: true, listingId: created?.$id }, { status: 200 });
