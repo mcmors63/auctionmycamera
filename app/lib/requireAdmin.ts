@@ -14,7 +14,7 @@ function normalizeEmail(v: string) {
  * Appwrite sets session cookies named like:
  * - a_session_<PROJECT_ID>
  * - a_session_<PROJECT_ID>_legacy
- * - a_session_<PROJECT_ID>_v2   (some setups)
+ * - a_session_<PROJECT_ID>_v2
  * Some setups may also use "a_session" (older).
  */
 function getAppwriteSessionFromCookies(req: NextRequest, projectId: string) {
@@ -32,9 +32,19 @@ function getAppwriteSessionFromCookies(req: NextRequest, projectId: string) {
   return "";
 }
 
+function getBearerJwt(req: NextRequest) {
+  const h = req.headers.get("authorization") || req.headers.get("Authorization") || "";
+  const m = h.match(/^Bearer\s+(.+)$/i);
+  return m?.[1]?.trim() || "";
+}
+
 /**
- * ✅ Server-side admin guard using the caller's Appwrite session cookie.
- * Verifies who is calling based on their session, then matches ADMIN_EMAIL.
+ * ✅ Server-side admin guard.
+ * Accepts either:
+ * 1) Authorization: Bearer <Appwrite JWT>  (preferred — what AdminClient sends)
+ * 2) Appwrite session cookie              (fallback)
+ *
+ * Then verifies account.get() and matches ADMIN_EMAIL.
  */
 export async function requireAdmin(req: NextRequest): Promise<AdminCheckResult> {
   const endpoint =
@@ -47,39 +57,47 @@ export async function requireAdmin(req: NextRequest): Promise<AdminCheckResult> 
     process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID ||
     "";
 
-  const adminEmail = normalizeEmail(process.env.ADMIN_EMAIL || "");
+  // IMPORTANT:
+  // Your client uses NEXT_PUBLIC_ADMIN_EMAIL, but server code was reading ADMIN_EMAIL only.
+  // Support both so prod doesn't silently fail due to env mismatch.
+  const adminEmail = normalizeEmail(
+    process.env.ADMIN_EMAIL ||
+      process.env.NEXT_PUBLIC_ADMIN_EMAIL ||
+      "admin@auctionmycamera.co.uk"
+  );
 
   if (!endpoint || !projectId) {
-    return {
-      ok: false,
-      error: "Server Appwrite config missing (endpoint/projectId).",
-    };
+    return { ok: false, error: "Server Appwrite config missing (endpoint/projectId)." };
   }
 
   if (!adminEmail) {
-    return {
-      ok: false,
-      error: "ADMIN_EMAIL is not set on the server (Vercel env).",
-    };
+    return { ok: false, error: "ADMIN_EMAIL is not set on the server (Vercel env)." };
   }
 
-  const session = getAppwriteSessionFromCookies(req, projectId);
-  if (!session) {
-    return { ok: false, error: "No active session cookie found." };
+  const jwt = getBearerJwt(req);
+
+  const session = jwt ? "" : getAppwriteSessionFromCookies(req, projectId);
+
+  if (!jwt && !session) {
+    return { ok: false, error: "No auth provided (missing Bearer JWT and no session cookie)." };
   }
 
   try {
-    const client = new Client()
-      .setEndpoint(endpoint)
-      .setProject(projectId)
-      .setSession(session);
+    const client = new Client().setEndpoint(endpoint).setProject(projectId);
+
+    // Prefer JWT if provided (matches your AdminClient authedFetch)
+    if (jwt) {
+      client.setJWT(jwt);
+    } else {
+      client.setSession(session);
+    }
 
     const account = new Account(client);
     const me: any = await account.get();
 
     const email = normalizeEmail(me?.email || "");
     if (!email) {
-      return { ok: false, error: "Session is invalid (no email)." };
+      return { ok: false, error: "Auth is invalid (no email)." };
     }
 
     if (email !== adminEmail) {
@@ -88,9 +106,6 @@ export async function requireAdmin(req: NextRequest): Promise<AdminCheckResult> 
 
     return { ok: true, email };
   } catch (err: any) {
-    return {
-      ok: false,
-      error: err?.message || "Admin session check failed.",
-    };
+    return { ok: false, error: err?.message || "Admin auth check failed." };
   }
 }
