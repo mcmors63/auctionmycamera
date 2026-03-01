@@ -33,9 +33,7 @@ function getSiteUrl() {
   // Local/dev or preview can use explicit if set
   if (explicit) return explicit;
 
-  const vercelUrl = normalizeBaseUrl(
-    process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : ""
-  );
+  const vercelUrl = normalizeBaseUrl(process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "");
   if (onVercel && vercelUrl) return vercelUrl;
 
   return "http://localhost:3000";
@@ -44,29 +42,17 @@ function getSiteUrl() {
 const SITE_URL = getSiteUrl();
 
 function getServerAppwriteConfig() {
-  const endpointRaw =
-    process.env.APPWRITE_ENDPOINT ||
-    process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT ||
-    "";
-
+  const endpointRaw = process.env.APPWRITE_ENDPOINT || process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT || "";
   const endpoint = normalizeBaseUrl(endpointRaw);
 
-  const projectId =
-    process.env.APPWRITE_PROJECT_ID ||
-    process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID ||
-    "";
-
+  const projectId = process.env.APPWRITE_PROJECT_ID || process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID || "";
   const apiKey = process.env.APPWRITE_API_KEY || "";
 
   const databaseId =
-    process.env.APPWRITE_LISTINGS_DATABASE_ID ||
-    process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID ||
-    "";
+    process.env.APPWRITE_LISTINGS_DATABASE_ID || process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID || "";
 
   const collectionId =
-    process.env.APPWRITE_LISTINGS_COLLECTION_ID ||
-    process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_COLLECTION_ID ||
-    "";
+    process.env.APPWRITE_LISTINGS_COLLECTION_ID || process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_COLLECTION_ID || "";
 
   return { endpoint, projectId, apiKey, databaseId, collectionId };
 }
@@ -133,6 +119,40 @@ function getListingName(l: Listing) {
 }
 
 /**
+ * ✅ Prefer gallery array:
+ * - image_ids (string[])
+ * - fallback: image_id (string)
+ */
+function pickImageIds(l: Listing): string[] {
+  const anyL = l as any;
+
+  const arr =
+    Array.isArray(anyL.image_ids) && anyL.image_ids.length
+      ? anyL.image_ids
+      : Array.isArray(anyL.imageIds) && anyL.imageIds.length
+      ? anyL.imageIds
+      : null;
+
+  const cleaned =
+    Array.isArray(arr) && arr.length
+      ? arr
+          .map((x: any) => (typeof x === "string" ? x.trim() : ""))
+          .filter(Boolean)
+          .slice(0, 10)
+      : [];
+
+  if (cleaned.length) return cleaned;
+
+  const single = typeof anyL.image_id === "string" ? anyL.image_id.trim() : "";
+  return single ? [single] : [];
+}
+
+function imageProxyUrl(fileId: string) {
+  // Absolute URL is important for OG/Twitter
+  return `${SITE_URL}/api/camera-image/${encodeURIComponent(fileId)}`;
+}
+
+/**
  * ✅ Public visibility:
  * - Keep the page accessible for legitimate “ended” states (people will have links)
  * - But only INDEX the clean statuses (live/queued/sold)
@@ -143,10 +163,10 @@ function isPublicStatus(status?: string) {
     "live",
     "queued",
     "sold",
-    "completed",         // ended, awaiting payment capture
-    "not_sold",          // ended, reserve not met / no winner
-    "payment_required",  // winner exists but needs a card
-    "payment_failed",    // attempted charge failed
+    "completed", // ended, awaiting payment capture
+    "not_sold", // ended, reserve not met / no winner
+    "payment_required", // winner exists but needs a card
+    "payment_failed", // attempted charge failed
   ].includes(s);
 }
 
@@ -218,19 +238,20 @@ export async function generateMetadata({
     anyL.gear_type ? `Type: ${String(anyL.gear_type).replace(/_/g, " ")}.` : null,
     anyL.condition ? `Condition: ${String(anyL.condition).replace(/_/g, " ")}.` : null,
     anyL.era ? `Era: ${String(anyL.era).replace(/_/g, " ")}.` : null,
-    typeof anyL.starting_price === "number" && anyL.starting_price > 0
-      ? `Starting price ${money(anyL.starting_price)}.`
-      : null,
+    typeof anyL.starting_price === "number" && anyL.starting_price > 0 ? `Starting price ${money(anyL.starting_price)}.` : null,
     buyNow ? `Buy Now available at ${money(buyNow)}.` : null,
     statusDescriptionSuffix(status),
   ].filter(Boolean);
 
   const description = descBits.join(" ");
-
   const canonical = `${SITE_URL}/listing/${anyL.$id}`;
 
   const publicPage = isPublicStatus(status);
   const indexable = publicPage && isIndexableStatus(status);
+
+  // ✅ OG/Twitter image (use first image in gallery if present)
+  const imageIds = pickImageIds(listing);
+  const ogImage = imageIds[0] ? imageProxyUrl(imageIds[0]) : undefined;
 
   return {
     title: titleBase,
@@ -246,11 +267,21 @@ export async function generateMetadata({
       url: canonical,
       siteName: "AuctionMyCamera",
       type: "website",
+      ...(ogImage
+        ? {
+            images: [
+              {
+                url: ogImage,
+              },
+            ],
+          }
+        : {}),
     },
     twitter: {
-      card: "summary_large_image",
+      card: ogImage ? "summary_large_image" : "summary",
       title: titleBase,
       description,
+      ...(ogImage ? { images: [ogImage] } : {}),
     },
   };
 }
@@ -296,7 +327,11 @@ export default async function ListingDetailsPage({
     offer.price = schemaPrice;
   }
 
-  const jsonLd = {
+  // ✅ JSON-LD images (gallery)
+  const imageIds = pickImageIds(listing);
+  const imageUrls = imageIds.map((id) => imageProxyUrl(id));
+
+  const jsonLd: any = {
     "@context": "https://schema.org",
     "@type": "Product",
     name,
@@ -306,6 +341,10 @@ export default async function ListingDetailsPage({
     brand: { "@type": "Brand", name: "AuctionMyCamera" },
     offers: offer,
   };
+
+  if (imageUrls.length) {
+    jsonLd.image = imageUrls;
+  }
 
   return (
     <>

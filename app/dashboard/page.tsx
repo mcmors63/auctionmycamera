@@ -1,7 +1,14 @@
 // app/dashboard/page.tsx
 "use client";
 
-import { useEffect, useMemo, useState, type ChangeEvent, type FormEvent } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type FormEvent,
+} from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Client, Account, Databases, Storage, ID, Query } from "appwrite";
@@ -89,6 +96,10 @@ type Listing = {
   withdraw_after_current?: boolean;
 
   current_bid?: number;
+
+  // Images
+  image_id?: string | null;
+  image_ids?: string[] | null;
 };
 
 type Transaction = {
@@ -136,6 +147,12 @@ type Transaction = {
 
   // Optional payout flag
   payout_status?: string;
+};
+
+type SellPhotoItem = {
+  localId: string;
+  file: File;
+  url: string;
 };
 
 // -----------------------------
@@ -283,9 +300,9 @@ export default function DashboardPage() {
     relist_until_sold: false,
   });
 
-  // Photo (dashboard sell)
-  const [sellPhoto, setSellPhoto] = useState<File | null>(null);
-  const [sellPhotoPreview, setSellPhotoPreview] = useState<string | null>(null);
+  // ✅ Photos (MULTI)
+  const [sellPhotos, setSellPhotos] = useState<SellPhotoItem[]>([]);
+  const sellPhotoInputRef = useRef<HTMLInputElement | null>(null);
 
   // Fee preview
   const [commissionRate, setCommissionRate] = useState(0);
@@ -818,26 +835,69 @@ export default function DashboardPage() {
     }
   };
 
+  function genLocalId() {
+    try {
+      // modern browsers
+      // @ts-ignore
+      if (crypto?.randomUUID) return crypto.randomUUID();
+    } catch {}
+    return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  }
+
+  function clearSellPhotos() {
+    setSellPhotos((prev) => {
+      prev.forEach((p) => {
+        try {
+          URL.revokeObjectURL(p.url);
+        } catch {}
+      });
+      return [];
+    });
+    if (sellPhotoInputRef.current) sellPhotoInputRef.current.value = "";
+  }
+
+  // Clean up previews on unmount (safety)
+  useEffect(() => {
+    return () => {
+      sellPhotos.forEach((p) => {
+        try {
+          URL.revokeObjectURL(p.url);
+        } catch {}
+      });
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // -----------------------------
-  // Upload photo for dashboard sell
+  // Upload photos for dashboard sell (MULTI)
+  // Returns both:
+  // - image_ids (array)
+  // - image_id (first image for legacy single-image pages)
   // -----------------------------
-  async function uploadDashboardPhotoIfProvided(): Promise<string | null> {
-    if (!sellPhoto) return null;
+  async function uploadDashboardPhotosIfProvided(): Promise<{ imageIds: string[]; imageId: string | null }> {
+    if (!sellPhotos.length) return { imageIds: [], imageId: null };
 
     const bucketId = (process.env.NEXT_PUBLIC_APPWRITE_CAMERA_IMAGES_BUCKET_ID || "").trim();
 
     if (!bucketId) {
       alert("Camera image bucket not configured.");
-      return null;
+      return { imageIds: [], imageId: null };
     }
 
     try {
-      const file = await storage.createFile(bucketId, ID.unique(), sellPhoto);
-      return file.$id;
+      const ids: string[] = [];
+
+      // Upload in order selected
+      for (const p of sellPhotos.slice(0, 10)) {
+        const file = await storage.createFile(bucketId, ID.unique(), p.file);
+        ids.push(file.$id);
+      }
+
+      return { imageIds: ids, imageId: ids[0] || null };
     } catch (err) {
       console.error("Photo upload failed:", err);
-      alert("Failed to upload image.");
-      return null;
+      alert("Failed to upload one or more images.");
+      return { imageIds: [], imageId: null };
     }
   }
 
@@ -904,7 +964,7 @@ export default function DashboardPage() {
         return;
       }
 
-      const uploadedImageId = await uploadDashboardPhotoIfProvided();
+      const uploaded = await uploadDashboardPhotosIfProvided();
 
       const res = await fetch("/api/listings", {
         method: "POST",
@@ -925,7 +985,9 @@ export default function DashboardPage() {
           starting_price: !isNaN(starting) ? starting : 0,
           buy_now: !isNaN(buyNow) ? buyNow : 0,
 
-          image_id: uploadedImageId,
+          // ✅ MULTI
+          image_id: uploaded.imageId, // keep legacy single image field
+          image_ids: uploaded.imageIds.length ? uploaded.imageIds : null,
 
           relist_until_sold: !!sellForm.relist_until_sold,
         }),
@@ -945,8 +1007,9 @@ export default function DashboardPage() {
       } catch {}
 
       alert("Listing submitted! Awaiting approval.");
-      setSellPhoto(null);
-      setSellPhotoPreview(null);
+
+      clearSellPhotos();
+
       setSellForm({
         item_title: "",
         gear_type: "",
@@ -1182,8 +1245,7 @@ export default function DashboardPage() {
               <p className="text-neutral-300">
                 No profile found for your account.
                 <br />
-                This usually means your dashboard is pointing at a different Appwrite database/collection than your
-                registration.
+                This usually means your dashboard is pointing at a different Appwrite database/collection than your registration.
                 <br />
                 Check your env vars: <strong>NEXT_PUBLIC_APPWRITE_PROFILES_DATABASE_ID</strong> and{" "}
                 <strong>NEXT_PUBLIC_APPWRITE_PROFILES_COLLECTION_ID</strong>.
@@ -1450,33 +1512,82 @@ export default function DashboardPage() {
                 />
               </div>
 
-              {/* Photo Upload */}
+              {/* ✅ Photo Upload (MULTI) */}
               <div>
-                <label className="block text-sm font-medium text-neutral-200 mb-1">Photo (optional)</label>
+                <label className="block text-sm font-medium text-neutral-200 mb-1">Photos (optional)</label>
                 <input
+                  ref={sellPhotoInputRef}
                   type="file"
                   accept="image/*"
+                  multiple
                   onChange={(e) => {
-                    const file = e.target.files?.[0] || null;
-                    setSellPhoto(file);
+                    const files = Array.from(e.target.files || []);
+                    if (!files.length) return;
 
-                    if (file) {
-                      const url = URL.createObjectURL(file);
-                      setSellPhotoPreview(url);
-                    } else {
-                      setSellPhotoPreview(null);
-                    }
+                    setSellPhotos((prev) => {
+                      const room = Math.max(0, 10 - prev.length); // max 10
+                      const toAdd = files.slice(0, room).map((file) => ({
+                        localId: genLocalId(),
+                        file,
+                        url: URL.createObjectURL(file),
+                      }));
+                      return [...prev, ...toAdd];
+                    });
+
+                    setSellError("");
+
+                    // allow picking same file again later
+                    if (sellPhotoInputRef.current) sellPhotoInputRef.current.value = "";
                   }}
                   className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100"
                 />
 
-                {sellPhotoPreview && (
-                  <div className="mt-3">
-                    <img
-                      src={sellPhotoPreview}
-                      alt="Preview"
-                      className="h-40 rounded-lg border border-neutral-700 object-cover"
-                    />
+                <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-neutral-400">
+                  <span>
+                    {sellPhotos.length}/10 selected
+                  </span>
+                  {sellPhotos.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => clearSellPhotos()}
+                      className="px-2 py-1 rounded-md bg-neutral-950/60 hover:bg-neutral-950 text-neutral-200 border border-neutral-800"
+                    >
+                      Clear all
+                    </button>
+                  )}
+                </div>
+
+                {sellPhotos.length > 0 && (
+                  <div className="mt-3 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3">
+                    {sellPhotos.map((p) => (
+                      <div key={p.localId} className="relative">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={p.url}
+                          alt="Preview"
+                          className="h-28 w-full rounded-lg border border-neutral-700 object-cover"
+                          loading="lazy"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSellPhotos((prev) => {
+                              const target = prev.find((x) => x.localId === p.localId);
+                              if (target) {
+                                try {
+                                  URL.revokeObjectURL(target.url);
+                                } catch {}
+                              }
+                              return prev.filter((x) => x.localId !== p.localId);
+                            });
+                          }}
+                          className="absolute top-2 right-2 px-2 py-1 rounded-md bg-black/70 hover:bg-black text-white text-[10px] font-semibold border border-white/10"
+                          title="Remove photo"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    ))}
                   </div>
                 )}
               </div>
@@ -1768,7 +1879,8 @@ export default function DashboardPage() {
                         <strong>Reserve:</strong> £{toNum(l.reserve_price).toLocaleString("en-GB")}
                       </p>
                       <p>
-                        <strong>Buy Now:</strong> {toNum(l.buy_now, 0) > 0 ? `£${toNum(l.buy_now).toLocaleString("en-GB")}` : "Not set"}
+                        <strong>Buy Now:</strong>{" "}
+                        {toNum(l.buy_now, 0) > 0 ? `£${toNum(l.buy_now).toLocaleString("en-GB")}` : "Not set"}
                       </p>
                     </div>
 
@@ -1912,7 +2024,8 @@ export default function DashboardPage() {
                         <strong>Highest bid:</strong> £{toNum(l.current_bid, 0).toLocaleString("en-GB")}
                       </p>
                       <p>
-                        <strong>Auction ended:</strong> {l.auction_end ? new Date(l.auction_end).toLocaleString("en-GB") : "—"}
+                        <strong>Auction ended:</strong>{" "}
+                        {l.auction_end ? new Date(l.auction_end).toLocaleString("en-GB") : "—"}
                       </p>
                     </div>
 
@@ -1958,7 +2071,9 @@ export default function DashboardPage() {
                     isSeller &&
                     !isComplete &&
                     paymentLower === "paid" &&
-                    ["dispatch_pending", "pending", "pending_documents", "dispatch_sent", "receipt_pending"].includes(txStatusLower);
+                    ["dispatch_pending", "pending", "pending_documents", "dispatch_sent", "receipt_pending"].includes(
+                      txStatusLower
+                    );
 
                   // Buyer can only confirm after dispatch (receipt_pending / dispatch_sent)
                   const canConfirmReceived =
@@ -1974,7 +2089,9 @@ export default function DashboardPage() {
                     <div key={tx.$id} className="border border-neutral-800 rounded-xl p-4 bg-neutral-900/40 shadow-sm">
                       <div className="flex justify-between items-start mb-2">
                         <div>
-                          <p className={`text-sm font-semibold ${accentText}`}>{tx.registration || tx.listing_id || "Transaction"}</p>
+                          <p className={`text-sm font-semibold ${accentText}`}>
+                            {tx.registration || tx.listing_id || "Transaction"}
+                          </p>
                           <p className="text-xs text-neutral-500">Transaction ID: {tx.$id}</p>
                           <p className="text-xs text-neutral-500">Role: {isSeller ? "Seller" : "Buyer"}</p>
                         </div>
@@ -2001,7 +2118,9 @@ export default function DashboardPage() {
                         <div className="flex flex-wrap gap-2 items-center">
                           <span
                             className={`px-2 py-1 rounded-md border ${
-                              paymentLower === "paid" ? "border-emerald-700/40 text-emerald-200" : "border-neutral-700 text-neutral-300"
+                              paymentLower === "paid"
+                                ? "border-emerald-700/40 text-emerald-200"
+                                : "border-neutral-700 text-neutral-300"
                             }`}
                           >
                             1) Paid
@@ -2038,12 +2157,16 @@ export default function DashboardPage() {
                               {deliveryPhone && <div className="mt-1 text-xs text-neutral-400">Phone: {deliveryPhone}</div>}
                             </div>
                           ) : (
-                            <p className="mt-2 text-xs text-neutral-400">No delivery address snapshot found on this transaction yet.</p>
+                            <p className="mt-2 text-xs text-neutral-400">
+                              No delivery address snapshot found on this transaction yet.
+                            </p>
                           )}
 
                           <div className="mt-4">
                             <h5 className="text-sm font-semibold text-neutral-100">Confirm dispatch</h5>
-                            <p className="text-xs text-neutral-400 mt-1">Add the carrier and tracking number so the buyer can track delivery.</p>
+                            <p className="text-xs text-neutral-400 mt-1">
+                              Add the carrier and tracking number so the buyer can track delivery.
+                            </p>
 
                             {form.error && (
                               <p className="mt-2 bg-rose-900/30 text-rose-200 text-xs rounded-md px-3 py-2 border border-rose-700/70">
@@ -2212,7 +2335,8 @@ export default function DashboardPage() {
                         <div className="mt-4 text-xs text-neutral-400 border border-neutral-800 rounded-lg p-3 bg-neutral-950/30">
                           <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
                             <div>
-                              <strong>Dispatched:</strong> {tx.seller_dispatched_at ? formatLondon(tx.seller_dispatched_at) : "—"}
+                              <strong>Dispatched:</strong>{" "}
+                              {tx.seller_dispatched_at ? formatLondon(tx.seller_dispatched_at) : "—"}
                             </div>
                             <div>
                               <strong>Received:</strong> {tx.buyer_received_at ? formatLondon(tx.buyer_received_at) : "—"}
@@ -2365,6 +2489,10 @@ export default function DashboardPage() {
               </div>
             </div>
           </div>
+        )}
+
+        {initialLoading && (
+          <p className="text-xs text-neutral-400 mt-6">Loading…</p>
         )}
       </div>
     </div>
