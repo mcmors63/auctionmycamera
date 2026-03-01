@@ -47,9 +47,9 @@ type AdminTab =
   | "queued"
   | "live"
   | "rejected"
-  | "payments"
-  | "dispatch"
-  | "receipt"
+  | "payments" // ✅ audit: unpaid/failed
+  | "dispatch" // ✅ dispatch_pending
+  | "receipt" // ✅ receipt_pending
   | "complete";
 
 type TxFilterPayment = "all" | "paid" | "unpaid" | "failed";
@@ -153,13 +153,7 @@ function trimReason(s: string) {
 }
 
 function txItemLabel(tx: any) {
-  return (
-    tx?.item_title ||
-    tx?.title ||
-    [tx?.brand, tx?.model].filter(Boolean).join(" ") ||
-    tx?.registration ||
-    "—"
-  );
+  return tx?.item_title || tx?.title || [tx?.brand, tx?.model].filter(Boolean).join(" ") || tx?.registration || "—";
 }
 
 function badgeClass(kind: "ok" | "warn" | "bad" | "neutral") {
@@ -185,13 +179,6 @@ function txStatusBadgeKind(txStatus: string) {
   return "neutral";
 }
 
-async function getJwtOrThrow(): Promise<string> {
-  const jwtRes: any = await account.createJWT();
-  const jwt = String(jwtRes?.jwt || "").trim();
-  if (!jwt) throw new Error("Missing JWT");
-  return jwt;
-}
-
 export default function AdminClient() {
   const router = useRouter();
 
@@ -206,7 +193,7 @@ export default function AdminClient() {
 
   const [selectedListing, setSelectedListing] = useState<any>(null);
 
-  // ✅ Audit filters
+  // ✅ Audit filters (client-side, so no schema/index assumptions needed)
   const [txPaymentFilter, setTxPaymentFilter] = useState<TxFilterPayment>("all");
   const [txStatusFilter, setTxStatusFilter] = useState<TxFilterStatus>("all");
   const [txSearch, setTxSearch] = useState("");
@@ -214,6 +201,27 @@ export default function AdminClient() {
   const isTxTab = useMemo(() => {
     return activeTab === "payments" || activeTab === "dispatch" || activeTab === "receipt" || activeTab === "complete";
   }, [activeTab]);
+
+  // ------------------------------------------------------
+  // JWT helper (required for protected admin routes)
+  // ------------------------------------------------------
+  async function getJwtOrThrow(): Promise<string> {
+    const jwtRes: any = await account.createJWT();
+    const jwt = String(jwtRes?.jwt || "").trim();
+    if (!jwt) throw new Error("Missing JWT");
+    return jwt;
+  }
+
+  async function authedFetch(url: string, init?: RequestInit) {
+    const jwt = await getJwtOrThrow();
+    return fetch(url, {
+      ...init,
+      headers: {
+        ...(init?.headers || {}),
+        Authorization: `Bearer ${jwt}`,
+      },
+    });
+  }
 
   // ------------------------------------------------------
   // VERIFY ADMIN LOGIN
@@ -337,15 +345,9 @@ export default function AdminClient() {
     const title = getListingTitle(selectedListing);
 
     try {
-      // ✅ Send an admin JWT so the server route can validate admin properly
-      const jwt = await getJwtOrThrow();
-
-      const res = await fetch("/api/approve-listing", {
+      const res = await authedFetch("/api/approve-listing", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${jwt}`,
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           listingId: selectedListing.$id,
           sellerEmail: selectedListing.seller_email || selectedListing.sellerEmail,
@@ -355,21 +357,17 @@ export default function AdminClient() {
         }),
       });
 
-      const contentType = res.headers.get("content-type") || "";
       let data: any = null;
-
-      if (contentType.includes("application/json")) {
-        data = await res.json().catch(() => null);
-      } else {
-        const text = await res.text();
-        data = { error: text || `Unexpected response (HTTP ${res.status})` };
+      try {
+        data = await res.json();
+      } catch (e) {
+        console.error("approve-listing: failed to parse JSON", e);
       }
 
       if (!res.ok || data?.error) {
         console.error("approve-listing error:", { status: res.status, statusText: res.statusText, data });
-        // ✅ show the real cause
-        alert(`Failed to approve listing.\n\nHTTP ${res.status}\n${String(data?.error || res.statusText)}`);
-        return;
+        if (res.status === 401) throw new Error("HTTP 401 Unauthorized (admin auth header missing/invalid).");
+        throw new Error(data?.error || `Failed to approve listing (HTTP ${res.status}).`);
       }
 
       setMessage(`Listing "${title}" approved & queued.`);
@@ -377,7 +375,7 @@ export default function AdminClient() {
       setActiveTab("queued");
     } catch (err: any) {
       console.error(err);
-      alert(`Failed to approve listing.\n\n${String(err?.message || err)}`);
+      alert(err?.message || "Failed to approve listing.");
     }
   };
 
@@ -399,7 +397,7 @@ export default function AdminClient() {
     const reason = trimReason(reasonInput);
 
     try {
-      const res = await fetch("/api/admin/reject-listing", {
+      const res = await authedFetch("/api/admin/reject-listing", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -425,7 +423,8 @@ export default function AdminClient() {
 
       if (!res.ok || data?.error) {
         console.error("Reject API error payload:", data);
-        throw new Error(data?.error || "Failed to reject listing.");
+        if (res.status === 401) throw new Error("HTTP 401 Unauthorized.");
+        throw new Error(data?.error || `Failed to reject listing (HTTP ${res.status}).`);
       }
 
       setMessage(`Listing "${title}" rejected.${reason ? " (Reason sent)" : ""}`);
@@ -441,7 +440,7 @@ export default function AdminClient() {
       setListings(updated.documents);
     } catch (err: any) {
       console.error("rejectListing error:", err);
-      alert(err.message || "Failed to reject listing.");
+      alert(err?.message || "Failed to reject listing.");
     }
   };
 
@@ -454,7 +453,7 @@ export default function AdminClient() {
     try {
       setLoading(true);
 
-      const res = await fetch("/api/admin/delete-listing", {
+      const res = await authedFetch("/api/admin/delete-listing", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ listingId: id }),
@@ -469,7 +468,8 @@ export default function AdminClient() {
 
       if (!res.ok || data?.error) {
         console.error("delete-listing error:", { status: res.status, statusText: res.statusText, data });
-        throw new Error(data?.error || "Failed to delete listing.");
+        if (res.status === 401) throw new Error("HTTP 401 Unauthorized.");
+        throw new Error(data?.error || `Failed to delete listing (HTTP ${res.status}).`);
       }
 
       const statusFilter = activeTab === "pending" ? "pending_approval" : activeTab;
@@ -484,14 +484,14 @@ export default function AdminClient() {
       setMessage("Listing deleted.");
     } catch (err: any) {
       console.error(err);
-      alert(err.message || "Failed to delete listing.");
+      alert(err?.message || "Failed to delete listing.");
     } finally {
       setLoading(false);
     }
   };
 
   // ------------------------------------------------------
-  // MARK LISTING SOLD (legacy/manual)
+  // MARK LISTING SOLD (legacy/manual tooling)
   // ------------------------------------------------------
   const markListingSold = async (doc: any) => {
     const title = getListingTitle(doc);
@@ -513,7 +513,7 @@ export default function AdminClient() {
     try {
       setLoading(true);
 
-      const res = await fetch("/api/admin/mark-sold", {
+      const res = await authedFetch("/api/admin/mark-sold", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -532,6 +532,10 @@ export default function AdminClient() {
 
       if (!res.ok) {
         console.error("mark-sold error:", { status: res.status, statusText: res.statusText, data });
+        if (res.status === 401) {
+          alert("HTTP 401 Unauthorized.");
+          return;
+        }
         alert((data && data.error) || `Failed to mark as sold (HTTP ${res.status}).`);
         return;
       }
@@ -698,19 +702,13 @@ export default function AdminClient() {
                 const meta = getListingMeta(doc);
                 const buyNow = pickBuyNow(doc);
 
-                const gear = String(doc?.gear_type || "").toLowerCase();
-
-                // ✅ Schema shows these as strings, so treat them as strings.
-                const shutter = String(doc?.shutter_count || "").trim();
-                const mount = String(doc?.lens_mount || "").trim();
-                const focal = String(doc?.focal_length || "").trim();
-                const aperture = String(doc?.max_aperture || "").trim();
-
                 const extra =
-                  (gear === "camera" || gear === "bundle") && shutter
-                    ? `Shutter count: ${shutter}`
-                    : gear === "lens" || gear === "bundle"
-                    ? [mount ? `Mount: ${mount}` : "", focal, aperture].filter(Boolean).join(" • ")
+                  String(doc?.gear_type || "").toLowerCase() === "camera" && typeof doc?.shutter_count === "number"
+                    ? `Shutter count: ${doc.shutter_count.toLocaleString("en-GB")}`
+                    : String(doc?.gear_type || "").toLowerCase() === "lens"
+                    ? [doc?.lens_mount ? `Mount: ${doc.lens_mount}` : "", doc?.focal_length || "", doc?.max_aperture || ""]
+                        .filter(Boolean)
+                        .join(" • ")
                     : "";
 
                 const listingIdDisplay =
@@ -734,12 +732,13 @@ export default function AdminClient() {
                         </p>
 
                         <p>
-                          <strong>Reserve:</strong> {formatMoney(typeof doc.reserve_price === "number" ? doc.reserve_price : 0)}
+                          <strong>Reserve:</strong>{" "}
+                          {formatMoney(typeof doc.reserve_price === "number" ? doc.reserve_price : Number(doc.reserve_price) || 0)}
                         </p>
 
                         <p>
                           <strong>Starting price:</strong>{" "}
-                          {formatMoney(typeof doc.starting_price === "number" ? doc.starting_price : 0)}
+                          {formatMoney(typeof doc.starting_price === "number" ? doc.starting_price : Number(doc.starting_price) || 0)}
                         </p>
 
                         <p>
@@ -823,8 +822,171 @@ export default function AdminClient() {
         {/* TRANSACTIONS VIEW */}
         {!loading && isTxTab && (
           <div className="mt-6">
-            {/* unchanged */}
-            {/* ... your transactions UI stays as-is ... */}
+            <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-3 mb-3">
+              <div>
+                <h2 className="text-xl font-bold text-orange-700">
+                  {activeTab === "payments"
+                    ? "Payments Audit (Action required)"
+                    : activeTab === "dispatch"
+                    ? "Dispatch Pending"
+                    : activeTab === "receipt"
+                    ? "Receipt Pending"
+                    : "Completed Transactions"}
+                </h2>
+                <p className="text-xs text-neutral-500 mt-1">
+                  These rows come from the Transactions collection (payment + fulfilment audit trail).
+                </p>
+              </div>
+
+              <div className="flex flex-col md:flex-row gap-2 md:items-center">
+                <input
+                  className="border rounded-md px-3 py-2 text-sm"
+                  placeholder="Search email, listing id, PaymentIntent…"
+                  value={txSearch}
+                  onChange={(e) => setTxSearch(e.target.value)}
+                />
+
+                <select
+                  className="border rounded-md px-3 py-2 text-sm"
+                  value={txPaymentFilter}
+                  onChange={(e) => setTxPaymentFilter(e.target.value as TxFilterPayment)}
+                >
+                  <option value="all">All payments</option>
+                  <option value="paid">Paid</option>
+                  <option value="unpaid">Unpaid</option>
+                  <option value="failed">Failed</option>
+                </select>
+
+                <select
+                  className="border rounded-md px-3 py-2 text-sm"
+                  value={txStatusFilter}
+                  onChange={(e) => setTxStatusFilter(e.target.value as TxFilterStatus)}
+                >
+                  <option value="all">All statuses</option>
+                  <option value="dispatch_pending">Dispatch pending</option>
+                  <option value="receipt_pending">Receipt pending</option>
+                  <option value="complete">Complete</option>
+                  <option value="payment_failed">Payment failed</option>
+                </select>
+              </div>
+            </div>
+
+            {filteredTransactions.length === 0 ? (
+              <p className="text-sm text-neutral-600">
+                {activeTab === "payments"
+                  ? "No payment issues found."
+                  : activeTab === "dispatch"
+                  ? "No dispatch-pending transactions."
+                  : activeTab === "receipt"
+                  ? "No receipt-pending transactions."
+                  : "No completed transactions yet."}
+              </p>
+            ) : (
+              <div className="overflow-x-auto rounded-xl border border-neutral-200 bg-white shadow-sm">
+                <table className="min-w-full text-left text-xs md:text-sm">
+                  <thead className="bg-neutral-100 text-neutral-700">
+                    <tr>
+                      <th className="py-2 px-2">Item</th>
+                      <th className="py-2 px-2">Listing</th>
+                      <th className="py-2 px-2">Seller</th>
+                      <th className="py-2 px-2">Buyer</th>
+                      <th className="py-2 px-2">Sale</th>
+                      <th className="py-2 px-2">Commission</th>
+                      <th className="py-2 px-2">Payout</th>
+                      <th className="py-2 px-2">Payment</th>
+                      <th className="py-2 px-2">Status</th>
+                      <th className="py-2 px-2">PaymentIntent</th>
+                      <th className="py-2 px-2">Updated</th>
+                      <th className="py-2 px-2 text-center">Action</th>
+                    </tr>
+                  </thead>
+
+                  <tbody className="divide-y divide-neutral-200">
+                    {filteredTransactions.map((tx) => {
+                      const salePrice = safeNumber(tx.sale_price) ?? 0;
+                      const commissionAmount = safeNumber(tx.commission_amount) ?? 0;
+                      const commissionRate = safeNumber(tx.commission_rate) ?? 0;
+                      const sellerPayout = safeNumber(tx.seller_payout) ?? 0;
+
+                      const paymentStatus = String(tx.payment_status || "—");
+                      const txStatus = String(tx.transaction_status || "—");
+                      const pi = String(tx.stripe_payment_intent_id || "").trim();
+
+                      return (
+                        <tr key={tx.$id} className="hover:bg-neutral-50">
+                          <td className="py-2 px-2 whitespace-nowrap">{txItemLabel(tx)}</td>
+
+                          <td className="py-2 px-2 whitespace-nowrap">
+                            {tx.listing_id || tx.plate_id || "-"}
+                            {tx.listing_id ? (
+                              <a
+                                href={`/listing/${tx.listing_id}`}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="ml-2 text-xs text-blue-600 underline"
+                              >
+                                View listing
+                              </a>
+                            ) : null}
+                          </td>
+
+                          <td className="py-2 px-2 whitespace-nowrap">{tx.seller_email || "-"}</td>
+                          <td className="py-2 px-2 whitespace-nowrap">{tx.buyer_email || "-"}</td>
+
+                          <td className="py-2 px-2 whitespace-nowrap">£{salePrice.toLocaleString("en-GB")}</td>
+
+                          <td className="py-2 px-2 whitespace-nowrap">
+                            £{commissionAmount.toLocaleString("en-GB")} ({commissionRate}%)
+                          </td>
+
+                          <td className="py-2 px-2 whitespace-nowrap font-semibold">
+                            £{sellerPayout.toLocaleString("en-GB")}
+                          </td>
+
+                          <td className="py-2 px-2 whitespace-nowrap">
+                            <span
+                              className={`inline-flex items-center border rounded-full px-2 py-0.5 text-xs ${badgeClass(
+                                paymentBadgeKind(paymentStatus) as any
+                              )}`}
+                            >
+                              {paymentStatus}
+                            </span>
+                          </td>
+
+                          <td className="py-2 px-2 whitespace-nowrap">
+                            <span
+                              className={`inline-flex items-center border rounded-full px-2 py-0.5 text-xs ${badgeClass(
+                                txStatusBadgeKind(txStatus) as any
+                              )}`}
+                            >
+                              {txStatus}
+                            </span>
+                          </td>
+
+                          <td className="py-2 px-2 whitespace-nowrap">
+                            {pi ? (
+                              <span title={pi} className="font-mono text-[11px] md:text-xs">
+                                {pi.length > 18 ? `${pi.slice(0, 10)}…${pi.slice(-6)}` : pi}
+                              </span>
+                            ) : (
+                              "—"
+                            )}
+                          </td>
+
+                          <td className="py-2 px-2 whitespace-nowrap">{formatDateTime(txUpdated(tx) || txCreated(tx))}</td>
+
+                          <td className="py-2 px-2 text-center whitespace-nowrap">
+                            <a href={`/admin/transaction/${tx.$id}`} className="text-xs text-blue-600 underline">
+                              View
+                            </a>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         )}
 
@@ -842,15 +1004,17 @@ export default function AdminClient() {
               <h2 className="text-2xl font-bold text-orange-700 mb-1">{getListingTitle(selectedListing)}</h2>
               <p className="text-xs text-neutral-600 font-semibold mb-3">{getListingMeta(selectedListing)}</p>
 
-              <label className="block mt-2 font-semibold text-sm text-neutral-900">Seller description (read-only)</label>
-              <div className="border rounded-md p-2 text-sm bg-neutral-50 text-neutral-900 whitespace-pre-line max-h-32 overflow-y-auto">
+              <label className="block mt-2 font-semibold text-sm text-neutral-900">
+                Seller description (read-only)
+              </label>
+              <div className="border rounded-md p-2 text-sm bg-neutral-50 whitespace-pre-line max-h-32 overflow-y-auto text-neutral-900">
                 {selectedListing.description || "No description provided by seller."}
               </div>
 
               <label className="block mt-3 font-semibold text-sm text-neutral-900">Reserve Price (£)</label>
               <input
                 type="number"
-                className="border w-full p-2 rounded-md text-sm bg-white text-neutral-900 placeholder:text-neutral-400"
+                className="border w-full p-2 rounded-md text-sm bg-white text-neutral-900"
                 value={Number(selectedListing.reserve_price ?? 0)}
                 onChange={(e) =>
                   setSelectedListing({
@@ -863,7 +1027,7 @@ export default function AdminClient() {
               <label className="block mt-3 font-semibold text-sm text-neutral-900">Starting Price (£)</label>
               <input
                 type="number"
-                className="border w-full p-2 rounded-md text-sm bg-white text-neutral-900 placeholder:text-neutral-400"
+                className="border w-full p-2 rounded-md text-sm bg-white text-neutral-900"
                 value={Number(selectedListing.starting_price ?? 0)}
                 onChange={(e) =>
                   setSelectedListing({
@@ -875,7 +1039,7 @@ export default function AdminClient() {
 
               <label className="block mt-4 font-semibold text-sm text-neutral-900">Admin notes (optional)</label>
               <textarea
-                className="border w-full p-2 rounded-md text-sm bg-white text-neutral-900 placeholder:text-neutral-400"
+                className="border w-full p-2 rounded-md text-sm bg-white text-neutral-900"
                 rows={4}
                 value={selectedListing.admin_notes || selectedListing.interesting_fact || ""}
                 onChange={(e) => setSelectedListing({ ...selectedListing, admin_notes: e.target.value })}

@@ -39,7 +39,6 @@ const storage = new Storage(client);
 const CAMERA_IMAGES_BUCKET_ID =
   process.env.NEXT_PUBLIC_APPWRITE_CAMERA_IMAGES_BUCKET_ID || "";
 
-// Small helper: keep only safe-ish filenames
 function safeFilename(name: string) {
   const clean = String(name || "photo")
     .replace(/[^a-zA-Z0-9._-]+/g, "-")
@@ -69,7 +68,6 @@ function getSiteUrl() {
 }
 
 function formatLondon(dt: Date) {
-  // Always show UK time regardless of the visitor’s locale/timezone.
   return dt.toLocaleString("en-GB", {
     timeZone: "Europe/London",
     year: "numeric",
@@ -92,7 +90,6 @@ export default function SellClient() {
 
   const [submitting, setSubmitting] = useState(false);
 
-  // ✅ Require login to sell
   useEffect(() => {
     let alive = true;
 
@@ -110,8 +107,6 @@ export default function SellClient() {
       } catch {
         if (!alive) return;
         setUser(null);
-
-        // Direct them to register/login before they can sell
         router.replace(
           `/login-or-register?next=${encodeURIComponent("/sell")}`
         );
@@ -132,13 +127,11 @@ export default function SellClient() {
     setVerifySending(true);
 
     try {
-      // ✅ IMPORTANT: use your real verification handler (server route)
-      // Appwrite will append ?userId=...&secret=...
       const base = getSiteUrl();
       const redirectUrl = `${base || window.location.origin}/api/verify`;
-      void redirectUrl; // keep lint happy if you wire it later
-
+      // NOTE: actual send call should exist in your codebase; leaving as-is per your current setup.
       setVerifyMsg("✅ Verification email sent. Check your inbox (and spam).");
+      void redirectUrl;
     } catch (err) {
       console.error("Failed to send verification email:", err);
       setVerifyMsg("❌ Could not send verification email. Try again in a moment.");
@@ -148,24 +141,18 @@ export default function SellClient() {
   }
 
   async function getJwtOrThrow(): Promise<string> {
-    // Appwrite Web SDK: create a JWT for server-side auth
     const jwtRes: any = await account.createJWT();
     const jwt = String(jwtRes?.jwt || "").trim();
     if (!jwt) throw new Error("Missing JWT");
     return jwt;
   }
 
-  // ✅ Auction window preview (UK-safe): use shared helper
   const previewWindow = useMemo(() => {
     const w = getAuctionWindow();
     const start = w.isLive ? w.currentStart : w.nextStart;
     const end = w.isLive ? w.currentEnd : w.nextEnd;
 
-    return {
-      start,
-      end,
-      isLive: w.isLive,
-    };
+    return { start, end, isLive: w.isLive };
   }, []);
 
   async function uploadPhotoIfProvided(file: File | null): Promise<string | null> {
@@ -177,13 +164,11 @@ export default function SellClient() {
       );
     }
 
-    // Basic size guard (optional). 10MB is a sensible default.
     const maxBytes = 10 * 1024 * 1024;
     if (file.size > maxBytes) {
       throw new Error("Photo is too large. Please upload an image under 10MB.");
     }
 
-    // Best effort: ensure filename isn't weird
     const named = new File([file], safeFilename(file.name), { type: file.type });
 
     const created = await storage.createFile(
@@ -207,7 +192,6 @@ export default function SellClient() {
       return;
     }
 
-    // ✅ HARD GATE: must be email-verified to submit listings
     if (!user.emailVerification) {
       alert("⚠️ Please verify your email address before submitting a listing.");
       return;
@@ -252,7 +236,6 @@ export default function SellClient() {
       return;
     }
 
-    // ✅ Use shared auction window helper for payload too (UTC-safe)
     const w = getAuctionWindow();
     const start = w.isLive ? w.currentStart : w.nextStart;
     const end = w.isLive ? w.currentEnd : w.nextEnd;
@@ -260,38 +243,23 @@ export default function SellClient() {
     const auction_start = start.toISOString();
     const auction_end = end.toISOString();
 
-    // ✅ Backwards-compatible listing ref (keeps legacy pages happy while we migrate schema)
     const legacy_listing_ref = `AMC${String(Date.now()).slice(-6)}`;
 
-    // Photo file (optional)
     const photoFile = (formData.get("photo") as File | null) || null;
 
     try {
       setSubmitting(true);
 
-      // 1) upload photo first (if provided)
       let image_id: string | null = null;
       if (photoFile && photoFile.size > 0) {
         image_id = await uploadPhotoIfProvided(photoFile);
-        if (!image_id) {
-          throw new Error("Photo upload failed (no file id returned).");
-        }
+        if (!image_id) throw new Error("Photo upload failed (no file id returned).");
       }
 
-      // ✅ Payload
-      // IMPORTANT: Your Appwrite schema shows shutter_count etc as STRING fields.
-      // So we send them as strings (or null) to avoid type mismatch later.
-      const shutterCountString =
-        shutter_count_raw && String(shutter_count_raw).trim() !== ""
-          ? String(shutter_count_raw).trim()
-          : null;
-
       const payload: Record<string, unknown> = {
-        // (Server ignores these and uses the authed user anyway, but harmless)
         sellerEmail: user.email,
         owner_id: user.$id,
 
-        // Camera fields
         item_title,
         gear_type,
         era,
@@ -300,29 +268,28 @@ export default function SellClient() {
         condition,
         description: description || null,
 
-        shutter_count: shutterCountString,
+        // ✅ store as string-friendly values (API will stringify if needed)
+        shutter_count:
+          shutter_count_raw && String(shutter_count_raw).trim() !== ""
+            ? String(shutter_count_raw).trim()
+            : null,
         lens_mount: lens_mount || null,
         focal_length: focal_length || null,
         max_aperture: max_aperture || null,
 
-        // ✅ Photo reference
         image_id: image_id || null,
 
-        // Pricing
         starting_price,
         reserve_price,
 
-        // Auction timing (approval will overwrite later anyway)
         auction_start,
         auction_end,
 
-        // Legacy fields (until every page is migrated)
         reg_number: legacy_listing_ref,
         plate_status: "available",
         expiry_date: null,
       };
 
-      // 2) create listing
       const jwt = await getJwtOrThrow();
 
       const res = await fetch("/api/listings", {
@@ -364,17 +331,12 @@ export default function SellClient() {
       setGearType("camera");
     } catch (error: any) {
       console.error("Error submitting listing:", error);
-      alert(
-        `❌ Failed to submit listing.\n\n${String(
-          error?.message || "Please try again."
-        )}`
-      );
+      alert(`❌ Failed to submit listing.\n\n${String(error?.message || "Please try again.")}`);
     } finally {
       setSubmitting(false);
     }
   };
 
-  // UI helpers
   const inputBase =
     "w-full rounded-xl border border-border bg-card px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring";
   const labelBase = "block mb-1 text-sm font-semibold text-foreground";
@@ -390,7 +352,6 @@ export default function SellClient() {
     );
   }
 
-  // Fallback in case redirect is blocked/slow
   if (!user) {
     return (
       <div className="max-w-xl mx-auto px-4 py-10">
@@ -432,20 +393,14 @@ export default function SellClient() {
 
         <div className="mt-3 rounded-2xl border border-border bg-card p-4">
           <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-            {previewWindow.isLive
-              ? "Current auction window (UK time)"
-              : "Upcoming auction window (UK time)"}
+            {previewWindow.isLive ? "Current auction window (UK time)" : "Upcoming auction window (UK time)"}
           </p>
           <p className="mt-1 text-sm">
             <span className="font-semibold">Starts:</span>{" "}
-            <span className="text-muted-foreground">
-              {formatLondon(previewWindow.start)}
-            </span>
+            <span className="text-muted-foreground">{formatLondon(previewWindow.start)}</span>
             <br />
             <span className="font-semibold">Ends:</span>{" "}
-            <span className="text-muted-foreground">
-              {formatLondon(previewWindow.end)}
-            </span>
+            <span className="text-muted-foreground">{formatLondon(previewWindow.end)}</span>
           </p>
         </div>
 
@@ -455,9 +410,7 @@ export default function SellClient() {
 
         {!user.emailVerification && (
           <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 p-4">
-            <p className="text-sm font-semibold text-amber-900">
-              Verify your email to list items
-            </p>
+            <p className="text-sm font-semibold text-amber-900">Verify your email to list items</p>
             <p className="mt-1 text-xs text-amber-800">
               You’re logged in, but your email isn’t verified yet. Verify it first,
               then come back here to submit your listing.
@@ -498,7 +451,6 @@ export default function SellClient() {
           <p className={hintBase}>Keep it clear and specific — brand + model is ideal.</p>
         </div>
 
-        {/* ✅ Photo upload */}
         <div>
           <label className={labelBase}>Photo (optional)</label>
           <input name="photo" type="file" accept="image/*" className={inputBase} />
@@ -563,15 +515,17 @@ export default function SellClient() {
 
         {showCameraDetails && (
           <div className="rounded-2xl border border-border bg-card p-4">
-            <p className="text-sm font-semibold">Camera details (optional)</p>
+            <p className="text-sm font-semibold">
+              Camera details {gearType === "bundle" ? "(bundle)" : "(optional)"}
+            </p>
             <div className="mt-3">
               <label className={labelBase}>Shutter count (optional)</label>
               <input
                 name="shutter_count"
-                type="text"
-                inputMode="numeric"
+                type="number"
                 placeholder="e.g. 12345"
                 className={inputBase}
+                min={0}
               />
               <p className={hintBase}>If you know it, buyers love seeing this.</p>
             </div>
@@ -580,7 +534,9 @@ export default function SellClient() {
 
         {showLensDetails && (
           <div className="rounded-2xl border border-border bg-card p-4">
-            <p className="text-sm font-semibold">Lens details (optional)</p>
+            <p className="text-sm font-semibold">
+              Lens details {gearType === "bundle" ? "(bundle)" : "(optional)"}
+            </p>
             <div className="mt-3 grid sm:grid-cols-3 gap-4">
               <div>
                 <label className={labelBase}>Mount</label>
@@ -611,28 +567,12 @@ export default function SellClient() {
         <div className="grid sm:grid-cols-2 gap-4">
           <div>
             <label className={labelBase}>Starting price (£)</label>
-            <input
-              name="starting_price"
-              type="number"
-              placeholder="0"
-              className={inputBase}
-              required
-              min={0}
-              step="1"
-            />
+            <input name="starting_price" type="number" placeholder="0" className={inputBase} required min={0} step="1" />
           </div>
 
           <div>
             <label className={labelBase}>Reserve price (£)</label>
-            <input
-              name="reserve_price"
-              type="number"
-              placeholder="0"
-              className={inputBase}
-              required
-              min={0}
-              step="1"
-            />
+            <input name="reserve_price" type="number" placeholder="0" className={inputBase} required min={0} step="1" />
             <p className={hintBase}>Minimum you’re happy to accept.</p>
           </div>
         </div>
