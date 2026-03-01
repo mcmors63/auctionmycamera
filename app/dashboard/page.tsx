@@ -292,21 +292,28 @@ export default function DashboardPage() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
 
   // Sell form (camera)
-  const [sellForm, setSellForm] = useState({
-    item_title: "",
-    gear_type: "",
-    brand: "",
-    model: "",
-    era: "",
-    condition: "",
-    description: "",
-    reserve_price: "",
-    starting_price: "",
-    buy_now: "",
-    owner_confirmed: false,
-    agreed_terms: false,
-    relist_until_sold: false,
-  });
+const [sellForm, setSellForm] = useState({
+  item_title: "",
+  gear_type: "",
+  brand: "",
+  model: "",
+  era: "",
+  condition: "",
+  description: "",
+
+  // ✅ Extra fields that exist in Appwrite
+  shutter_count: "",
+  lens_mount: "",
+  focal_length: "",
+  max_aperture: "",
+
+  reserve_price: "",
+  starting_price: "",
+  buy_now: "",
+  owner_confirmed: false,
+  agreed_terms: false,
+  relist_until_sold: false,
+});
 
   // ✅ Photos (multi)
   const [sellPhotos, setSellPhotos] = useState<SellPreview[]>([]);
@@ -894,194 +901,205 @@ export default function DashboardPage() {
   };
 
   // -----------------------------
-  // Sell form handlers
-  // -----------------------------
-  const handleSellChange = (e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
-    const target = e.target as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
-    const { name, value, type } = target;
+// Sell form handlers
+// -----------------------------
+const handleSellChange = (e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
+  const target = e.target as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
+  const { name, value, type } = target;
 
-    let val: any;
-    if (type === "checkbox") val = (target as HTMLInputElement).checked;
-    else if (type === "number") val = value === "" ? "" : Number(value);
-    else val = value;
+  let val: any;
+  if (type === "checkbox") val = (target as HTMLInputElement).checked;
+  else if (type === "number") val = value === "" ? "" : Number(value);
+  else val = value;
 
-    setSellForm((prev) => ({ ...prev, [name]: val }));
-    setSellError("");
+  setSellForm((prev) => ({ ...prev, [name]: val }));
+  setSellError("");
 
-    if (name === "reserve_price") {
-      const num = parseFloat(String(value));
-      if (!isNaN(num)) calculateFees(num);
-      else {
-        setCommissionRate(0);
-        setCommissionValue(0);
-        setExpectedReturn(0);
-      }
-    }
-  };
-
-  // -----------------------------
-  // Upload photos for dashboard sell (multi)
-  // -----------------------------
-  async function uploadDashboardPhotosIfProvided(): Promise<string[]> {
-    if (!sellPhotos.length) return [];
-
-    const bucketId = (process.env.NEXT_PUBLIC_APPWRITE_CAMERA_IMAGES_BUCKET_ID || "").trim();
-    if (!bucketId) {
-      alert("Camera image bucket not configured.");
-      return [];
-    }
-
-    const ids: string[] = [];
-
-    try {
-      for (const p of sellPhotos) {
-        const file = await storage.createFile(bucketId, ID.unique(), p.file);
-        ids.push(file.$id);
-      }
-    } catch (err) {
-      console.error("Photo upload failed:", err);
-      alert("Failed to upload one or more images.");
-      return [];
-    }
-
-    return ids;
-  }
-
-  // -----------------------------
-  // Create listing via /api/listings (JWT auth)
-  // -----------------------------
-  const handleSellSubmit = async (e: FormEvent) => {
-    e.preventDefault();
-    setSellError("");
-
-    if (!user) {
-      setSellError("Your session has expired. Please log in again.");
-      router.push("/login");
-      return;
-    }
-
-    const title = safeStr(sellForm.item_title);
-    const reserve = parseFloat(String(sellForm.reserve_price));
-    const starting = sellForm.starting_price === "" ? 0 : parseFloat(String(sellForm.starting_price));
-    const buyNow = sellForm.buy_now === "" ? 0 : parseFloat(String(sellForm.buy_now));
-
-    if (!title) {
-      setSellError("Item title is required.");
-      return;
-    }
-
-    if (isNaN(reserve) || reserve < 10) {
-      setSellError("Minimum reserve price is £10.");
-      return;
-    }
-
-    if (!isNaN(starting) && starting > 0 && starting >= reserve) {
-      setSellError("Starting price must be lower than the reserve price.");
-      return;
-    }
-
-    if (!isNaN(buyNow) && buyNow > 0) {
-      const minBuyNow = Math.max(reserve, !isNaN(starting) && starting > 0 ? starting : 0);
-      if (buyNow < minBuyNow) {
-        setSellError("Buy Now price cannot be lower than your reserve price or starting price.");
-        return;
-      }
-    }
-
-    if (!sellForm.owner_confirmed) {
-      setSellError("You must confirm you own the item or have authority to sell it.");
-      return;
-    }
-
-    if (!sellForm.agreed_terms) {
-      setSellError("You must agree to the Terms & Conditions.");
-      return;
-    }
-
-    setSellSubmitting(true);
-
-    try {
-      const jwt = await account.createJWT();
-      const token = (jwt as any)?.jwt || "";
-
-      if (!token) {
-        setSellError("Could not create auth token. Please log out and log in again.");
-        setSellSubmitting(false);
-        return;
-      }
-
-      const uploadedImageIds = await uploadDashboardPhotosIfProvided();
-
-      const res = await fetch("/api/listings", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          item_title: title,
-          gear_type: safeStr(sellForm.gear_type),
-          brand: safeStr(sellForm.brand),
-          model: safeStr(sellForm.model),
-          era: safeStr(sellForm.era),
-          condition: safeStr(sellForm.condition),
-          description: safeStr(sellForm.description),
-
-          reserve_price: reserve,
-          starting_price: !isNaN(starting) ? starting : 0,
-          buy_now: !isNaN(buyNow) ? buyNow : 0,
-
-          // ✅ Back-compat + multi
-          image_id: uploadedImageIds[0] || null,
-          image_ids: uploadedImageIds.length ? uploadedImageIds : null,
-
-          relist_until_sold: !!sellForm.relist_until_sold,
-        }),
-      });
-
-      const data = await res.json().catch(() => ({} as any));
-
-      if (!res.ok || !data?.ok) {
-        setSellError(data?.error || "Failed to create listing. Please try again.");
-        setSellSubmitting(false);
-        return;
-      }
-
-      // Refresh listings
-      try {
-        await refreshMyListings(user.email);
-      } catch {}
-
-      alert("Listing submitted! Awaiting approval.");
-
-      clearSellPhotos();
-
-      setSellForm({
-        item_title: "",
-        gear_type: "",
-        brand: "",
-        model: "",
-        era: "",
-        condition: "",
-        description: "",
-        reserve_price: "",
-        starting_price: "",
-        buy_now: "",
-        owner_confirmed: false,
-        agreed_terms: false,
-        relist_until_sold: false,
-      });
-
+  if (name === "reserve_price") {
+    const num = parseFloat(String(value));
+    if (!isNaN(num)) calculateFees(num);
+    else {
       setCommissionRate(0);
       setCommissionValue(0);
       setExpectedReturn(0);
-    } catch (err: any) {
-      console.error("Create listing error:", err);
-      setSellError(err?.message || "Failed to create listing. Please try again.");
-    } finally {
-      setSellSubmitting(false);
     }
-  };
+  }
+};
+
+// -----------------------------
+// Upload photos for dashboard sell (multi)
+// -----------------------------
+async function uploadDashboardPhotosIfProvided(): Promise<string[]> {
+  if (!sellPhotos.length) return [];
+
+  const bucketId = (process.env.NEXT_PUBLIC_APPWRITE_CAMERA_IMAGES_BUCKET_ID || "").trim();
+  if (!bucketId) {
+    alert("Camera image bucket not configured.");
+    return [];
+  }
+
+  const ids: string[] = [];
+
+  try {
+    for (const p of sellPhotos) {
+      const file = await storage.createFile(bucketId, ID.unique(), p.file);
+      ids.push(file.$id);
+    }
+  } catch (err) {
+    console.error("Photo upload failed:", err);
+    alert("Failed to upload one or more images.");
+    return [];
+  }
+
+  return ids;
+}
+
+// -----------------------------
+// Create listing via /api/listings (JWT auth)
+// -----------------------------
+const handleSellSubmit = async (e: FormEvent) => {
+  e.preventDefault();
+  setSellError("");
+
+  if (!user) {
+    setSellError("Your session has expired. Please log in again.");
+    router.push("/login");
+    return;
+  }
+
+  const title = safeStr(sellForm.item_title);
+  const reserve = parseFloat(String(sellForm.reserve_price));
+  const starting =
+    sellForm.starting_price === "" ? 0 : parseFloat(String(sellForm.starting_price));
+  const buyNow = sellForm.buy_now === "" ? 0 : parseFloat(String(sellForm.buy_now));
+
+  if (!title) {
+    setSellError("Item title is required.");
+    return;
+  }
+
+  if (isNaN(reserve) || reserve < 10) {
+    setSellError("Minimum reserve price is £10.");
+    return;
+  }
+
+  if (!isNaN(starting) && starting > 0 && starting >= reserve) {
+    setSellError("Starting price must be lower than the reserve price.");
+    return;
+  }
+
+  if (!isNaN(buyNow) && buyNow > 0) {
+    const minBuyNow = Math.max(reserve, !isNaN(starting) && starting > 0 ? starting : 0);
+    if (buyNow < minBuyNow) {
+      setSellError("Buy Now price cannot be lower than your reserve price or starting price.");
+      return;
+    }
+  }
+
+  if (!sellForm.owner_confirmed) {
+    setSellError("You must confirm you own the item or have authority to sell it.");
+    return;
+  }
+
+  if (!sellForm.agreed_terms) {
+    setSellError("You must agree to the Terms & Conditions.");
+    return;
+  }
+
+  setSellSubmitting(true);
+
+  try {
+    const jwt = await account.createJWT();
+    const token = (jwt as any)?.jwt || "";
+
+    if (!token) {
+      setSellError("Could not create auth token. Please log out and log in again.");
+      return;
+    }
+
+    const uploadedImageIds = await uploadDashboardPhotosIfProvided();
+
+    const res = await fetch("/api/listings", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        item_title: title,
+        gear_type: safeStr(sellForm.gear_type),
+        brand: safeStr(sellForm.brand),
+        model: safeStr(sellForm.model),
+        era: safeStr(sellForm.era),
+        condition: safeStr(sellForm.condition),
+        description: safeStr(sellForm.description),
+
+        // ✅ Extra fields that exist in Appwrite
+        shutter_count: safeStr((sellForm as any).shutter_count),
+        lens_mount: safeStr((sellForm as any).lens_mount),
+        focal_length: safeStr((sellForm as any).focal_length),
+        max_aperture: safeStr((sellForm as any).max_aperture),
+
+        reserve_price: reserve,
+        starting_price: !isNaN(starting) ? starting : 0,
+        buy_now: !isNaN(buyNow) ? buyNow : 0,
+
+        image_id: uploadedImageIds[0] || null,
+        image_ids: uploadedImageIds.length ? uploadedImageIds : null,
+
+        relist_until_sold: !!sellForm.relist_until_sold,
+      }),
+    });
+
+    const data = await res.json().catch(() => ({} as any));
+
+    if (!res.ok || !data?.ok) {
+      setSellError(data?.error || "Failed to create listing. Please try again.");
+      return;
+    }
+
+    // Refresh listings
+    try {
+      await refreshMyListings(user.email);
+    } catch {}
+
+    alert("Listing submitted! Awaiting approval.");
+
+    clearSellPhotos();
+
+    // ✅ Reset form (include extra fields)
+    setSellForm({
+      item_title: "",
+      gear_type: "",
+      brand: "",
+      model: "",
+      era: "",
+      condition: "",
+      description: "",
+
+      shutter_count: "",
+      lens_mount: "",
+      focal_length: "",
+      max_aperture: "",
+
+      reserve_price: "",
+      starting_price: "",
+      buy_now: "",
+      owner_confirmed: false,
+      agreed_terms: false,
+      relist_until_sold: false,
+    });
+
+    setCommissionRate(0);
+    setCommissionValue(0);
+    setExpectedReturn(0);
+  } catch (err: any) {
+    console.error("Create listing error:", err);
+    setSellError(err?.message || "Failed to create listing. Please try again.");
+  } finally {
+    setSellSubmitting(false);
+  }
+};
 
   // -----------------------------
   // Edit queued listing (modal helpers)
@@ -1566,6 +1584,59 @@ export default function DashboardPage() {
                 </div>
               </div>
 
+{/* Extra details (optional) */}
+<div>
+  <label className="block text-xs font-semibold text-neutral-400 mb-1">
+    Shutter count (optional)
+  </label>
+  <input
+    name="shutter_count"
+    value={(sellForm as any).shutter_count || ""}
+    onChange={handleSellChange}
+    className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-sky-500"
+    placeholder="e.g. 12450"
+    inputMode="numeric"
+  />
+</div>
+
+<div>
+  <label className="block text-xs font-semibold text-neutral-400 mb-1">
+    Lens mount (optional)
+  </label>
+  <input
+    name="lens_mount"
+    value={(sellForm as any).lens_mount || ""}
+    onChange={handleSellChange}
+    className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-sky-500"
+    placeholder="e.g. Canon RF / Sony E / Nikon F"
+  />
+</div>
+
+<div>
+  <label className="block text-xs font-semibold text-neutral-400 mb-1">
+    Focal length (optional)
+  </label>
+  <input
+    name="focal_length"
+    value={(sellForm as any).focal_length || ""}
+    onChange={handleSellChange}
+    className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-sky-500"
+    placeholder="e.g. 24–70mm"
+  />
+</div>
+
+<div>
+  <label className="block text-xs font-semibold text-neutral-400 mb-1">
+    Max aperture (optional)
+  </label>
+  <input
+    name="max_aperture"
+    value={(sellForm as any).max_aperture || ""}
+    onChange={handleSellChange}
+    className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-sky-500"
+    placeholder="e.g. f/2.8"
+  />
+</div>
               {/* Description */}
               <div>
                 <label className="block text-xs font-semibold text-neutral-400 mb-1">Description (optional)</label>
