@@ -22,7 +22,7 @@ const ADMIN_EMAIL = (process.env.NEXT_PUBLIC_ADMIN_EMAIL || "admin@auctionmycame
   .trim()
   .toLowerCase();
 
-// ✅ Listings live in their own DB/Collection (LISTINGS ONLY — no legacy LISTINGS fallbacks)
+// ✅ Listings live in their own DB/Collection
 const LISTINGS_DB_ID = process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID || "";
 const LISTINGS_COLLECTION_ID = process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_COLLECTION_ID || "";
 
@@ -47,9 +47,9 @@ type AdminTab =
   | "queued"
   | "live"
   | "rejected"
-  | "payments" // ✅ audit: unpaid/failed
-  | "dispatch" // ✅ dispatch_pending
-  | "receipt" // ✅ receipt_pending
+  | "payments" // audit: unpaid/failed
+  | "dispatch" // dispatch_pending
+  | "receipt" // receipt_pending
   | "complete";
 
 type TxFilterPayment = "all" | "paid" | "unpaid" | "failed";
@@ -179,6 +179,86 @@ function txStatusBadgeKind(txStatus: string) {
   return "neutral";
 }
 
+// ✅ Description mapping (schema-tolerant)
+function getSellerDescription(doc: any): string {
+  const candidates = [
+    doc?.description,
+    doc?.user_description,
+    doc?.userDescription,
+    doc?.item_description,
+    doc?.itemDescription,
+    doc?.details,
+    doc?.notes,
+    doc?.seller_notes,
+    doc?.sellerNotes,
+  ];
+
+  for (const c of candidates) {
+    const v = String(c ?? "").trim();
+    if (v) return v;
+  }
+  return "";
+}
+
+// ✅ Image mapping (schema-tolerant)
+// Supports:
+// - image_url (string URL)
+// - image_urls / imageUrls (array of URLs)
+// - image_id / imageId (storage file id)
+// - image_ids / imageIds (array of storage file ids)
+// Storage IDs are converted to your proxy: /api/camera-image/<fileId>
+function getImageSources(doc: any): string[] {
+  const out: string[] = [];
+
+  // Direct URL (single)
+  const url1 = String(doc?.image_url || doc?.imageUrl || "").trim();
+  if (url1) out.push(url1);
+
+  // Direct URL (array)
+  const urlsA = Array.isArray(doc?.image_urls)
+    ? doc.image_urls
+    : Array.isArray(doc?.imageUrls)
+    ? doc.imageUrls
+    : null;
+
+  if (urlsA) {
+    for (const u of urlsA) {
+      const v = String(u || "").trim();
+      if (v) out.push(v);
+    }
+  }
+
+  // Storage ID (single)
+  const id1 = String(doc?.image_id || doc?.imageId || "").trim();
+  if (id1) out.push(`/api/camera-image/${id1}`);
+
+  // Storage IDs (array)
+  const idsA = Array.isArray(doc?.image_ids)
+    ? doc.image_ids
+    : Array.isArray(doc?.imageIds)
+    ? doc.imageIds
+    : null;
+
+  if (idsA) {
+    for (const id of idsA) {
+      const v = String(id || "").trim();
+      if (v) out.push(`/api/camera-image/${v}`);
+    }
+  }
+
+  // De-dupe
+  return Array.from(new Set(out));
+}
+
+function MoneyOrDash(value: any) {
+  const n = safeNumber(value);
+  if (typeof n === "number") return formatMoney(n);
+  return "—";
+}
+
+// ------------------------------------------------------
+// Main component
+// ------------------------------------------------------
 export default function AdminClient() {
   const router = useRouter();
 
@@ -193,7 +273,7 @@ export default function AdminClient() {
 
   const [selectedListing, setSelectedListing] = useState<any>(null);
 
-  // ✅ Audit filters (client-side, so no schema/index assumptions needed)
+  // ✅ Audit filters
   const [txPaymentFilter, setTxPaymentFilter] = useState<TxFilterPayment>("all");
   const [txStatusFilter, setTxStatusFilter] = useState<TxFilterStatus>("all");
   const [txSearch, setTxSearch] = useState("");
@@ -345,29 +425,35 @@ export default function AdminClient() {
     const title = getListingTitle(selectedListing);
 
     try {
-      // IMPORTANT: use the same /api/admin/* namespace as reject/delete
+      const starting =
+        safeNumber(selectedListing.starting_price) ??
+        safeNumber(selectedListing.startingPrice) ??
+        0;
+
+      const reserve =
+        safeNumber(selectedListing.reserve_price) ??
+        safeNumber(selectedListing.reservePrice) ??
+        0;
+
+      // IMPORTANT: use /api/admin/* namespace (now fixed by forwarder route)
       const res = await authedFetch("/api/admin/approve-listing", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          // always include the ID in a couple of common shapes
           listingId: selectedListing.$id,
           id: selectedListing.$id,
 
-          // seller email
           sellerEmail: selectedListing.seller_email || selectedListing.sellerEmail,
           seller_email: selectedListing.seller_email || selectedListing.sellerEmail,
 
-          // admin notes
           adminNotes: selectedListing.admin_notes || selectedListing.interesting_fact || "",
           admin_notes: selectedListing.admin_notes || selectedListing.interesting_fact || "",
           interesting_fact: selectedListing.admin_notes || selectedListing.interesting_fact || "",
 
-          // prices (both naming styles)
-          startingPrice: Number(selectedListing.starting_price) || 0,
-          starting_price: Number(selectedListing.starting_price) || 0,
-          reservePrice: Number(selectedListing.reserve_price) || 0,
-          reserve_price: Number(selectedListing.reserve_price) || 0,
+          startingPrice: starting,
+          starting_price: starting,
+          reservePrice: reserve,
+          reserve_price: reserve,
         }),
       });
 
@@ -388,7 +474,7 @@ export default function AdminClient() {
       setSelectedListing(null);
       setActiveTab("queued");
 
-      // Refresh queued list immediately (so you see it move)
+      // Refresh queued list immediately
       try {
         const updated = await databases.listDocuments(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, [
           Query.equal("status", "queued"),
@@ -406,7 +492,7 @@ export default function AdminClient() {
   };
 
   // ------------------------------------------------------
-  // REJECT LISTING (now with reason)
+  // REJECT LISTING
   // ------------------------------------------------------
   const rejectListing = async (doc: any) => {
     if (!doc) return;
@@ -661,6 +747,9 @@ export default function AdminClient() {
     );
   }
 
+  const modalImages = selectedListing ? getImageSources(selectedListing) : [];
+  const modalDesc = selectedListing ? getSellerDescription(selectedListing) : "";
+
   return (
     <div className="min-h-screen bg-neutral-50 py-10 px-6">
       <div className="max-w-6xl mx-auto bg-white rounded-2xl p-8 shadow-lg border border-neutral-200">
@@ -740,54 +829,86 @@ export default function AdminClient() {
                 const listingIdDisplay =
                   String(doc?.listing_id || "").trim() || `AMC-${String(doc.$id).slice(-6).toUpperCase()}`;
 
+                const desc = getSellerDescription(doc);
+                const images = getImageSources(doc);
+                const thumb = images[0] || "";
+
                 return (
                   <div key={doc.$id} className="border rounded-xl p-5 bg-neutral-50 shadow-sm mt-5">
-                    <div className="flex justify-between items-start gap-4">
-                      <div className="space-y-1 text-sm text-neutral-800">
-                        <h2 className="text-2xl font-bold text-orange-700 mb-1">{title}</h2>
-
-                        {meta ? <p className="text-xs text-neutral-600 font-semibold">{meta}</p> : null}
-                        {extra ? <p className="text-xs text-neutral-600">{extra}</p> : null}
-
-                        <p className="mt-2">
-                          <strong>Listing ID:</strong> {listingIdDisplay}
-                        </p>
-
-                        <p>
-                          <strong>Seller Email:</strong> {doc.seller_email || doc.sellerEmail || "—"}
-                        </p>
-
-                        <p>
-                          <strong>Reserve:</strong>{" "}
-                          {formatMoney(typeof doc.reserve_price === "number" ? doc.reserve_price : Number(doc.reserve_price) || 0)}
-                        </p>
-
-                        <p>
-                          <strong>Starting price:</strong>{" "}
-                          {formatMoney(typeof doc.starting_price === "number" ? doc.starting_price : Number(doc.starting_price) || 0)}
-                        </p>
-
-                        <p>
-                          <strong>Buy Now:</strong> {typeof buyNow === "number" ? formatMoney(buyNow) : "—"}
-                        </p>
-
-                        <p className="mt-2">
-                          <strong>Status:</strong>{" "}
-                          {doc.status === "queued" ? (
-                            <span className="text-blue-700 font-bold">Approved / Queued</span>
+                    <div className="flex flex-col md:flex-row md:justify-between md:items-start gap-4">
+                      <div className="flex gap-4">
+                        {/* Thumbnail */}
+                        <div className="w-24 h-24 rounded-lg overflow-hidden bg-white border border-neutral-200 flex items-center justify-center">
+                          {thumb ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img
+                              src={thumb}
+                              alt=""
+                              className="w-full h-full object-cover"
+                              data-attempt="0"
+                              onError={(e) => {
+                                const img = e.currentTarget;
+                                const attempt = Number(img.dataset.attempt || "0");
+                                const next = images[attempt + 1];
+                                if (next) {
+                                  img.dataset.attempt = String(attempt + 1);
+                                  img.src = next;
+                                  return;
+                                }
+                                img.style.display = "none";
+                              }}
+                            />
                           ) : (
-                            doc.status || "—"
+                            <span className="text-xs text-neutral-400">No image</span>
                           )}
-                        </p>
+                        </div>
 
-                        {doc.description ? (
+                        <div className="space-y-1 text-sm text-neutral-800">
+                          <h2 className="text-2xl font-bold text-orange-700 mb-1">{title}</h2>
+
+                          {meta ? <p className="text-xs text-neutral-600 font-semibold">{meta}</p> : null}
+                          {extra ? <p className="text-xs text-neutral-600">{extra}</p> : null}
+
                           <p className="mt-2">
-                            <strong>Description:</strong> {doc.description}
+                            <strong>Listing ID:</strong> {listingIdDisplay}
                           </p>
-                        ) : null}
 
-                        <div className="mt-2">
-                          <AdminAuctionTimer start={doc.auction_start} end={doc.auction_end} status={doc.status} />
+                          <p>
+                            <strong>Seller Email:</strong> {doc.seller_email || doc.sellerEmail || "—"}
+                          </p>
+
+                          <p>
+                            <strong>Reserve:</strong>{" "}
+                            {MoneyOrDash(doc.reserve_price ?? doc.reservePrice ?? 0)}
+                          </p>
+
+                          <p>
+                            <strong>Starting price:</strong>{" "}
+                            {MoneyOrDash(doc.starting_price ?? doc.startingPrice ?? 0)}
+                          </p>
+
+                          <p>
+                            <strong>Buy Now:</strong> {typeof buyNow === "number" ? formatMoney(buyNow) : "—"}
+                          </p>
+
+                          <p className="mt-2">
+                            <strong>Status:</strong>{" "}
+                            {doc.status === "queued" ? (
+                              <span className="text-blue-700 font-bold">Approved / Queued</span>
+                            ) : (
+                              doc.status || "—"
+                            )}
+                          </p>
+
+                          {desc ? (
+                            <p className="mt-2">
+                              <strong>Description:</strong> {desc}
+                            </p>
+                          ) : null}
+
+                          <div className="mt-2">
+                            <AdminAuctionTimer start={doc.auction_start} end={doc.auction_end} status={doc.status} />
+                          </div>
                         </div>
                       </div>
 
@@ -1019,7 +1140,7 @@ export default function AdminClient() {
         {/* REVIEW MODAL */}
         {selectedListing && (
           <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 px-4">
-            <div className="bg-white p-6 rounded-2xl w-full max-w-lg relative">
+            <div className="bg-white p-6 rounded-2xl w-full max-w-lg relative max-h-[85vh] overflow-y-auto">
               <button
                 onClick={() => setSelectedListing(null)}
                 className="absolute right-3 top-3 text-neutral-500 hover:text-black text-xl"
@@ -1030,18 +1151,54 @@ export default function AdminClient() {
               <h2 className="text-2xl font-bold text-orange-700 mb-1">{getListingTitle(selectedListing)}</h2>
               <p className="text-xs text-neutral-600 font-semibold mb-3">{getListingMeta(selectedListing)}</p>
 
-              <label className="block mt-2 font-semibold text-sm text-neutral-900">
+              {/* Images */}
+              <label className="block mt-2 font-semibold text-sm text-neutral-900">Images</label>
+              {modalImages.length ? (
+                <div className="mt-2 grid grid-cols-3 gap-2">
+                  {modalImages.slice(0, 9).map((src) => (
+                    <div
+                      key={src}
+                      className="w-full aspect-square rounded-lg overflow-hidden border border-neutral-200 bg-white"
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={src}
+                        alt=""
+                        className="w-full h-full object-cover"
+                        data-attempt="0"
+                        onError={(e) => {
+                          const img = e.currentTarget;
+                          const attempt = Number(img.dataset.attempt || "0");
+                          const next = modalImages[attempt + 1];
+                          if (next) {
+                            img.dataset.attempt = String(attempt + 1);
+                            img.src = next;
+                            return;
+                          }
+                          img.style.display = "none";
+                        }}
+                      />
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="border rounded-md p-2 text-sm bg-neutral-50 text-neutral-700">
+                  No images found on this listing.
+                </div>
+              )}
+
+              <label className="block mt-4 font-semibold text-sm text-neutral-900">
                 Seller description (read-only)
               </label>
               <div className="border rounded-md p-2 text-sm bg-neutral-50 whitespace-pre-line max-h-32 overflow-y-auto text-neutral-900">
-                {selectedListing.description || "No description provided by seller."}
+                {modalDesc || "No description provided by seller."}
               </div>
 
               <label className="block mt-3 font-semibold text-sm text-neutral-900">Reserve Price (£)</label>
               <input
                 type="number"
                 className="border w-full p-2 rounded-md text-sm bg-white text-neutral-900"
-                value={Number(selectedListing.reserve_price ?? 0)}
+                value={Number(safeNumber(selectedListing.reserve_price) ?? safeNumber(selectedListing.reservePrice) ?? 0)}
                 onChange={(e) =>
                   setSelectedListing({
                     ...selectedListing,
@@ -1054,7 +1211,9 @@ export default function AdminClient() {
               <input
                 type="number"
                 className="border w-full p-2 rounded-md text-sm bg-white text-neutral-900"
-                value={Number(selectedListing.starting_price ?? 0)}
+                value={Number(
+                  safeNumber(selectedListing.starting_price) ?? safeNumber(selectedListing.startingPrice) ?? 0
+                )}
                 onChange={(e) =>
                   setSelectedListing({
                     ...selectedListing,
