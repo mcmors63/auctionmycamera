@@ -1563,7 +1563,7 @@ const handleSellSubmit = async (e: FormEvent) => {
                     className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-sky-500"
                     placeholder="e.g. Modern / Vintage / 1980s"
                   />
-                </div>
+                               </div>
 
                 <div>
                   <label className="block text-xs font-semibold text-neutral-400 mb-1">Condition (optional)</label>
@@ -1582,61 +1582,61 @@ const handleSellSubmit = async (e: FormEvent) => {
                     <option value="spares_repairs">Spares / repairs</option>
                   </select>
                 </div>
+
+                {/* Extra details (optional) */}
+                <div>
+                  <label className="block text-xs font-semibold text-neutral-400 mb-1">
+                    Shutter count (optional)
+                  </label>
+                  <input
+                    name="shutter_count"
+                    value={(sellForm as any).shutter_count || ""}
+                    onChange={handleSellChange}
+                    className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                    placeholder="e.g. 12450"
+                    inputMode="numeric"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-neutral-400 mb-1">
+                    Lens mount (optional)
+                  </label>
+                  <input
+                    name="lens_mount"
+                    value={(sellForm as any).lens_mount || ""}
+                    onChange={handleSellChange}
+                    className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                    placeholder="e.g. Canon RF / Sony E / Nikon F"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-neutral-400 mb-1">
+                    Focal length (optional)
+                  </label>
+                  <input
+                    name="focal_length"
+                    value={(sellForm as any).focal_length || ""}
+                    onChange={handleSellChange}
+                    className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                    placeholder="e.g. 24–70mm"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-neutral-400 mb-1">
+                    Max aperture (optional)
+                  </label>
+                  <input
+                    name="max_aperture"
+                    value={(sellForm as any).max_aperture || ""}
+                    onChange={handleSellChange}
+                    className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                    placeholder="e.g. f/2.8"
+                  />
+                </div>
               </div>
-
-{/* Extra details (optional) */}
-<div>
-  <label className="block text-xs font-semibold text-neutral-400 mb-1">
-    Shutter count (optional)
-  </label>
-  <input
-    name="shutter_count"
-    value={(sellForm as any).shutter_count || ""}
-    onChange={handleSellChange}
-    className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-sky-500"
-    placeholder="e.g. 12450"
-    inputMode="numeric"
-  />
-</div>
-
-<div>
-  <label className="block text-xs font-semibold text-neutral-400 mb-1">
-    Lens mount (optional)
-  </label>
-  <input
-    name="lens_mount"
-    value={(sellForm as any).lens_mount || ""}
-    onChange={handleSellChange}
-    className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-sky-500"
-    placeholder="e.g. Canon RF / Sony E / Nikon F"
-  />
-</div>
-
-<div>
-  <label className="block text-xs font-semibold text-neutral-400 mb-1">
-    Focal length (optional)
-  </label>
-  <input
-    name="focal_length"
-    value={(sellForm as any).focal_length || ""}
-    onChange={handleSellChange}
-    className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-sky-500"
-    placeholder="e.g. 24–70mm"
-  />
-</div>
-
-<div>
-  <label className="block text-xs font-semibold text-neutral-400 mb-1">
-    Max aperture (optional)
-  </label>
-  <input
-    name="max_aperture"
-    value={(sellForm as any).max_aperture || ""}
-    onChange={handleSellChange}
-    className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-sky-500"
-    placeholder="e.g. f/2.8"
-  />
-</div>
               {/* Description */}
               <div>
                 <label className="block text-xs font-semibold text-neutral-400 mb-1">Description (optional)</label>
