@@ -1,6 +1,7 @@
 // app/api/listings/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { Client, Databases, ID, Account, Permission, Role } from "node-appwrite";
+import nodemailer from "nodemailer";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -33,6 +34,17 @@ const LISTINGS_COLLECTION_ID =
   process.env.APPWRITE_LISTINGS_COLLECTION_ID ||
   process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_COLLECTION_ID ||
   "listings";
+
+// -----------------------------
+// Email ENV (server-side only)
+// -----------------------------
+const SMTP_HOST = (process.env.SMTP_HOST || "").trim();
+const SMTP_PORT = Number(process.env.SMTP_PORT || "465");
+const SMTP_USER = (process.env.SMTP_USER || "").trim();
+const SMTP_PASS = process.env.SMTP_PASS || "";
+const FROM_EMAIL = (process.env.FROM_EMAIL || "").trim();
+const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || "").trim();
+const SITE_URL = (process.env.NEXT_PUBLIC_SITE_URL || "https://auctionmycamera.co.uk").replace(/\/+$/, "");
 
 // -----------------------------
 // Helpers
@@ -111,6 +123,107 @@ function buildCreatePermissions(userId: string) {
   }
 
   return perms;
+}
+
+function emailConfigured() {
+  return !!(SMTP_HOST && SMTP_USER && SMTP_PASS && FROM_EMAIL && ADMIN_EMAIL);
+}
+
+async function sendAdminNewListingEmail(params: {
+  listingId: string;
+  displayName: string;
+  sellerEmail: string;
+  reservePrice: number;
+  startingPrice: number;
+  buyNow: number;
+}) {
+  if (!emailConfigured()) {
+    console.warn("⚠️ Email not configured; skipping admin notification.", {
+      hasHost: !!SMTP_HOST,
+      hasUser: !!SMTP_USER,
+      hasPass: !!SMTP_PASS,
+      hasFrom: !!FROM_EMAIL,
+      hasAdmin: !!ADMIN_EMAIL,
+    });
+    return;
+  }
+
+  const transporter = nodemailer.createTransport({
+    host: SMTP_HOST,
+    port: SMTP_PORT,
+    secure: SMTP_PORT === 465, // true for 465
+    auth: {
+      user: SMTP_USER,
+      pass: SMTP_PASS,
+    },
+  });
+
+  const adminLink = `${SITE_URL}/admin`; // adjust if your admin page is different
+
+  const subject = `New listing submitted: ${params.displayName}`;
+  const text = [
+    `A new listing has been submitted for approval.`,
+    ``,
+    `Listing: ${params.displayName}`,
+    `Listing ID: ${params.listingId}`,
+    `Seller: ${params.sellerEmail}`,
+    ``,
+    `Reserve: £${params.reservePrice.toFixed(2)}`,
+    `Starting: £${params.startingPrice.toFixed(2)}`,
+    `Buy Now: £${params.buyNow.toFixed(2)}`,
+    ``,
+    `Review in admin: ${adminLink}`,
+  ].join("\n");
+
+  const html = `
+    <div style="font-family: Arial, sans-serif; line-height:1.5;">
+      <h2 style="margin:0 0 8px;">New listing submitted</h2>
+      <p style="margin:0 0 14px;">A new listing has been submitted for approval.</p>
+      <table style="border-collapse:collapse; width:100%; max-width:640px;">
+        <tr><td style="padding:6px 0; width:140px;"><strong>Listing</strong></td><td style="padding:6px 0;">${escapeHtml(
+          params.displayName
+        )}</td></tr>
+        <tr><td style="padding:6px 0;"><strong>Listing ID</strong></td><td style="padding:6px 0;">${escapeHtml(
+          params.listingId
+        )}</td></tr>
+        <tr><td style="padding:6px 0;"><strong>Seller</strong></td><td style="padding:6px 0;">${escapeHtml(
+          params.sellerEmail
+        )}</td></tr>
+        <tr><td style="padding:6px 0;"><strong>Reserve</strong></td><td style="padding:6px 0;">£${params.reservePrice.toFixed(
+          2
+        )}</td></tr>
+        <tr><td style="padding:6px 0;"><strong>Starting</strong></td><td style="padding:6px 0;">£${params.startingPrice.toFixed(
+          2
+        )}</td></tr>
+        <tr><td style="padding:6px 0;"><strong>Buy Now</strong></td><td style="padding:6px 0;">£${params.buyNow.toFixed(
+          2
+        )}</td></tr>
+      </table>
+      <p style="margin:16px 0 0;">
+        <a href="${adminLink}" style="display:inline-block; padding:10px 14px; background:#111827; color:#fff; text-decoration:none; border-radius:8px;">
+          Review in Admin
+        </a>
+      </p>
+    </div>
+  `;
+
+  await transporter.sendMail({
+    from: FROM_EMAIL,
+    to: ADMIN_EMAIL,
+    subject,
+    text,
+    html,
+    replyTo: FROM_EMAIL,
+  });
+}
+
+function escapeHtml(input: string) {
+  return input
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
 }
 
 // -----------------------------
@@ -324,6 +437,26 @@ export async function POST(req: NextRequest) {
           permissions
         );
       }
+    }
+
+    // -----------------------------
+    // Notify admin (non-blocking)
+    // -----------------------------
+    try {
+      if (created?.$id) {
+        await sendAdminNewListingEmail({
+          listingId: String(created.$id),
+          displayName,
+          sellerEmail,
+          reservePrice,
+          startingPrice,
+          buyNow,
+        });
+        console.log("✅ Admin notified of new listing:", created.$id);
+      }
+    } catch (emailErr: any) {
+      console.error("⚠️ Admin email notification failed:", emailErr?.message || emailErr);
+      // Do NOT fail the listing creation if email fails.
     }
 
     return NextResponse.json({ ok: true, listingId: created?.$id }, { status: 200 });
