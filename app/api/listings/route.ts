@@ -44,10 +44,7 @@ const SMTP_USER = (process.env.SMTP_USER || "").trim();
 const SMTP_PASS = process.env.SMTP_PASS || "";
 const FROM_EMAIL = (process.env.FROM_EMAIL || "").trim();
 const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || "").trim();
-const SITE_URL = (process.env.NEXT_PUBLIC_SITE_URL || "https://auctionmycamera.co.uk").replace(
-  /\/+$/,
-  ""
-);
+const SITE_URL = (process.env.NEXT_PUBLIC_SITE_URL || "https://auctionmycamera.co.uk").replace(/\/+$/, "");
 
 // -----------------------------
 // Helpers
@@ -244,18 +241,86 @@ async function sendAdminNewListingEmail(params: {
 
 function normalizeGearType(raw: string) {
   const v = String(raw || "").trim().toLowerCase();
+
+  // Keep UI + stored values consistent with the dashboard dropdown
+  if (v === "film") return "film_camera";
+
   const allowed = new Set([
     "camera",
     "lens",
+    "film_camera",
     "bundle",
     "accessory",
-    "film",
+    "other",
+
+    // Keep these in case they exist elsewhere in your UI or older data
     "lighting",
     "tripod",
     "bag",
-    "other",
   ]);
+
   return allowed.has(v) ? v : "";
+}
+
+// -----------------------------
+// ✅ Schema-tolerant create:
+// If Appwrite throws "Unknown attribute: X", remove ONLY X and retry.
+// This prevents the "minimal fallback" that was dropping description/images.
+// -----------------------------
+async function createDocSchemaTolerant(params: {
+  db: Databases;
+  dbId: string;
+  colId: string;
+  data: Record<string, any>;
+  permissions: string[];
+}) {
+  const { db, dbId, colId, permissions } = params;
+  const data: Record<string, any> = { ...params.data };
+
+  // Try a handful of times stripping unknown attributes one-by-one
+  for (let i = 0; i < 16; i++) {
+    try {
+      return await db.createDocument(dbId, colId, ID.unique(), data, permissions);
+    } catch (err: any) {
+      const msg = String(err?.message || err);
+      const m = msg.match(/Unknown attribute:\s*([A-Za-z0-9_]+)/i);
+      if (m?.[1]) {
+        const bad = m[1];
+        // Strip ONLY the unknown field and retry
+        delete data[bad];
+        continue;
+      }
+      // Not a schema error -> bubble up
+      throw err;
+    }
+  }
+
+  // If we still can't create, attempt a safe "core" payload,
+  // but keep description/image_id if they were not the issue.
+  const core: Record<string, any> = {};
+  const allow = new Set([
+    "registration",
+    "item_title",
+    "owner_id",
+    "seller_email",
+    "status",
+    "starting_price",
+    "reserve_price",
+    "buy_now",
+    "gear_type",
+    "brand",
+    "model",
+    "description",
+    "image_id",
+    "image_ids",
+    "relist_until_sold",
+  ]);
+
+  for (const k of Object.keys(data)) {
+    if (allow.has(k)) core[k] = data[k];
+  }
+
+  return await db.createDocument(dbId, colId, ID.unique(), core, permissions);
 }
 
 // -----------------------------
@@ -307,9 +372,7 @@ export async function POST(req: NextRequest) {
     // Fields (camera-first)
     // -----------------------------
     // Accept both "item_title" and legacy "registration"
-    const itemTitle = safeString(
-      body.item_title || body.title || body.itemTitle || body.registration
-    );
+    const itemTitle = safeString(body.item_title || body.title || body.itemTitle || body.registration);
 
     const gearTypeRaw = safeString(body.gear_type || body.gearType);
     const gearType = normalizeGearType(gearTypeRaw);
@@ -349,9 +412,7 @@ export async function POST(req: NextRequest) {
       ? 0
       : toNumber(body.starting_price ?? body.startingPrice, NaN);
 
-    const buyNow = isBlank(body.buy_now ?? body.buyNow)
-      ? 0
-      : toNumber(body.buy_now ?? body.buyNow, NaN);
+    const buyNow = isBlank(body.buy_now ?? body.buyNow) ? 0 : toNumber(body.buy_now ?? body.buyNow, NaN);
 
     if (!Number.isFinite(reservePrice)) {
       return NextResponse.json({ error: "reserve_price must be a valid number." }, { status: 400 });
@@ -391,8 +452,8 @@ export async function POST(req: NextRequest) {
     const permissions = buildCreatePermissions(ownerId);
 
     // IMPORTANT:
-    // Your Appwrite collection contains BOTH snake_case and camelCase columns.
-    // To stop NULL fields immediately, write BOTH consistently.
+    // Some of your docs/clients use snake_case, some camelCase.
+    // We can send both, but schema-tolerant create will strip whichever doesn't exist.
     const data: Record<string, any> = {
       // label / legacy compatibility
       registration: displayName,
@@ -446,69 +507,13 @@ export async function POST(req: NextRequest) {
       relistUntilSold: relistUntilSold,
     };
 
-    let created: any;
-
-    try {
-      created = await databases.createDocument(
-        LISTINGS_DB_ID,
-        LISTINGS_COLLECTION_ID,
-        ID.unique(),
-        data,
-        permissions
-      );
-    } catch (err: any) {
-      const msg = String(err?.message || err);
-      console.error("❌ createDocument failed, attempting minimal fallback:", msg);
-
-      const minimal: Record<string, any> = {
-        registration: displayName,
-        item_title: itemTitle || null,
-
-        owner_id: ownerId,
-
-        seller_email: sellerEmail,
-        sellerEmail: sellerEmail,
-
-        starting_price: startingPrice,
-        reserve_price: reservePrice,
-        buy_now: buyNow,
-
-        status: "pending_approval",
-
-        image_id: imageId || null,
-        relist_until_sold: relistUntilSold,
-        gear_type: gearType || null,
-      };
-
-      try {
-        created = await databases.createDocument(
-          LISTINGS_DB_ID,
-          LISTINGS_COLLECTION_ID,
-          ID.unique(),
-          minimal,
-          permissions
-        );
-      } catch {
-        const ultra: Record<string, any> = {
-          registration: displayName,
-          owner_id: ownerId,
-          seller_email: sellerEmail,
-          sellerEmail: sellerEmail,
-          starting_price: startingPrice,
-          reserve_price: reservePrice,
-          buy_now: buyNow,
-          status: "pending_approval",
-        };
-
-        created = await databases.createDocument(
-          LISTINGS_DB_ID,
-          LISTINGS_COLLECTION_ID,
-          ID.unique(),
-          ultra,
-          permissions
-        );
-      }
-    }
+    const created: any = await createDocSchemaTolerant({
+      db: databases,
+      dbId: LISTINGS_DB_ID,
+      colId: LISTINGS_COLLECTION_ID,
+      data,
+      permissions,
+    });
 
     // -----------------------------
     // Notify admin (non-blocking)
