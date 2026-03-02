@@ -265,8 +265,35 @@ function normalizeGearType(raw: string) {
 // -----------------------------
 // ✅ Schema-tolerant create:
 // If Appwrite throws "Unknown attribute: X", remove ONLY X and retry.
-// This prevents the "minimal fallback" that was dropping description/images.
+// FIXED: handles quotes like Unknown attribute: "startingPrice"
+// and parses Appwrite's JSON response string.
 // -----------------------------
+function extractUnknownAttribute(err: any): string | null {
+  // Prefer AppwriteException.response which is often a JSON string
+  const respRaw = typeof err?.response === "string" ? err.response : "";
+  let msg = "";
+
+  if (respRaw) {
+    try {
+      const parsed = JSON.parse(respRaw);
+      msg = String(parsed?.message || respRaw);
+    } catch {
+      msg = respRaw;
+    }
+  }
+
+  if (!msg) {
+    msg = String(err?.message || "");
+  }
+
+  // Examples we must handle:
+  // Unknown attribute: "startingPrice"
+  // Unknown attribute: startingPrice
+  // Invalid document structure: Unknown attribute: "startingPrice"
+  const m = msg.match(/Unknown attribute:\s*["']?([A-Za-z0-9_]+)["']?/i);
+  return m?.[1] ? m[1] : null;
+}
+
 async function createDocSchemaTolerant(params: {
   db: Databases;
   dbId: string;
@@ -282,13 +309,15 @@ async function createDocSchemaTolerant(params: {
     try {
       return await db.createDocument(dbId, colId, ID.unique(), data, permissions);
     } catch (err: any) {
-      const msg = String(err?.message || err);
-      const m = msg.match(/Unknown attribute:\s*([A-Za-z0-9_]+)/i);
-      if (m?.[1]) {
-        const bad = m[1];
-        // Strip ONLY the unknown field and retry
-        delete data[bad];
-        continue;
+      const bad = extractUnknownAttribute(err);
+      if (bad) {
+        if (bad in data) {
+          console.warn(`⚠️ Appwrite schema missing "${bad}". Stripping and retrying createDocument...`);
+          delete data[bad];
+          continue;
+        }
+        // If Appwrite complains about a field we didn't send, don't loop forever
+        console.warn(`⚠️ Appwrite reported unknown attribute "${bad}" but it wasn't in payload. Aborting retry.`);
       }
       // Not a schema error -> bubble up
       throw err;
@@ -536,6 +565,20 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ ok: true, listingId: created?.$id }, { status: 200 });
   } catch (err: any) {
+    // If Appwrite gives a schema error, return it as 400 so the UI can show the real cause.
+    const respRaw = typeof err?.response === "string" ? err.response : "";
+    if (respRaw) {
+      try {
+        const parsed = JSON.parse(respRaw);
+        if (parsed?.type === "document_invalid_structure" && parsed?.code === 400) {
+          console.error("❌ /api/listings schema error:", parsed?.message || parsed);
+          return NextResponse.json({ error: parsed?.message || "Invalid listing schema." }, { status: 400 });
+        }
+      } catch {
+        // ignore
+      }
+    }
+
     console.error("❌ /api/listings error:", err);
     return NextResponse.json({ error: err?.message || "Failed to create listing." }, { status: 500 });
   }
