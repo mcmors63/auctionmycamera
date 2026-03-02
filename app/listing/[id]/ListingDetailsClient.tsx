@@ -164,20 +164,29 @@ function buildLocalImageProxyUrl(fileId: string) {
   return `/api/camera-image/${encodeURIComponent(id)}`;
 }
 
-function firstImageId(l: Listing): string | null {
+function allImageIds(l: Listing): string[] {
   const anyL = l as any;
 
-  // Prefer multi-images if present
   const ids = anyL.image_ids ?? anyL.imageIds;
-  if (Array.isArray(ids) && ids.length) {
-    const first = String(ids[0] || "").trim();
-    if (first) return first;
+  const out: string[] = [];
+
+  if (Array.isArray(ids)) {
+    for (const x of ids) {
+      const s = String(x || "").trim();
+      if (s) out.push(s);
+    }
   }
 
   const single = String(anyL.image_id || anyL.imageId || "").trim();
-  if (single) return single;
+  if (single && !out.includes(single)) out.push(single);
 
-  return null;
+  // De-dupe
+  return Array.from(new Set(out));
+}
+
+function firstImageId(l: Listing): string | null {
+  const ids = allImageIds(l);
+  return ids.length ? ids[0] : null;
 }
 
 // ✅ Prefer: image_ids[0] (proxy) -> image_id (proxy) -> image_url -> fallback
@@ -218,11 +227,37 @@ export default function ListingDetailsClient({ initial }: { initial: Listing }) 
     listingRef.current = listing;
   }, [listing]);
 
-  // ✅ FIX: hooks must run before any early return
-  const imgSrc = useMemo(() => {
-    if (listing) return pickImageSrc(listing);
-    return pickFallbackImage(initial);
+  // ---- Gallery state
+  const ids = useMemo(() => {
+    const src = listing ?? initial;
+    return allImageIds(src);
   }, [listing, initial]);
+
+  const [selectedImageId, setSelectedImageId] = useState<string | null>(() => {
+    const first = firstImageId(initial);
+    return first || null;
+  });
+
+  // Keep selection valid when listing refreshes
+  useEffect(() => {
+    const nextIds = allImageIds(listing ?? initial);
+    const first = nextIds[0] || null;
+
+    setSelectedImageId((prev) => {
+      if (prev && nextIds.includes(prev)) return prev;
+      return first;
+    });
+  }, [listing, initial]);
+
+  const mainImgSrc = useMemo(() => {
+    const srcListing = listing ?? initial;
+
+    if (selectedImageId) {
+      return buildLocalImageProxyUrl(selectedImageId) || pickFallbackImage(srcListing);
+    }
+
+    return pickImageSrc(srcListing);
+  }, [selectedImageId, listing, initial]);
 
   // Best-effort client refresh
   useEffect(() => {
@@ -445,6 +480,8 @@ export default function ListingDetailsClient({ initial }: { initial: Listing }) 
       ? "bg-red-600 text-white"
       : "bg-gray-200 text-gray-800";
 
+  const selectedIndex = selectedImageId ? Math.max(0, ids.indexOf(selectedImageId)) : 0;
+
   return (
     <main className="min-h-screen bg-black text-gray-100 py-10 px-4">
       <div className="max-w-5xl mx-auto bg-white rounded-2xl shadow-lg border border-yellow-100 overflow-hidden text-sm md:text-base">
@@ -486,11 +523,11 @@ export default function ListingDetailsClient({ initial }: { initial: Listing }) 
           {refreshNote ? <p className="mt-2 text-xs text-gray-600">{refreshNote}</p> : null}
         </div>
 
-        {/* Image */}
+        {/* Image + gallery */}
         <div className="px-6 pb-6 pt-4">
           <div className="relative w-full max-w-4xl mx-auto rounded-xl overflow-hidden shadow-lg bg-black">
             <img
-              src={imgSrc}
+              src={mainImgSrc}
               alt={name}
               className="w-full h-[320px] md:h-[420px] object-cover block"
               loading="lazy"
@@ -501,6 +538,55 @@ export default function ListingDetailsClient({ initial }: { initial: Listing }) 
               }}
             />
           </div>
+
+          {ids.length > 1 && (
+            <div className="max-w-4xl mx-auto mt-3">
+              <div className="flex items-center justify-between text-xs text-gray-600">
+                <span>{ids.length} photos</span>
+                <span>
+                  {selectedIndex + 1} / {ids.length}
+                </span>
+              </div>
+
+              <div className="mt-2 grid grid-cols-4 sm:grid-cols-6 md:grid-cols-8 gap-2">
+                {ids.slice(0, 16).map((id) => {
+                  const src = buildLocalImageProxyUrl(id) || pickFallbackImage(listing);
+                  const isSel = id === selectedImageId;
+
+                  return (
+                    <button
+                      key={id}
+                      type="button"
+                      onClick={() => setSelectedImageId(id)}
+                      className={`rounded-lg overflow-hidden border ${
+                        isSel ? "border-yellow-500" : "border-gray-200"
+                      } bg-black`}
+                      aria-label="View photo"
+                      title="View photo"
+                    >
+                      <img
+                        src={src}
+                        alt=""
+                        className="h-16 w-full object-cover block"
+                        loading="lazy"
+                        onError={(e) => {
+                          const el = e.currentTarget as HTMLImageElement;
+                          const fallback = pickFallbackImage(listing);
+                          if (el.src !== fallback) el.src = fallback;
+                        }}
+                      />
+                    </button>
+                  );
+                })}
+              </div>
+
+              {ids.length > 16 && (
+                <p className="mt-2 text-[11px] text-gray-500">
+                  Showing 16 of {ids.length} photos.
+                </p>
+              )}
+            </div>
+          )}
         </div>
 
         {/* SOLD Banner */}
