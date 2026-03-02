@@ -11,7 +11,7 @@ import {
 } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { Client, Account, Databases, Storage, ID, Query } from "appwrite";
+import { Client, Account, Databases, Storage, ID, Query, Permission, Role } from "appwrite";
 import { CheckCircleIcon, XCircleIcon } from "@heroicons/react/24/solid";
 
 // -----------------------------
@@ -929,26 +929,48 @@ const handleSellChange = (e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement 
 // -----------------------------
 // Upload photos for dashboard sell (multi)
 // -----------------------------
-async function uploadDashboardPhotosIfProvided(): Promise<string[]> {
+async function uploadDashboardPhotosIfProvided(ownerId: string): Promise<string[]> {
   if (!sellPhotos.length) return [];
 
   const bucketId = (process.env.NEXT_PUBLIC_APPWRITE_CAMERA_IMAGES_BUCKET_ID || "").trim();
   if (!bucketId) {
-    alert("Camera image bucket not configured.");
-    return [];
+    throw new Error("Camera image bucket not configured (NEXT_PUBLIC_APPWRITE_CAMERA_IMAGES_BUCKET_ID).");
   }
+
+  // ✅ Works whether Bucket File Security is ON or OFF
+  const perms = [
+    Permission.read(Role.user(ownerId)),
+    Permission.update(Role.user(ownerId)),
+    Permission.delete(Role.user(ownerId)),
+  ];
 
   const ids: string[] = [];
 
-  try {
-    for (const p of sellPhotos) {
-      const file = await storage.createFile(bucketId, ID.unique(), p.file);
-      ids.push(file.$id);
+  for (const p of sellPhotos) {
+    try {
+      const created = await storage.createFile(bucketId, ID.unique(), p.file, perms);
+      ids.push(created.$id);
+    } catch (err: any) {
+      // Best-effort cleanup so you don’t leave orphan files
+      try {
+        for (const id of ids) {
+          try {
+            await storage.deleteFile(bucketId, id);
+          } catch {}
+        }
+      } catch {}
+
+      let msg = String(err?.message || "Upload failed.");
+      const respRaw = typeof err?.response === "string" ? err.response : "";
+      if (respRaw) {
+        try {
+          const parsed = JSON.parse(respRaw);
+          msg = String(parsed?.message || msg);
+        } catch {}
+      }
+
+      throw new Error(`Image upload failed for "${p.file?.name || "file"}": ${msg}`);
     }
-  } catch (err) {
-    console.error("Photo upload failed:", err);
-    alert("Failed to upload one or more images.");
-    return [];
   }
 
   return ids;
@@ -1017,7 +1039,7 @@ const handleSellSubmit = async (e: FormEvent) => {
       return;
     }
 
-    const uploadedImageIds = await uploadDashboardPhotosIfProvided();
+   const uploadedImageIds = await uploadDashboardPhotosIfProvided(user.$id);
 
     const res = await fetch("/api/listings", {
       method: "POST",
@@ -1479,6 +1501,23 @@ const handleSellSubmit = async (e: FormEvent) => {
                   >
                     Log out
                   </button>
+                  <button
+  type="button"
+  onClick={async () => {
+    try {
+      const jwt = await account.createJWT();
+      const token = (jwt as any)?.jwt || "";
+      console.log("JWT:", token);
+      alert("JWT printed to console (F12 > Console). Copy it now.");
+    } catch (e) {
+      console.error(e);
+      alert("Failed to create JWT. Are you logged in?");
+    }
+  }}
+  className="px-4 py-2 rounded-md bg-neutral-950/60 hover:bg-neutral-950 text-neutral-100 text-xs font-semibold border border-neutral-800"
+>
+  Print JWT (temp)
+</button>
                 </div>
               </>
             )}
@@ -1637,6 +1676,7 @@ const handleSellSubmit = async (e: FormEvent) => {
                   />
                 </div>
               </div>
+
               {/* Description */}
               <div>
                 <label className="block text-xs font-semibold text-neutral-400 mb-1">Description (optional)</label>
