@@ -18,7 +18,16 @@ type Listing = {
   condition?: string | null;
   description?: string | null;
 
+  // Legacy
   image_url?: string | null;
+
+  // ✅ New storage-based images
+  image_id?: string | null;
+  image_ids?: string[] | null;
+
+  // tolerate older/camel variants if any docs still have them
+  imageId?: string | null;
+  imageIds?: string[] | null;
 
   shutter_count?: number | null;
   lens_mount?: string | null;
@@ -47,6 +56,8 @@ type Listing = {
 
   registration?: string | null;
   reg_number?: string | null;
+
+  [key: string]: any;
 };
 
 type Props = {
@@ -105,6 +116,44 @@ function pickFallbackImage(l: Listing) {
   return "/hero/modern-lens.jpg";
 }
 
+// ✅ Serve images via OUR domain so it works even if bucket is private
+function buildLocalImageProxyUrl(fileId: string) {
+  const id = String(fileId || "").trim();
+  if (!id) return null;
+  return `/api/camera-image/${encodeURIComponent(id)}`;
+}
+
+function firstImageId(l: Listing): string | null {
+  const anyL = l as any;
+
+  const ids = anyL.image_ids ?? anyL.imageIds;
+  if (Array.isArray(ids) && ids.length) {
+    const first = String(ids[0] || "").trim();
+    if (first) return first;
+  }
+
+  const single = String(anyL.image_id || anyL.imageId || "").trim();
+  if (single) return single;
+
+  return null;
+}
+
+function pickCardImageSrc(l: Listing) {
+  // ✅ Prefer storage images first
+  const id = firstImageId(l);
+  if (id) {
+    const url = buildLocalImageProxyUrl(id);
+    if (url) return url;
+  }
+
+  // ✅ Then legacy image_url
+  const explicit = String(l.image_url || "").trim();
+  if (explicit) return explicit;
+
+  // ✅ Finally fallback
+  return pickFallbackImage(l);
+}
+
 export default function ListingCard({ listing }: Props) {
   const {
     $id,
@@ -128,13 +177,11 @@ export default function ListingCard({ listing }: Props) {
     max_aperture,
   } = listing;
 
-  // ⚠️ Keep these paths as-is for now (we’ll verify with searches)
   const listingUrl = `/listing/${$id}`;
 
   const lowerStatus = String(status || "").toLowerCase();
   const saleStatusLower = String(sale_status || "").toLowerCase();
 
-  // Be tolerant to common status naming across cloned projects
   const LIVE_STATUSES = new Set(["live", "active"]);
   const QUEUED_STATUSES = new Set(["queued", "upcoming", "pending"]);
 
@@ -166,7 +213,6 @@ export default function ListingCard({ listing }: Props) {
     ? "AUCTION ENDS IN"
     : "AUCTION STARTS IN";
 
-  // NEW badge (24h)
   const createdMs = $createdAt ? Date.parse($createdAt) : NaN;
   const isNew = Number.isFinite(createdMs) && Date.now() - createdMs < 24 * 60 * 60 * 1000;
   const showNewBadge = isNew && !isSold && !auctionEnded;
@@ -203,7 +249,9 @@ export default function ListingCard({ listing }: Props) {
 
   const displayId = listing_id || `AMC-${$id.slice(-6).toUpperCase()}`;
 
-  const imageSrc = String(listing.image_url || "").trim() || pickFallbackImage(listing);
+  // ✅ FIX: use stored image ids first
+  const imageSrc = pickCardImageSrc(listing);
+  const fallbackSrc = pickFallbackImage(listing);
 
   const gear = String(listing.gear_type || "").toLowerCase();
   const extraLine =
@@ -248,13 +296,16 @@ export default function ListingCard({ listing }: Props) {
 
       {/* Image */}
       <div className="mt-4 rounded-2xl border border-border overflow-hidden bg-background">
-        {/* Use <img> so remote image_url never needs next/image config */}
         <img
           src={imageSrc}
           alt={title}
           className="w-full h-[180px] object-cover block"
           loading="lazy"
           decoding="async"
+          onError={(e) => {
+            const el = e.currentTarget as HTMLImageElement;
+            if (el.src !== fallbackSrc) el.src = fallbackSrc;
+          }}
         />
       </div>
 
