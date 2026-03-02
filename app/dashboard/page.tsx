@@ -418,6 +418,16 @@ const [sellForm, setSellForm] = useState({
     });
   }
 
+  function makeSellPhotoMain(id: string) {
+  setSellPhotos((prev) => {
+    const idx = prev.findIndex((p) => p.id === id);
+    if (idx <= 0) return prev;
+    const chosen = prev[idx];
+    const rest = prev.filter((p) => p.id !== id);
+    return [chosen, ...rest];
+  });
+}
+
   function clearSellPhotos() {
     setSellPhotos((prev) => {
       prev.forEach((p) => {
@@ -1623,183 +1633,213 @@ const handleSellSubmit = async (e: FormEvent) => {
                 </div>
 
                 {/* Extra details (optional) */}
-                <div>
-                  <label className="block text-xs font-semibold text-neutral-400 mb-1">
-                    Shutter count (optional)
-                  </label>
-                  <input
-                    name="shutter_count"
-                    value={(sellForm as any).shutter_count || ""}
-                    onChange={handleSellChange}
-                    className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-sky-500"
-                    placeholder="e.g. 12450"
-                    inputMode="numeric"
-                  />
-                </div>
+<div>
+  <label className="block text-xs font-semibold text-neutral-400 mb-1">
+    Shutter count (optional)
+  </label>
+  <input
+    name="shutter_count"
+    value={(sellForm as any).shutter_count || ""}
+    onChange={handleSellChange}
+    className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-sky-500"
+    placeholder="e.g. 12450"
+    inputMode="numeric"
+  />
+</div>
 
-                <div>
-                  <label className="block text-xs font-semibold text-neutral-400 mb-1">
-                    Lens mount (optional)
-                  </label>
-                  <input
-                    name="lens_mount"
-                    value={(sellForm as any).lens_mount || ""}
-                    onChange={handleSellChange}
-                    className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-sky-500"
-                    placeholder="e.g. Canon RF / Sony E / Nikon F"
-                  />
-                </div>
+<div>
+  <label className="block text-xs font-semibold text-neutral-400 mb-1">
+    Lens mount (optional)
+  </label>
+  <input
+    name="lens_mount"
+    value={(sellForm as any).lens_mount || ""}
+    onChange={handleSellChange}
+    className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-sky-500"
+    placeholder="e.g. Canon RF / Sony E / Nikon F"
+  />
+</div>
 
-                <div>
-                  <label className="block text-xs font-semibold text-neutral-400 mb-1">
-                    Focal length (optional)
-                  </label>
-                  <input
-                    name="focal_length"
-                    value={(sellForm as any).focal_length || ""}
-                    onChange={handleSellChange}
-                    className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-sky-500"
-                    placeholder="e.g. 24–70mm"
-                  />
-                </div>
+<div>
+  <label className="block text-xs font-semibold text-neutral-400 mb-1">
+    Focal length (optional)
+  </label>
+  <input
+    name="focal_length"
+    value={(sellForm as any).focal_length || ""}
+    onChange={handleSellChange}
+    className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-sky-500"
+    placeholder="e.g. 24–70mm"
+  />
+</div>
 
-                <div>
-                  <label className="block text-xs font-semibold text-neutral-400 mb-1">
-                    Max aperture (optional)
-                  </label>
-                  <input
-                    name="max_aperture"
-                    value={(sellForm as any).max_aperture || ""}
-                    onChange={handleSellChange}
-                    className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-sky-500"
-                    placeholder="e.g. f/2.8"
-                  />
-                </div>
-              </div>
+<div>
+  <label className="block text-xs font-semibold text-neutral-400 mb-1">
+    Max aperture (optional)
+  </label>
+  <input
+    name="max_aperture"
+    value={(sellForm as any).max_aperture || ""}
+    onChange={handleSellChange}
+    className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-sky-500"
+    placeholder="e.g. f/2.8"
+  />
+</div>
+</div>
 
-              {/* Description */}
-              <div>
-                <label className="block text-xs font-semibold text-neutral-400 mb-1">Description (optional)</label>
-                <textarea
-                  name="description"
-                  value={sellForm.description}
-                  onChange={handleSellChange}
-                  className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm min-h-[90px] bg-neutral-950/40 text-neutral-100 placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-sky-500"
-                  placeholder="What’s included, condition details, any marks, shutter count, lens fungus, etc."
-                />
-              </div>
+{/* Description */}
+<div>
+  <label className="block text-xs font-semibold text-neutral-400 mb-1">
+    Description (optional)
+  </label>
+  <textarea
+    name="description"
+    value={sellForm.description}
+    onChange={handleSellChange}
+    className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm min-h-[90px] bg-neutral-950/40 text-neutral-100 placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-sky-500"
+    placeholder="What’s included, condition details, any marks, shutter count, lens fungus, etc."
+  />
+</div>
 
-              {/* Photos Upload (multi) */}
-              <div>
-                <div className="flex items-center justify-between gap-3">
-                  <label className="block text-sm font-medium text-neutral-200 mb-1">Photos (optional)</label>
-                  <span className="text-[11px] text-neutral-400">
-                    {sellPhotos.length ? `${sellPhotos.length} selected` : "Up to 8 images"}
-                  </span>
-                </div>
+{/* Photos Upload (multi) */}
+<div>
+  <div className="flex items-center justify-between gap-3">
+    <label className="block text-sm font-medium text-neutral-200 mb-1">
+      Photos (optional)
+    </label>
+    <span className="text-[11px] text-neutral-400">
+      {sellPhotos.length ? `${sellPhotos.length} selected` : "Up to 8 images"}
+    </span>
+  </div>
 
-                <input
-                  ref={sellPhotoInputRef}
-                  type="file"
-                  accept="image/*"
-                  multiple
-                  onChange={(e) => addSellPhotosFromFileList(e.target.files)}
-                  className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100"
-                />
+  <p className="text-[11px] text-neutral-400 mb-2">
+    Cover photo = the <strong>first</strong> image. Use <strong>“Make main”</strong> on a thumbnail to change it.
+  </p>
 
-                {sellPhotos.length > 0 && (
-                  <>
-                    <div className="mt-3 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
-                      {sellPhotos.map((p) => (
-                        <div
-                          key={p.id}
-                          className="relative rounded-lg border border-neutral-800 bg-neutral-950/30 overflow-hidden"
-                        >
-                          {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img src={p.url} alt="Preview" className="h-28 w-full object-cover" />
-                          <button
-                            type="button"
-                            onClick={() => removeSellPhoto(p.id)}
-                            className="absolute top-2 right-2 px-2 py-1 rounded-md bg-black/70 text-white text-[11px] font-semibold border border-white/10 hover:bg-black/80"
-                          >
-                            Remove
-                          </button>
-                        </div>
-                      ))}
-                    </div>
+  <input
+    ref={sellPhotoInputRef}
+    type="file"
+    accept="image/*"
+    multiple
+    onChange={(e) => addSellPhotosFromFileList(e.target.files)}
+    className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100"
+  />
 
-                    <div className="mt-3">
-                      <button
-                        type="button"
-                        onClick={clearSellPhotos}
-                        className="px-3 py-2 rounded-md bg-neutral-950/60 hover:bg-neutral-950 text-neutral-100 text-xs font-semibold border border-neutral-800"
-                      >
-                        Clear all photos
-                      </button>
-                    </div>
-                  </>
-                )}
-              </div>
+  {sellPhotos.length > 0 && (
+    <>
+      <div className="mt-3 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+        {sellPhotos.map((p, idx) => (
+          <div
+            key={p.id}
+            className="relative rounded-lg border border-neutral-800 bg-neutral-950/30 overflow-hidden"
+          >
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={p.url} alt="Preview" className="h-28 w-full object-cover" />
 
-              {/* Prices */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                <div>
-                  <label className="block text-xs font-semibold text-neutral-400 mb-1">Reserve Price (£)</label>
-                  <input
-                    type="number"
-                    name="reserve_price"
-                    value={sellForm.reserve_price}
-                    onChange={handleSellChange}
-                    className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
-                    min={0}
-                  />
-                </div>
+            {idx === 0 ? (
+              <span className="absolute top-2 left-2 px-2 py-1 rounded-md bg-yellow-500 text-black text-[10px] font-extrabold">
+                MAIN
+              </span>
+            ) : (
+              <button
+                type="button"
+                onClick={() => makeSellPhotoMain(p.id)}
+                className="absolute top-2 left-2 px-2 py-1 rounded-md bg-black/70 text-white text-[11px] font-semibold border border-white/10 hover:bg-black/80"
+                title="Make this the cover photo"
+              >
+                Make main
+              </button>
+            )}
 
-                <div>
-                  <label className="block text-xs font-semibold text-neutral-400 mb-1">
-                    Starting Price (£) (optional)
-                  </label>
-                  <input
-                    type="number"
-                    name="starting_price"
-                    value={sellForm.starting_price}
-                    onChange={handleSellChange}
-                    className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
-                    min={0}
-                  />
-                </div>
+            <button
+              type="button"
+              onClick={() => removeSellPhoto(p.id)}
+              className="absolute top-2 right-2 px-2 py-1 rounded-md bg-black/70 text-white text-[11px] font-semibold border border-white/10 hover:bg-black/80"
+            >
+              Remove
+            </button>
+          </div>
+        ))}
+      </div>
 
-                <div>
-                  <label className="block text-xs font-semibold text-neutral-400 mb-1">Buy Now Price (£) (optional)</label>
-                  <input
-                    type="number"
-                    name="buy_now"
-                    value={sellForm.buy_now}
-                    onChange={handleSellChange}
-                    className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
-                    min={0}
-                  />
-                </div>
-              </div>
+      <div className="mt-3">
+        <button
+          type="button"
+          onClick={clearSellPhotos}
+          className="px-3 py-2 rounded-md bg-neutral-950/60 hover:bg-neutral-950 text-neutral-100 text-xs font-semibold border border-neutral-800"
+        >
+          Clear all photos
+        </button>
+      </div>
+    </>
+  )}
+</div>
 
-              {/* Fee preview */}
-              <div className={`mt-4 p-4 ${accentBgSoft} border ${accentBorder} rounded-md space-y-2`}>
-                <h3 className="text-sm font-semibold text-sky-200">Fees &amp; Expected Return (based on your reserve)</h3>
+{/* Prices */}
+<div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+  <div>
+    <label className="block text-xs font-semibold text-neutral-400 mb-1">
+      Reserve Price (£)
+    </label>
+    <input
+      type="number"
+      name="reserve_price"
+      value={sellForm.reserve_price}
+      onChange={handleSellChange}
+      className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
+      min={0}
+    />
+  </div>
 
-                <p className="text-xs text-neutral-200">
-                  <strong>Commission rate:</strong> {commissionRate}% (estimate)
-                </p>
-                <p className="text-xs text-neutral-200">
-                  <strong>Estimated commission:</strong> £{formatMoney(commissionValue)}
-                </p>
-                <p className="text-xs text-neutral-200">
-                  <strong>Estimated you receive:</strong> £{formatMoney(expectedReturn)} (based on reserve)
-                </p>
+  <div>
+    <label className="block text-xs font-semibold text-neutral-400 mb-1">
+      Starting Price (£) (optional)
+    </label>
+    <input
+      type="number"
+      name="starting_price"
+      value={sellForm.starting_price}
+      onChange={handleSellChange}
+      className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
+      min={0}
+    />
+  </div>
 
-                <p className="text-[11px] text-neutral-400">
-                  This is a simple preview. Final commission is based on the final sale price.
-                </p>
-              </div>
+  <div>
+    <label className="block text-xs font-semibold text-neutral-400 mb-1">
+      Buy Now Price (£) (optional)
+    </label>
+    <input
+      type="number"
+      name="buy_now"
+      value={sellForm.buy_now}
+      onChange={handleSellChange}
+      className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
+      min={0}
+    />
+  </div>
+</div>
+
+{/* Fee preview */}
+<div className={`mt-4 p-4 ${accentBgSoft} border ${accentBorder} rounded-md space-y-2`}>
+  <h3 className="text-sm font-semibold text-sky-200">
+    Fees &amp; Expected Return (based on your reserve)
+  </h3>
+
+  <p className="text-xs text-neutral-200">
+    <strong>Commission rate:</strong> {commissionRate}% (estimate)
+  </p>
+  <p className="text-xs text-neutral-200">
+    <strong>Estimated commission:</strong> £{formatMoney(commissionValue)}
+  </p>
+  <p className="text-xs text-neutral-200">
+    <strong>Estimated you receive:</strong> £{formatMoney(expectedReturn)} (based on reserve)
+  </p>
+
+  <p className="text-[11px] text-neutral-400">
+    This is a simple preview. Final commission is based on the final sale price.
+  </p>
+</div>
 
               {/* Checkboxes */}
               <div className="space-y-2 text-xs text-neutral-300">
