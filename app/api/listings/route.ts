@@ -24,7 +24,7 @@ const projectId =
 
 const apiKey = process.env.APPWRITE_API_KEY || "";
 
-// Optional admin access helpers (ONLY used for document permissions if you enable Row Security)
+// Optional admin access helpers
 const ADMINS_TEAM_ID = (process.env.APPWRITE_ADMINS_TEAM_ID || "").trim(); // optional
 const ADMIN_USER_ID = (process.env.APPWRITE_ADMIN_USER_ID || "").trim(); // optional
 
@@ -67,9 +67,7 @@ function toNullableString(v: any) {
     const t = v.trim();
     return t ? t : null;
   }
-  if (typeof v === "number" && Number.isFinite(v)) {
-    return String(v);
-  }
+  if (typeof v === "number" && Number.isFinite(v)) return String(v);
   return null;
 }
 
@@ -160,19 +158,13 @@ async function sendAdminNewListingEmail(params: {
   startingPrice: number;
   buyNow: number;
 }) {
-  if (!emailConfigured()) {
-    console.warn("⚠️ Email not configured; skipping admin notification.");
-    return;
-  }
+  if (!emailConfigured()) return;
 
   const transporter = nodemailer.createTransport({
     host: SMTP_HOST,
     port: SMTP_PORT,
     secure: SMTP_PORT === 465,
-    auth: {
-      user: SMTP_USER,
-      pass: SMTP_PASS,
-    },
+    auth: { user: SMTP_USER, pass: SMTP_PASS },
   });
 
   const adminLink = `${SITE_URL}/admin`;
@@ -287,7 +279,6 @@ async function createDocSchemaTolerant(params: {
     } catch (err: any) {
       const bad = extractUnknownAttribute(err);
       if (bad && bad in data) {
-        console.warn(`⚠️ Appwrite schema missing "${bad}". Stripping and retrying createDocument...`);
         delete data[bad];
         continue;
       }
@@ -300,14 +291,18 @@ async function createDocSchemaTolerant(params: {
 
 export async function POST(req: NextRequest) {
   try {
-    console.log("✅ /api/listings route version:", ROUTE_VERSION);
-
     if (!endpoint || !projectId || !apiKey) {
-      return NextResponse.json({ error: "Server Appwrite config missing.", routeVersion: ROUTE_VERSION }, { status: 500 });
+      return NextResponse.json(
+        { error: "Server Appwrite config missing.", routeVersion: ROUTE_VERSION },
+        { status: 500 }
+      );
     }
     if (!LISTINGS_DB_ID || !LISTINGS_COLLECTION_ID) {
       return NextResponse.json(
-        { error: "Missing listings env (APPWRITE_LISTINGS_DATABASE_ID / APPWRITE_LISTINGS_COLLECTION_ID).", routeVersion: ROUTE_VERSION },
+        {
+          error: "Missing listings env (APPWRITE_LISTINGS_DATABASE_ID / APPWRITE_LISTINGS_COLLECTION_ID).",
+          routeVersion: ROUTE_VERSION,
+        },
         { status: 500 }
       );
     }
@@ -315,14 +310,22 @@ export async function POST(req: NextRequest) {
     const me = await getAuthedUser(req);
     if (!me) {
       return NextResponse.json(
-        { error: "Not authenticated. Please log in or register before selling.", code: "NOT_AUTHENTICATED", routeVersion: ROUTE_VERSION },
+        {
+          error: "Not authenticated. Please log in or register before selling.",
+          code: "NOT_AUTHENTICATED",
+          routeVersion: ROUTE_VERSION,
+        },
         { status: 401 }
       );
     }
 
     if (!me.emailVerified) {
       return NextResponse.json(
-        { error: "Email not verified. Please verify your email before submitting a listing.", code: "EMAIL_NOT_VERIFIED", routeVersion: ROUTE_VERSION },
+        {
+          error: "Email not verified. Please verify your email before submitting a listing.",
+          code: "EMAIL_NOT_VERIFIED",
+          routeVersion: ROUTE_VERSION,
+        },
         { status: 403 }
       );
     }
@@ -377,6 +380,7 @@ export async function POST(req: NextRequest) {
     if (!Number.isFinite(buyNow) || buyNow < 0) {
       return NextResponse.json({ error: "Buy Now must be a valid number (0+).", routeVersion: ROUTE_VERSION }, { status: 400 });
     }
+
     if (reservePrice < 10) {
       return NextResponse.json({ error: "Minimum reserve price is £10.", routeVersion: ROUTE_VERSION }, { status: 400 });
     }
@@ -455,8 +459,8 @@ export async function POST(req: NextRequest) {
           buyNow,
         });
       }
-    } catch (emailErr: any) {
-      console.error("⚠️ Admin email notification failed:", emailErr?.message || emailErr);
+    } catch {
+      // non-blocking
     }
 
     return NextResponse.json(
@@ -476,7 +480,6 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    console.error("❌ /api/listings error:", err);
     return NextResponse.json({ error: err?.message || "Failed to create listing.", routeVersion: ROUTE_VERSION }, { status: 500 });
   }
 }
