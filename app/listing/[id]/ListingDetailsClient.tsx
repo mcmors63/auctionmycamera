@@ -533,7 +533,7 @@ export default function ListingDetailsClient({ initial }: { initial: Listing }) 
 
   return (
     <main className="min-h-screen bg-black text-gray-100 py-10 px-4">
-      <div className="max-w-5xl mx-auto bg-white rounded-2xl shadow-lg border border-yellow-100 overflow-hidden text-sm md:text-base">
+     <div className="mt-2 mx-6 mb-6 bg-gray-50 text-gray-900 rounded-xl border border-gray-200 shadow-sm p-6">
         {/* NAV */}
         <div className="flex justify-between items-center px-6 pt-4 pb-3 border-b border-gray-100">
           <Link href="/current-listings" className="text-blue-700 underline text-sm">
