@@ -21,9 +21,7 @@ function normalizeBaseUrl(raw: string) {
 }
 
 // Prefer public site url, fallback to prod domain
-const SITE_URL = normalizeBaseUrl(
-  process.env.NEXT_PUBLIC_SITE_URL || "https://auctionmycamera.co.uk"
-);
+const SITE_URL = normalizeBaseUrl(process.env.NEXT_PUBLIC_SITE_URL || "https://auctionmycamera.co.uk");
 
 // -----------------------------
 // Stripe (singleton)
@@ -49,8 +47,9 @@ const APPWRITE_ENDPOINT = normalizeEndpoint(
   process.env.APPWRITE_ENDPOINT || process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT || ""
 );
 
-const APPWRITE_PROJECT = (process.env.APPWRITE_PROJECT_ID || process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID || "")
-  .trim();
+const APPWRITE_PROJECT = (
+  process.env.APPWRITE_PROJECT_ID || process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID || ""
+).trim();
 
 function getBearerJwt(req: Request) {
   const auth = req.headers.get("authorization") || "";
@@ -75,6 +74,25 @@ async function getAuthedUser(jwt: string): Promise<{ email: string; userId: stri
   return { email, userId, name };
 }
 
+function formatStripeError(err: any) {
+  const type = err?.type || err?.raw?.type;
+  const code = err?.code || err?.raw?.code;
+  const param = err?.param || err?.raw?.param;
+  const requestId = err?.requestId || err?.raw?.requestId;
+  const statusCode = err?.statusCode || err?.raw?.statusCode;
+
+  const bits = [
+    type ? `type=${type}` : "",
+    code ? `code=${code}` : "",
+    param ? `param=${param}` : "",
+    requestId ? `requestId=${requestId}` : "",
+    statusCode ? `status=${statusCode}` : "",
+  ].filter(Boolean);
+
+  const suffix = bits.length ? ` (${bits.join(", ")})` : "";
+  return `${String(err?.message || "Stripe error")}${suffix}`;
+}
+
 // -----------------------------
 // POST /api/stripe/setup-card
 // Returns: { url: string }
@@ -91,8 +109,7 @@ export async function POST(req: Request) {
     // Optional: allow the UI to pass ?next=/place_bid?id=... but don't trust posted URLs blindly.
     const body = await req.json().catch(() => ({} as any));
     const next = typeof body?.next === "string" ? body.next.trim() : "";
-    const safeNext =
-      next.startsWith("/") && !next.startsWith("//") ? next : "/payment-method?updated=1";
+    const safeNext = next.startsWith("/") && !next.startsWith("//") ? next : "/payment-method?updated=1";
 
     const returnUrl = `${SITE_URL}${safeNext}`;
 
@@ -109,9 +126,9 @@ export async function POST(req: Request) {
     const session = await stripe.checkout.sessions.create({
       mode: "setup",
       customer: customer.id,
+      payment_method_types: ["card"], // explicit, avoids Stripe defaults changing
       success_url: returnUrl,
       cancel_url: returnUrl,
-      // helps us identify later if needed
       metadata: {
         purpose: "setup_card",
         email,
@@ -125,14 +142,27 @@ export async function POST(req: Request) {
 
     return NextResponse.json({ url: session.url }, { status: 200 });
   } catch (err: any) {
-    console.error("[setup-card] error:", err);
+    // If it's Stripe, make it obvious
+    const msg =
+      err && (err.type || err.raw)
+        ? formatStripeError(err)
+        : String(err?.message || "Failed to open setup flow.");
+
+    console.error("[setup-card] error:", {
+      message: err?.message,
+      type: err?.type || err?.raw?.type,
+      code: err?.code || err?.raw?.code,
+      param: err?.param || err?.raw?.param,
+      requestId: err?.requestId || err?.raw?.requestId,
+      statusCode: err?.statusCode || err?.raw?.statusCode,
+    });
 
     if (String(err?.message || "").includes("STRIPE_SECRET_KEY is not set")) {
       return NextResponse.json({ error: "Stripe is not configured on the server." }, { status: 500 });
     }
 
     const status = /Not authenticated|Invalid session/i.test(err?.message || "") ? 401 : 500;
-    return NextResponse.json({ error: err?.message || "Failed to open setup flow." }, { status });
+    return NextResponse.json({ error: msg }, { status });
   }
 }
 
