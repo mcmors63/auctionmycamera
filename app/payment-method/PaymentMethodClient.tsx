@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useEffect, useMemo, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Client, Account } from "appwrite";
 
 // -----------------------------
@@ -13,12 +13,27 @@ const client = new Client()
 
 const account = new Account(client);
 
+function safeNextPath(input: string | null): string {
+  const raw = String(input || "").trim();
+  // Only allow relative paths to avoid open redirects
+  if (!raw) return "/dashboard";
+  if (!raw.startsWith("/")) return "/dashboard";
+  if (raw.startsWith("//")) return "/dashboard";
+  return raw;
+}
+
 export default function PaymentMethodClient() {
   const router = useRouter();
+  const searchParams = useSearchParams();
 
   const [loading, setLoading] = useState(true);
   const [opening, setOpening] = useState(false);
   const [error, setError] = useState("");
+
+  // Where to send the user after Stripe (e.g. back to place_bid)
+  const nextAfter = useMemo(() => {
+    return safeNextPath(searchParams.get("next"));
+  }, [searchParams]);
 
   // -----------------------------
   // Require login (NO admin redirect)
@@ -52,54 +67,33 @@ export default function PaymentMethodClient() {
 
       if (!token) {
         setError("Could not create auth token. Please log out and log in again.");
-        setOpening(false);
         return;
       }
 
-      // Try a few common endpoints (depends how your repo is wired)
-      const candidates = [
-        "/api/stripe/billing-portal",
-        "/api/stripe/portal",
-        "/api/stripe/setup-card",
-      ];
+      // ✅ Call the correct route only (hosted Stripe setup page)
+      const res = await fetch("/api/stripe/setup-card", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ next: nextAfter }),
+      });
 
-      let lastErr = "";
+      const data = await res.json().catch(() => ({} as any));
 
-      for (const path of candidates) {
-        const res = await fetch(path, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`,
-          },
-         body: JSON.stringify({ next: "/payment-method?updated=1" }),
-        });
-
-        // If route doesn't exist, try next
-        if (res.status === 404) continue;
-
-        const data = await res.json().catch(() => ({} as any));
-
-        if (!res.ok) {
-          lastErr = data?.error || `Request failed (${res.status})`;
-          continue;
-        }
-
-        const url = String(data?.url || "").trim();
-        if (!url) {
-          lastErr = "Stripe route did not return a URL.";
-          continue;
-        }
-
-        // Redirect user to Stripe-hosted management page
-        window.location.href = url;
+      if (!res.ok) {
+        setError(String(data?.error || `Request failed (${res.status})`));
         return;
       }
 
-      setError(
-        lastErr ||
-          "No card-management route was found. Expected one of: /api/stripe/billing-portal, /api/stripe/portal, /api/stripe/setup-card."
-      );
+      const url = String(data?.url || "").trim();
+      if (!url) {
+        setError("Stripe route did not return a URL.");
+        return;
+      }
+
+      window.location.href = url;
     } catch (e: any) {
       setError(e?.message || "Failed to open card management.");
     } finally {
