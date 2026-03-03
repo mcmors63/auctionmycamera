@@ -20,7 +20,7 @@ const endpoint = process.env.APPWRITE_ENDPOINT || process.env.NEXT_PUBLIC_APPWRI
 const projectId = process.env.APPWRITE_PROJECT_ID || process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID || "";
 const apiKey = (process.env.APPWRITE_API_KEY || "").trim();
 
-// Listings DB (source of truth for cameras)
+// Listings DB (cameras)
 const LISTINGS_DB_ID =
   process.env.APPWRITE_LISTINGS_DATABASE_ID ||
   process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID ||
@@ -28,11 +28,11 @@ const LISTINGS_DB_ID =
   process.env.NEXT_PUBLIC_APPWRITE_DATABASE_ID ||
   "";
 
-// Transactions DB (where transactions collection actually lives)
+// Transactions DB (separate DB in your Appwrite)
 const TX_DB_ID =
   process.env.APPWRITE_TRANSACTIONS_DATABASE_ID ||
   process.env.NEXT_PUBLIC_APPWRITE_TRANSACTIONS_DATABASE_ID ||
-  ""; // no fallback here — better to fail loudly than write to wrong DB
+  "";
 
 const LISTINGS_COLLECTION_ID =
   process.env.APPWRITE_LISTINGS_COLLECTION_ID ||
@@ -47,7 +47,7 @@ const TX_COLLECTION_ID =
 // -----------------------------
 // CAMERA POLICY
 // -----------------------------
-const EXTRA_FEE_GBP = 0; // ✅ cameras: no DVLA fee
+const EXTRA_FEE_GBP = 0;
 
 // -----------------------------
 // SMTP / EMAIL
@@ -132,9 +132,28 @@ function getServerDatabases() {
 
 // -----------------------------
 // SCHEMA TOLERANCE HELPERS
-// (Your transactions collection currently has very few attributes,
-// so we must be able to strip *many* unknown keys.)
+// - Strips BOTH unknown attributes AND invalid-type attributes.
 // -----------------------------
+function stripBadFieldFromError(data: Record<string, any>, err: any) {
+  const msg = String(err?.message || "");
+
+  // Unknown attribute: foo
+  const u = msg.match(/Unknown attribute:\s*([A-Za-z0-9_]+)/i);
+  if (u?.[1] && u[1] in data) {
+    delete data[u[1]];
+    return true;
+  }
+
+  // Attribute "foo" has invalid type
+  const t = msg.match(/Attribute\s+"([^"]+)"\s+has\s+invalid\s+type/i);
+  if (t?.[1] && t[1] in data) {
+    delete data[t[1]];
+    return true;
+  }
+
+  return false;
+}
+
 async function createDocSchemaTolerant(
   databases: Databases,
   dbId: string,
@@ -147,17 +166,13 @@ async function createDocSchemaTolerant(
     try {
       return await databases.createDocument(dbId, colId, ID.unique(), data);
     } catch (err: any) {
-      const msg = String(err?.message || "");
-      const m = msg.match(/Unknown attribute:\s*([A-Za-z0-9_]+)/i);
-      if (m?.[1]) {
-        delete data[m[1]];
-        continue;
-      }
+      const removed = stripBadFieldFromError(data, err);
+      if (removed) continue;
       throw err;
     }
   }
 
-  // final fallback (allows flow to complete even if schema is minimal)
+  // last resort: create an empty doc so we don't brick the flow
   return await databases.createDocument(dbId, colId, ID.unique(), {});
 }
 
@@ -174,20 +189,14 @@ async function updateDocSchemaTolerant(
     try {
       return await databases.updateDocument(dbId, colId, docId, data);
     } catch (err: any) {
-      const msg = String(err?.message || "");
-      const m = msg.match(/Unknown attribute:\s*([A-Za-z0-9_]+)/i);
-      if (m?.[1]) {
-        delete data[m[1]];
-        continue;
-      }
+      const removed = stripBadFieldFromError(data, err);
+      if (removed) continue;
       throw err;
     }
   }
 
   // minimal fallback
-  const minimal: Record<string, any> = {};
-  if ("status" in payload) minimal.status = payload.status;
-  return await databases.updateDocument(dbId, colId, docId, minimal);
+  return await databases.updateDocument(dbId, colId, docId, {});
 }
 
 // -----------------------------
@@ -226,7 +235,6 @@ function getItemTitle(listing: any): string {
 // -----------------------------
 // POST /api/buy-now
 // Body: { listingId, paymentIntentId }
-// NOTE: We do NOT trust client totals.
 // -----------------------------
 export async function POST(req: NextRequest) {
   try {
@@ -248,10 +256,7 @@ export async function POST(req: NextRequest) {
     }
 
     if (!TX_DB_ID || !TX_COLLECTION_ID) {
-      return NextResponse.json(
-        { error: "Server transactions DB/collection configuration missing." },
-        { status: 500 }
-      );
+      return NextResponse.json({ error: "Server transactions DB/collection configuration missing." }, { status: 500 });
     }
 
     const body = await req.json().catch(() => ({} as any));
@@ -264,7 +269,7 @@ export async function POST(req: NextRequest) {
 
     const databases = getServerDatabases();
 
-    // ✅ Idempotency guard (transactions DB!)
+    // Idempotency guard (transactions DB)
     try {
       const existingTx = await databases.listDocuments(TX_DB_ID, TX_COLLECTION_ID, [
         Query.equal("stripe_payment_intent_id", paymentIntentId),
@@ -273,11 +278,7 @@ export async function POST(req: NextRequest) {
 
       if (existingTx.documents?.length) {
         return NextResponse.json(
-          {
-            ok: true,
-            alreadyProcessed: true,
-            transactionId: (existingTx.documents[0] as any).$id,
-          },
+          { ok: true, alreadyProcessed: true, transactionId: (existingTx.documents[0] as any).$id },
           { status: 200 }
         );
       }
@@ -289,81 +290,53 @@ export async function POST(req: NextRequest) {
     const listing: any = await databases.getDocument(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, listingId);
 
     const currentStatus = String(listing?.status || "").trim().toLowerCase();
-    if (currentStatus === "sold") {
-      return NextResponse.json({ error: "This listing is already sold." }, { status: 409 });
-    }
-    if (currentStatus === "completed") {
+    if (currentStatus === "sold") return NextResponse.json({ error: "This listing is already sold." }, { status: 409 });
+    if (currentStatus === "completed")
       return NextResponse.json({ error: "This listing has completed via auction." }, { status: 409 });
-    }
 
     const sellerEmail = String(listing?.seller_email || listing?.sellerEmail || "").trim();
-    if (!sellerEmail) {
-      return NextResponse.json({ error: "Listing has no seller email set." }, { status: 400 });
-    }
+    if (!sellerEmail) return NextResponse.json({ error: "Listing has no seller email set." }, { status: 400 });
 
-    // 2) Get Buy Now price from listing
+    // 2) Buy Now price from listing
     const buyNowPrice = getBuyNowPriceGBP(listing);
-    if (!buyNowPrice || buyNowPrice <= 0) {
-      return NextResponse.json({ error: "This listing does not have a valid Buy Now price." }, { status: 400 });
-    }
+    if (!buyNowPrice) return NextResponse.json({ error: "This listing does not have a valid Buy Now price." }, { status: 400 });
 
     const expectedTotal = buyNowPrice + EXTRA_FEE_GBP;
     const expectedAmountPence = Math.round(expectedTotal * 100);
 
-    // 3) VERIFY STRIPE PAYMENT INTENT
+    // 3) Verify Stripe PI
     const pi = await stripe.paymentIntents.retrieve(paymentIntentId);
 
-    if (!pi || (pi.currency || "").toLowerCase() !== "gbp") {
-      return NextResponse.json({ error: "Invalid payment intent." }, { status: 400 });
-    }
-    if (pi.status !== "succeeded") {
-      return NextResponse.json({ error: `Payment not completed (status: ${pi.status}).` }, { status: 400 });
-    }
-    if (pi.amount !== expectedAmountPence) {
-      return NextResponse.json({ error: "Payment amount mismatch." }, { status: 400 });
-    }
+    if (!pi || (pi.currency || "").toLowerCase() !== "gbp") return NextResponse.json({ error: "Invalid payment intent." }, { status: 400 });
+    if (pi.status !== "succeeded") return NextResponse.json({ error: `Payment not completed (status: ${pi.status}).` }, { status: 400 });
+    if (pi.amount !== expectedAmountPence) return NextResponse.json({ error: "Payment amount mismatch." }, { status: 400 });
 
     const metaListingId = String(pi.metadata?.listingId || pi.metadata?.listing_id || "").trim();
-    if (metaListingId && metaListingId !== listingId) {
-      return NextResponse.json({ error: "Payment metadata mismatch (listingId)." }, { status: 400 });
-    }
+    if (metaListingId && metaListingId !== listingId) return NextResponse.json({ error: "Payment metadata mismatch (listingId)." }, { status: 400 });
 
     const buyerEmail = authed.email.trim();
-    if (!buyerEmail || !isValidEmail(buyerEmail)) {
-      return NextResponse.json({ error: "Authenticated user has no valid email." }, { status: 400 });
-    }
+    if (!buyerEmail || !isValidEmail(buyerEmail)) return NextResponse.json({ error: "Authenticated user has no valid email." }, { status: 400 });
 
-    const metaBuyerEmail = String(pi.metadata?.buyerEmail || pi.metadata?.buyer_email || "")
-      .trim()
-      .toLowerCase();
-
-    if (metaBuyerEmail && metaBuyerEmail !== buyerEmail.toLowerCase()) {
+    const metaBuyerEmail = String(pi.metadata?.buyerEmail || pi.metadata?.buyer_email || "").trim().toLowerCase();
+    if (metaBuyerEmail && metaBuyerEmail !== buyerEmail.toLowerCase())
       return NextResponse.json({ error: "Payment metadata mismatch (buyer)." }, { status: 403 });
-    }
 
-    // Best-effort customer email match
+    // best-effort customer match
     if (pi.customer && typeof pi.customer === "string") {
       try {
         const c = await stripe.customers.retrieve(pi.customer);
         if (!("deleted" in c) && c.email && c.email.toLowerCase() !== buyerEmail.toLowerCase()) {
           return NextResponse.json({ error: "Payment customer does not match buyer." }, { status: 403 });
         }
-      } catch {
-        // ignore
-      }
+      } catch {}
     }
 
-    // 4) Settlement (camera-style)
-    const commissionRateFromListing = listing?.commission_rate;
-    const listingFeeFromListing = listing?.listing_fee;
-
+    // 4) Settlement
     const commissionRate =
-      typeof commissionRateFromListing === "number" && commissionRateFromListing >= 0
-        ? commissionRateFromListing
-        : 10;
+      typeof listing?.commission_rate === "number" && listing.commission_rate >= 0 ? listing.commission_rate : 10;
 
     const listingFee =
-      typeof listingFeeFromListing === "number" && listingFeeFromListing >= 0 ? listingFeeFromListing : 0;
+      typeof listing?.listing_fee === "number" && listing.listing_fee >= 0 ? listing.listing_fee : 0;
 
     const salePrice = buyNowPrice; // GBP
     const commissionAmount = Math.round((salePrice * commissionRate) / 100);
@@ -372,7 +345,7 @@ export async function POST(req: NextRequest) {
     const nowIso = new Date().toISOString();
     const itemTitle = getItemTitle(listing);
 
-    // 5) Create transaction doc (transactions DB)
+    // ✅ Camera transaction payload ONLY (no old plate workflow flags)
     const txPayload: Record<string, any> = {
       listing_id: listing.$id,
       item_title: itemTitle,
@@ -392,24 +365,11 @@ export async function POST(req: NextRequest) {
 
       created_at: nowIso,
       updated_at: nowIso,
-
-      seller_docs_requested: true,
-      seller_docs_received: false,
-      seller_payment_transferred: false,
-      seller_process_complete: false,
-
-      buyer_info_requested: true,
-      buyer_info_received: false,
-      buyer_tax_mot_validated: false,
-      buyer_payment_taken: true,
-      buyer_transfer_complete: false,
-
-      documents: [],
     };
 
     const txDoc: any = await createDocSchemaTolerant(databases, TX_DB_ID, TX_COLLECTION_ID, txPayload);
 
-    // 6) Mark listing as sold (listings DB)
+    // 6) Mark listing sold (listings DB)
     await updateDocSchemaTolerant(databases, LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, listing.$id, {
       status: "sold",
       sold_price: salePrice,
@@ -435,7 +395,6 @@ export async function POST(req: NextRequest) {
 
       const from = { name: FROM_NAME, address: FROM_EMAIL };
 
-      // Admin
       try {
         if (ADMIN_EMAIL && isValidEmail(ADMIN_EMAIL)) {
           await transporter.sendMail({
@@ -462,7 +421,6 @@ Admin dashboard: ${adminTxUrl}
         console.error("[buy-now] Failed to send admin email:", err);
       }
 
-      // Seller
       try {
         await transporter.sendMail({
           from,
@@ -485,7 +443,6 @@ Thank you for using AuctionMyCamera.co.uk.
         console.error("[buy-now] Failed to send seller email:", err);
       }
 
-      // Buyer
       try {
         await transporter.sendMail({
           from,
@@ -506,14 +463,7 @@ Thank you for using AuctionMyCamera.co.uk.
       }
     }
 
-    return NextResponse.json(
-      {
-        ok: true,
-        transactionId: txDoc.$id,
-        updatedListing,
-      },
-      { status: 200 }
-    );
+    return NextResponse.json({ ok: true, transactionId: txDoc.$id, updatedListing }, { status: 200 });
   } catch (err: any) {
     console.error("[buy-now] fatal error:", err);
     return NextResponse.json(
