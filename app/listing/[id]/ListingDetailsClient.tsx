@@ -164,24 +164,73 @@ function buildLocalImageProxyUrl(fileId: string) {
   return `/api/camera-image/${encodeURIComponent(id)}`;
 }
 
+/**
+ * Coerce image_ids into a real string[].
+ * Supports:
+ *  - real arrays: ["id1","id2"]
+ *  - JSON strings: '["id1","id2"]'
+ *  - comma strings: "id1,id2,id3"
+ */
+function coerceIdList(raw: any): string[] {
+  if (!raw) return [];
+
+  // Already an array
+  if (Array.isArray(raw)) {
+    return raw
+      .map((x) => String(x || "").trim())
+      .filter(Boolean);
+  }
+
+  // If it's a string, try JSON first, then fallback to comma split
+  if (typeof raw === "string") {
+    const s = raw.trim();
+    if (!s) return [];
+
+    // JSON array string?
+    if ((s.startsWith("[") && s.endsWith("]")) || (s.startsWith('"') && s.endsWith('"'))) {
+      try {
+        const parsed = JSON.parse(s);
+        if (Array.isArray(parsed)) {
+          return parsed
+            .map((x) => String(x || "").trim())
+            .filter(Boolean);
+        }
+      } catch {
+        // ignore and fallback below
+      }
+    }
+
+    // Comma-separated fallback
+    return s
+      .split(",")
+      .map((x) => String(x || "").trim())
+      .filter(Boolean);
+  }
+
+  // Anything else -> nothing
+  return [];
+}
+
 function allImageIds(l: Listing): string[] {
   const anyL = l as any;
 
-  const ids = anyL.image_ids ?? anyL.imageIds;
-  const out: string[] = [];
-
-  if (Array.isArray(ids)) {
-    for (const x of ids) {
-      const s = String(x || "").trim();
-      if (s) out.push(s);
-    }
-  }
+  // Handle multiple possible field names and types
+  const rawIds = anyL.image_ids ?? anyL.imageIds ?? anyL.images ?? null;
+  const out = coerceIdList(rawIds);
 
   const single = String(anyL.image_id || anyL.imageId || "").trim();
   if (single && !out.includes(single)) out.push(single);
 
-  // De-dupe
-  return Array.from(new Set(out));
+  // De-dupe while preserving order
+  const seen = new Set<string>();
+  const deduped: string[] = [];
+  for (const id of out) {
+    if (!seen.has(id)) {
+      seen.add(id);
+      deduped.push(id);
+    }
+  }
+  return deduped;
 }
 
 function firstImageId(l: Listing): string | null {

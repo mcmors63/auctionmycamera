@@ -7,7 +7,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 // ✅ Used only to confirm which deployment is live
-const ROUTE_VERSION = "listings-2026-03-02a";
+const ROUTE_VERSION = "listings-2026-03-02b";
 
 // -----------------------------
 // Appwrite ENV (SAFE reads)
@@ -289,6 +289,52 @@ async function createDocSchemaTolerant(params: {
   return await db.createDocument(dbId, colId, ID.unique(), data, permissions);
 }
 
+// Accept arrays, JSON-strings, or comma-strings
+function coerceIdList(raw: any): string[] {
+  if (!raw) return [];
+
+  if (Array.isArray(raw)) {
+    return raw.map((x) => safeString(x)).filter(Boolean);
+  }
+
+  if (typeof raw === "string") {
+    const s = raw.trim();
+    if (!s) return [];
+
+    // Try JSON array
+    if (s.startsWith("[") && s.endsWith("]")) {
+      try {
+        const parsed = JSON.parse(s);
+        if (Array.isArray(parsed)) {
+          return parsed.map((x) => safeString(x)).filter(Boolean);
+        }
+      } catch {
+        // fall through
+      }
+    }
+
+    // Comma-separated fallback
+    return s
+      .split(",")
+      .map((x) => safeString(x))
+      .filter(Boolean);
+  }
+
+  return [];
+}
+
+function dedupeKeepOrder(ids: string[]) {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const id of ids) {
+    if (!id) continue;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+  }
+  return out;
+}
+
 export async function POST(req: NextRequest) {
   try {
     if (!endpoint || !projectId || !apiKey) {
@@ -351,13 +397,28 @@ export async function POST(req: NextRequest) {
     const focalLength = toNullableString(body.focal_length ?? body.focalLength);
     const maxAperture = toNullableString(body.max_aperture ?? body.maxAperture);
 
-    const imageId = safeString(body.image_id || body.imageId);
-    const imageIdsRaw = Array.isArray(body.image_ids || body.imageIds) ? body.image_ids || body.imageIds : null;
+    // --- Images (robust) ---
+    const imageIdFromBody = safeString(body.image_id || body.imageId);
 
-    const imageIds =
-      Array.isArray(imageIdsRaw) && imageIdsRaw.length
-        ? imageIdsRaw.map((x: any) => safeString(x)).filter(Boolean).slice(0, 10)
-        : null;
+    const idsFromImageIds = coerceIdList(body.image_ids);
+    const idsFromImageIdsCamel = coerceIdList(body.imageIds);
+    const idsFromImages = coerceIdList(body.images);
+
+    let mergedIds = dedupeKeepOrder([
+      ...idsFromImageIds,
+      ...idsFromImageIdsCamel,
+      ...idsFromImages,
+    ]);
+
+    // Ensure single imageId is included
+    if (imageIdFromBody) mergedIds = dedupeKeepOrder([imageIdFromBody, ...mergedIds]);
+
+    // Limit
+    mergedIds = mergedIds.slice(0, 10);
+
+    // Final stored values:
+    const image_id = mergedIds[0] || (imageIdFromBody || null);
+    const image_ids = mergedIds.length ? mergedIds : null;
 
     const relistUntilSold = !!(body.relist_until_sold ?? body.relistUntilSold);
 
@@ -434,8 +495,8 @@ export async function POST(req: NextRequest) {
       focal_length: focalLength,
       max_aperture: maxAperture,
 
-      image_id: imageId || null,
-      image_ids: imageIds || null,
+      image_id: image_id,
+      image_ids: image_ids,
 
       relist_until_sold: relistUntilSold,
     };

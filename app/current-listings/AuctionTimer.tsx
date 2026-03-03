@@ -54,9 +54,15 @@ export default function AuctionTimer({ mode, endTime }: Props) {
 
   if (diff <= 0) {
     return (
-      <p className="text-xs font-semibold text-green-700">
+      <span
+        className={`inline-flex items-center rounded-md px-3 py-2 text-xs font-semibold shadow ring-1 ${
+          mode === "coming"
+            ? "bg-green-600 text-white ring-green-700/40"
+            : "bg-neutral-900 text-white ring-black/30"
+        }`}
+      >
         {mode === "coming" ? "Auction now live" : "Auction ended"}
-      </p>
+      </span>
     );
   }
 
@@ -66,13 +72,14 @@ export default function AuctionTimer({ mode, endTime }: Props) {
   const days = Math.floor(diff / (1000 * 60 * 60 * 24));
 
   return (
-    <div className="flex flex-col text-xs font-semibold text-white">
-      <span className="text-[10px] uppercase tracking-wide text-white/60">
+    <div className="inline-flex flex-col rounded-md bg-black/85 px-3 py-2 text-xs font-semibold text-white shadow ring-1 ring-black/20 backdrop-blur-sm">
+      <span className="text-[10px] uppercase tracking-wide text-white/70">
         {label}
       </span>
+
       <span className="mt-0.5 inline-flex items-center gap-1">
         <span aria-hidden="true">⏱</span>
-        <span className="text-white">
+        <span>
           {days}d {hours.toString().padStart(2, "0")}h:
           {minutes.toString().padStart(2, "0")}m:
           {seconds.toString().padStart(2, "0")}s

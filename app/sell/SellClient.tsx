@@ -167,9 +167,7 @@ export default function SellClient() {
     return { start, end, isLive: w.isLive };
   }, []);
 
-  async function uploadPhotoIfProvided(file: File | null): Promise<string | null> {
-    if (!file) return null;
-
+  async function uploadPhoto(file: File): Promise<string> {
     if (!CAMERA_IMAGES_BUCKET_ID) {
       throw new Error(
         "Missing env NEXT_PUBLIC_APPWRITE_CAMERA_IMAGES_BUCKET_ID (needed for photo uploads)."
@@ -189,7 +187,24 @@ export default function SellClient() {
       named
     );
 
-    return String((created as any)?.$id || "");
+    const id = String((created as any)?.$id || "").trim();
+    if (!id) throw new Error("Photo upload failed (no file id returned).");
+    return id;
+  }
+
+  async function uploadPhotos(files: File[]): Promise<string[]> {
+    const picked = files.slice(0, 10);
+    const ids: string[] = [];
+
+    // Upload sequentially (more reliable for novices than Promise.all blasting Appwrite)
+    for (const f of picked) {
+      if (!f || !(f instanceof File) || f.size <= 0) continue;
+      const id = await uploadPhoto(f);
+      ids.push(id);
+    }
+
+    // De-dupe in case user picked same file twice
+    return Array.from(new Set(ids));
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -268,16 +283,18 @@ export default function SellClient() {
     const auction_start = start.toISOString();
     const auction_end = end.toISOString();
 
-    const photoFile = (formData.get("photo") as File | null) || null;
+    // ✅ Multiple photos: input name="photo" + multiple -> use getAll()
+    const photoEntries = formData.getAll("photo");
+    const photoFiles = photoEntries.filter((x) => x instanceof File && (x as File).size > 0) as File[];
 
     try {
       setSubmitting(true);
 
-      let image_id: string | null = null;
-      if (photoFile && photoFile.size > 0) {
-        image_id = await uploadPhotoIfProvided(photoFile);
-        if (!image_id) throw new Error("Photo upload failed (no file id returned).");
-      }
+      // Upload 0..10 photos
+      const imageIds = await uploadPhotos(photoFiles);
+
+      const image_id = imageIds.length ? imageIds[0] : null;
+      const image_ids = imageIds.length ? imageIds : null;
 
       // IMPORTANT:
       // Your Appwrite collection contains BOTH snake_case and camelCase columns.
@@ -310,9 +327,11 @@ export default function SellClient() {
         focal_length: focal_length || null,
         max_aperture: max_aperture || null,
 
-        // image refs
-        image_id: image_id || null,
-        imageId: image_id || null,
+        // ✅ image refs (single + array, both styles)
+        image_id: image_id,
+        imageId: image_id,
+        image_ids: image_ids,
+        imageIds: image_ids,
         image_url: null,
 
         // prices (both styles)
@@ -509,9 +528,15 @@ export default function SellClient() {
         </div>
 
         <div>
-          <label className={labelBase}>Photo (optional)</label>
-          <input name="photo" type="file" accept="image/*" className={inputBase} />
-          <p className={hintBase}>Add one clear photo (front/angle). You can add more later.</p>
+          <label className={labelBase}>Photos (optional)</label>
+          <input
+            name="photo"
+            type="file"
+            accept="image/*"
+            multiple
+            className={inputBase}
+          />
+          <p className={hintBase}>Add up to 10 photos. The first becomes the main image.</p>
         </div>
 
         <div className="grid sm:grid-cols-2 gap-4">
