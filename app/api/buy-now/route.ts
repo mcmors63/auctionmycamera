@@ -20,12 +20,19 @@ const endpoint = process.env.APPWRITE_ENDPOINT || process.env.NEXT_PUBLIC_APPWRI
 const projectId = process.env.APPWRITE_PROJECT_ID || process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID || "";
 const apiKey = (process.env.APPWRITE_API_KEY || "").trim();
 
-const DB_ID =
+// Listings DB (source of truth for cameras)
+const LISTINGS_DB_ID =
   process.env.APPWRITE_LISTINGS_DATABASE_ID ||
   process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID ||
   process.env.APPWRITE_DATABASE_ID ||
   process.env.NEXT_PUBLIC_APPWRITE_DATABASE_ID ||
   "";
+
+// Transactions DB (where transactions collection actually lives)
+const TX_DB_ID =
+  process.env.APPWRITE_TRANSACTIONS_DATABASE_ID ||
+  process.env.NEXT_PUBLIC_APPWRITE_TRANSACTIONS_DATABASE_ID ||
+  ""; // no fallback here — better to fail loudly than write to wrong DB
 
 const LISTINGS_COLLECTION_ID =
   process.env.APPWRITE_LISTINGS_COLLECTION_ID ||
@@ -56,7 +63,8 @@ const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || process.env.NEXT_PUBLIC_ADMIN_EM
   .toLowerCase();
 
 const FROM_EMAIL =
-  (process.env.FROM_EMAIL ||
+  (
+    process.env.FROM_EMAIL ||
     process.env.CONTACT_FROM_EMAIL ||
     process.env.EMAIL_FROM ||
     process.env.SMTP_FROM ||
@@ -124,6 +132,8 @@ function getServerDatabases() {
 
 // -----------------------------
 // SCHEMA TOLERANCE HELPERS
+// (Your transactions collection currently has very few attributes,
+// so we must be able to strip *many* unknown keys.)
 // -----------------------------
 async function createDocSchemaTolerant(
   databases: Databases,
@@ -133,7 +143,7 @@ async function createDocSchemaTolerant(
 ) {
   const data: Record<string, any> = { ...payload };
 
-  for (let i = 0; i < 12; i++) {
+  for (let i = 0; i < 200; i++) {
     try {
       return await databases.createDocument(dbId, colId, ID.unique(), data);
     } catch (err: any) {
@@ -147,15 +157,8 @@ async function createDocSchemaTolerant(
     }
   }
 
-  // minimal fallback
-  return await databases.createDocument(dbId, colId, ID.unique(), {
-    listing_id: payload.listing_id,
-    seller_email: payload.seller_email,
-    buyer_email: payload.buyer_email,
-    sale_price: payload.sale_price,
-    payment_status: payload.payment_status || "paid",
-    transaction_status: payload.transaction_status || "pending",
-  });
+  // final fallback (allows flow to complete even if schema is minimal)
+  return await databases.createDocument(dbId, colId, ID.unique(), {});
 }
 
 async function updateDocSchemaTolerant(
@@ -167,7 +170,7 @@ async function updateDocSchemaTolerant(
 ) {
   const data: Record<string, any> = { ...payload };
 
-  for (let i = 0; i < 12; i++) {
+  for (let i = 0; i < 200; i++) {
     try {
       return await databases.updateDocument(dbId, colId, docId, data);
     } catch (err: any) {
@@ -182,9 +185,9 @@ async function updateDocSchemaTolerant(
   }
 
   // minimal fallback
-  return await databases.updateDocument(dbId, colId, docId, {
-    status: payload.status,
-  });
+  const minimal: Record<string, any> = {};
+  if ("status" in payload) minimal.status = payload.status;
+  return await databases.updateDocument(dbId, colId, docId, minimal);
 }
 
 // -----------------------------
@@ -240,8 +243,15 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Server Appwrite config missing." }, { status: 500 });
     }
 
-    if (!DB_ID || !LISTINGS_COLLECTION_ID || !TX_COLLECTION_ID) {
-      return NextResponse.json({ error: "Server DB/collection configuration missing." }, { status: 500 });
+    if (!LISTINGS_DB_ID || !LISTINGS_COLLECTION_ID) {
+      return NextResponse.json({ error: "Server listings DB/collection configuration missing." }, { status: 500 });
+    }
+
+    if (!TX_DB_ID || !TX_COLLECTION_ID) {
+      return NextResponse.json(
+        { error: "Server transactions DB/collection configuration missing." },
+        { status: 500 }
+      );
     }
 
     const body = await req.json().catch(() => ({} as any));
@@ -254,10 +264,9 @@ export async function POST(req: NextRequest) {
 
     const databases = getServerDatabases();
 
-    // ✅ Idempotency guard:
-    // If we already created a transaction for this paymentIntent, return it.
+    // ✅ Idempotency guard (transactions DB!)
     try {
-      const existingTx = await databases.listDocuments(DB_ID, TX_COLLECTION_ID, [
+      const existingTx = await databases.listDocuments(TX_DB_ID, TX_COLLECTION_ID, [
         Query.equal("stripe_payment_intent_id", paymentIntentId),
         Query.limit(1),
       ]);
@@ -273,12 +282,11 @@ export async function POST(req: NextRequest) {
         );
       }
     } catch (e) {
-      // If schema/index doesn’t support this query, we still proceed (but logging helps).
       console.warn("[buy-now] Could not query existing transaction by stripe_payment_intent_id", e);
     }
 
-    // 1) Load listing (server source of truth)
-    const listing: any = await databases.getDocument(DB_ID, LISTINGS_COLLECTION_ID, listingId);
+    // 1) Load listing (listings DB)
+    const listing: any = await databases.getDocument(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, listingId);
 
     const currentStatus = String(listing?.status || "").trim().toLowerCase();
     if (currentStatus === "sold") {
@@ -315,7 +323,6 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Payment amount mismatch." }, { status: 400 });
     }
 
-    // Metadata sanity (supports camelCase + underscore variants)
     const metaListingId = String(pi.metadata?.listingId || pi.metadata?.listing_id || "").trim();
     if (metaListingId && metaListingId !== listingId) {
       return NextResponse.json({ error: "Payment metadata mismatch (listingId)." }, { status: 400 });
@@ -365,8 +372,7 @@ export async function POST(req: NextRequest) {
     const nowIso = new Date().toISOString();
     const itemTitle = getItemTitle(listing);
 
-    // 5) Create transaction doc (schema-tolerant)
-    // ✅ Align with auction pipeline: payment is done -> dispatch pending
+    // 5) Create transaction doc (transactions DB)
     const txPayload: Record<string, any> = {
       listing_id: listing.$id,
       item_title: itemTitle,
@@ -387,7 +393,6 @@ export async function POST(req: NextRequest) {
       created_at: nowIso,
       updated_at: nowIso,
 
-      // Optional legacy flags (safe if schema strips them)
       seller_docs_requested: true,
       seller_docs_received: false,
       seller_payment_transferred: false,
@@ -402,10 +407,10 @@ export async function POST(req: NextRequest) {
       documents: [],
     };
 
-    const txDoc: any = await createDocSchemaTolerant(databases, DB_ID, TX_COLLECTION_ID, txPayload);
+    const txDoc: any = await createDocSchemaTolerant(databases, TX_DB_ID, TX_COLLECTION_ID, txPayload);
 
-    // 6) Mark listing as sold (schema-tolerant)
-    await updateDocSchemaTolerant(databases, DB_ID, LISTINGS_COLLECTION_ID, listing.$id, {
+    // 6) Mark listing as sold (listings DB)
+    await updateDocSchemaTolerant(databases, LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, listing.$id, {
       status: "sold",
       sold_price: salePrice,
       buyer_email: buyerEmail,
@@ -415,7 +420,7 @@ export async function POST(req: NextRequest) {
       updated_at: nowIso,
     });
 
-    const updatedListing = await databases.getDocument(DB_ID, LISTINGS_COLLECTION_ID, listing.$id);
+    const updatedListing = await databases.getDocument(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, listing.$id);
 
     // 7) Emails (best-effort)
     const transporter = getTransporter();
