@@ -72,7 +72,7 @@ export default function PaymentMethodClient() {
             "Content-Type": "application/json",
             Authorization: `Bearer ${token}`,
           },
-          body: JSON.stringify({}),
+         body: JSON.stringify({ next: "/payment-method?updated=1" }),
         });
 
         // If route doesn't exist, try next
