@@ -42,7 +42,12 @@ type Listing = {
   era?: string | null;
   condition?: string | null;
 
+  // ✅ Either a direct URL OR an Appwrite file id (most reliable via proxy)
   image_url?: string | null;
+  image_id?: string | null; // common field name
+  imageId?: string | null; // alt clone field name
+  image_file_id?: string | null; // alt clone field name
+  imageFileId?: string | null; // alt clone field name
 
   listing_id?: string;
   status?: string;
@@ -315,9 +320,7 @@ export default function PlaceBidPage() {
     return (
       <div className="min-h-screen flex items-center justify-center bg-black px-4">
         <div className="max-w-2xl w-full">
-          <p className="text-red-400 text-xl whitespace-pre-line">
-            {error || "Listing not found."}
-          </p>
+          <p className="text-red-400 text-xl whitespace-pre-line">{error || "Listing not found."}</p>
           <div className="mt-6">
             <Link href="/auctions" className="text-sm text-[#d6b45f] underline">
               ← Back to auctions
@@ -374,7 +377,24 @@ export default function PlaceBidPage() {
     [listing.brand, listing.model].filter(Boolean).join(" ").trim() ||
     "Listing";
 
-  const heroImg = (listing.image_url || "").trim() || "/hero/modern-lens.jpg";
+  // ✅ Robust hero image pick:
+  // 1) Prefer image_id (served via same-origin proxy route) to avoid Next/Image remote host rules
+  // 2) Otherwise use image_url (may be remote)
+  // 3) Otherwise fallback to local hero
+  const rawImageId =
+    (listing.image_id ||
+      listing.imageId ||
+      listing.image_file_id ||
+      listing.imageFileId ||
+      "")?.toString()?.trim() || "";
+
+  const rawImageUrl = (listing.image_url || "").toString().trim();
+
+  const heroImg = rawImageId
+    ? `/api/camera-image/${encodeURIComponent(rawImageId)}`
+    : rawImageUrl || "/hero/modern-lens.jpg";
+
+  const heroIsSameOrigin = heroImg.startsWith("/");
 
   // ----------------------------------------------------
   // HANDLE BID
@@ -568,14 +588,24 @@ export default function PlaceBidPage() {
 
       <div className="max-w-4xl mx-auto mb-6">
         <div className="relative w-full max-w-3xl mx-auto rounded-xl overflow-hidden shadow-lg bg-black border border-white/10">
-          <Image
-            src={heroImg}
-            alt={title}
-            width={1600}
-            height={900}
-            className="w-full h-[280px] object-cover"
-            priority
-          />
+          {heroIsSameOrigin ? (
+            <Image
+              src={heroImg}
+              alt={title}
+              width={1600}
+              height={900}
+              className="w-full h-[280px] object-cover"
+              priority
+            />
+          ) : (
+            <img
+              src={heroImg}
+              alt={title}
+              className="w-full h-[280px] object-cover"
+              loading="eager"
+            />
+          )}
+
           <div className="absolute inset-0 bg-black/35" />
           <div className="absolute left-0 bottom-0 p-5">
             <p className="text-xs text-white/70">Listing ID: {displayId}</p>
