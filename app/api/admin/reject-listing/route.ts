@@ -40,7 +40,9 @@ const SITE_URL = (process.env.NEXT_PUBLIC_SITE_URL || "https://auctionmycamera.c
   ""
 );
 
-// ----- Email -----
+// -----------------------------
+// Email
+// -----------------------------
 function getMailer() {
   const host = process.env.SMTP_HOST;
   const user = process.env.SMTP_USER;
@@ -86,15 +88,21 @@ function escapeHtml(input: unknown) {
     .replace(/'/g, "&#039;");
 }
 
-function has(obj: any, key: string) {
-  return obj && Object.prototype.hasOwnProperty.call(obj, key);
-}
-
-function cleanReason(v: any) {
+function cleanReason(v: unknown) {
   const s = String(v ?? "").trim();
-  // avoid silly huge blobs
   if (!s) return "";
   return s.length > 800 ? s.slice(0, 800) + "…" : s;
+}
+
+function getUnknownAttributeName(message: string): string | null {
+  const msg = String(message || "");
+
+  // Matches:
+  // Unknown attribute: rejection_reason
+  // Unknown attribute: "rejection_reason"
+  // Unknown attribute: 'rejection_reason'
+  const match = msg.match(/Unknown attribute:\s*["']?([A-Za-z0-9_]+)["']?/i);
+  return match?.[1] || null;
 }
 
 // Schema-tolerant update: remove unknown keys and retry
@@ -107,22 +115,26 @@ async function updateDocSchemaTolerant(
 ) {
   const data: Record<string, any> = { ...payload };
 
-  for (let i = 0; i < 10; i++) {
+  for (let i = 0; i < 12; i++) {
     try {
       return await databases.updateDocument(dbId, colId, docId, data);
     } catch (err: any) {
       const msg = String(err?.message || "");
-      const m = msg.match(/Unknown attribute:\s*([A-Za-z0-9_]+)/i);
-      if (m?.[1]) {
-        delete data[m[1]];
+      const unknownAttr = getUnknownAttributeName(msg);
+
+      if (unknownAttr) {
+        delete data[unknownAttr];
         continue;
       }
+
       throw err;
     }
   }
 
-  // last resort
-  return await databases.updateDocument(dbId, colId, docId, { status: payload.status });
+  // Last resort: reject the listing even if optional fields were stripped away
+  return await databases.updateDocument(dbId, colId, docId, {
+    status: payload.status,
+  });
 }
 
 // Simple GET for testing
@@ -171,7 +183,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Missing listingId (or plateId)." }, { status: 400 });
     }
 
-    // ✅ Pull truth from DB (seller email/title should come from the listing)
+    // ✅ Pull truth from DB
     let listing: any;
     try {
       listing = await databases.getDocument(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, listingId);
@@ -181,8 +193,8 @@ export async function POST(req: NextRequest) {
     }
 
     const sellerEmail = String(listing?.seller_email || listing?.sellerEmail || "").trim();
+
     if (!sellerEmail) {
-      // We still reject, but note this is unusual
       console.warn("reject-listing: listing has no seller email:", listingId);
     }
 
@@ -191,17 +203,16 @@ export async function POST(req: NextRequest) {
       [listing?.brand, listing?.model].filter(Boolean).join(" ").trim() ||
       "your listing";
 
-    // ✅ Schema-tolerant update payload (store reason if possible)
+    // ✅ Always reject
+    // ✅ Try to store a reason if the schema supports either field name
+    // ✅ If neither exists, schema-tolerant update will strip them and still save status="rejected"
     const payload: Record<string, any> = {
       status: "rejected",
     };
 
-    // Only attempt to write a reason field if the listing schema has something compatible,
-    // otherwise schema-tolerant update will strip it safely.
     if (reason) {
-      if (has(listing, "rejection_reason")) payload.rejection_reason = reason;
-      else if (has(listing, "rejectionReason")) payload.rejectionReason = reason;
-      else payload.rejection_reason = reason; // safe: schema-tolerant will drop if unknown
+      payload.rejection_reason = reason;
+      payload.rejectionReason = reason;
     }
 
     const updated = await updateDocSchemaTolerant(
@@ -215,6 +226,7 @@ export async function POST(req: NextRequest) {
     // Best-effort email
     try {
       const mailer = getMailer();
+
       if (mailer && sellerEmail) {
         const { transporter, fromEmail, replyTo } = mailer;
 
