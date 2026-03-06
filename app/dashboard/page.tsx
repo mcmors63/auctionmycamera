@@ -292,28 +292,28 @@ export default function DashboardPage() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
 
   // Sell form (camera)
-const [sellForm, setSellForm] = useState({
-  item_title: "",
-  gear_type: "",
-  brand: "",
-  model: "",
-  era: "",
-  condition: "",
-  description: "",
+  const [sellForm, setSellForm] = useState({
+    item_title: "",
+    gear_type: "",
+    brand: "",
+    model: "",
+    era: "",
+    condition: "",
+    description: "",
 
-  // ✅ Extra fields that exist in Appwrite
-  shutter_count: "",
-  lens_mount: "",
-  focal_length: "",
-  max_aperture: "",
+    // ✅ Extra fields that exist in Appwrite
+    shutter_count: "",
+    lens_mount: "",
+    focal_length: "",
+    max_aperture: "",
 
-  reserve_price: "",
-  starting_price: "",
-  buy_now: "",
-  owner_confirmed: false,
-  agreed_terms: false,
-  relist_until_sold: false,
-});
+    reserve_price: "",
+    starting_price: "",
+    buy_now: "",
+    owner_confirmed: false,
+    agreed_terms: false,
+    relist_until_sold: false,
+  });
 
   // ✅ Photos (multi)
   const [sellPhotos, setSellPhotos] = useState<SellPreview[]>([]);
@@ -419,14 +419,14 @@ const [sellForm, setSellForm] = useState({
   }
 
   function makeSellPhotoMain(id: string) {
-  setSellPhotos((prev) => {
-    const idx = prev.findIndex((p) => p.id === id);
-    if (idx <= 0) return prev;
-    const chosen = prev[idx];
-    const rest = prev.filter((p) => p.id !== id);
-    return [chosen, ...rest];
-  });
-}
+    setSellPhotos((prev) => {
+      const idx = prev.findIndex((p) => p.id === id);
+      if (idx <= 0) return prev;
+      const chosen = prev[idx];
+      const rest = prev.filter((p) => p.id !== id);
+      return [chosen, ...rest];
+    });
+  }
 
   function clearSellPhotos() {
     setSellPhotos((prev) => {
@@ -846,7 +846,9 @@ const [sellForm, setSellForm] = useState({
 
     try {
       const hasActiveListing = allListings.some((l) =>
-        ["pending", "pending_approval", "queued", "approved", "live", "active"].includes((l.status || "").toLowerCase())
+        ["pending", "pending_approval", "queued", "approved", "live", "active"].includes(
+          (l.status || "").toLowerCase()
+        )
       );
 
       if (hasActiveListing) {
@@ -866,22 +868,10 @@ const [sellForm, setSellForm] = useState({
         return;
       }
 
-      const res = await fetch("/api/delete-account", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userId: user.$id, email: user.email }),
-      });
-
-      const data = await res.json().catch(() => ({} as any));
-
-      if (!res.ok || (data as any).error) {
-        setDeleteError((data as any).error || "Failed to delete account. Please try again.");
-        setDeleteLoading(false);
-        return;
-      }
+      await postTxAction("/api/delete-account", {});
 
       alert("Your account has been deleted. Thank you for using AuctionMyCamera.");
-      router.push("/");
+      window.location.href = "/";
     } catch (err: any) {
       console.error("delete-account error", err);
       setDeleteError(err?.message || "Failed to delete account.");
@@ -911,227 +901,227 @@ const [sellForm, setSellForm] = useState({
   };
 
   // -----------------------------
-// Sell form handlers
-// -----------------------------
-const handleSellChange = (e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
-  const target = e.target as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
-  const { name, value, type } = target;
+  // Sell form handlers
+  // -----------------------------
+  const handleSellChange = (e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
+    const target = e.target as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
+    const { name, value, type } = target;
 
-  let val: any;
-  if (type === "checkbox") val = (target as HTMLInputElement).checked;
-  else if (type === "number") val = value === "" ? "" : Number(value);
-  else val = value;
+    let val: any;
+    if (type === "checkbox") val = (target as HTMLInputElement).checked;
+    else if (type === "number") val = value === "" ? "" : Number(value);
+    else val = value;
 
-  setSellForm((prev) => ({ ...prev, [name]: val }));
-  setSellError("");
+    setSellForm((prev) => ({ ...prev, [name]: val }));
+    setSellError("");
 
-  if (name === "reserve_price") {
-    const num = parseFloat(String(value));
-    if (!isNaN(num)) calculateFees(num);
-    else {
+    if (name === "reserve_price") {
+      const num = parseFloat(String(value));
+      if (!isNaN(num)) calculateFees(num);
+      else {
+        setCommissionRate(0);
+        setCommissionValue(0);
+        setExpectedReturn(0);
+      }
+    }
+  };
+
+  // -----------------------------
+  // Upload photos for dashboard sell (multi)
+  // -----------------------------
+  async function uploadDashboardPhotosIfProvided(ownerId: string): Promise<string[]> {
+    if (!sellPhotos.length) return [];
+
+    const bucketId = (process.env.NEXT_PUBLIC_APPWRITE_CAMERA_IMAGES_BUCKET_ID || "").trim();
+    if (!bucketId) {
+      throw new Error("Camera image bucket not configured (NEXT_PUBLIC_APPWRITE_CAMERA_IMAGES_BUCKET_ID).");
+    }
+
+    // ✅ Works whether Bucket File Security is ON or OFF
+    const perms = [
+      Permission.read(Role.user(ownerId)),
+      Permission.update(Role.user(ownerId)),
+      Permission.delete(Role.user(ownerId)),
+    ];
+
+    const ids: string[] = [];
+
+    for (const p of sellPhotos) {
+      try {
+        const created = await storage.createFile(bucketId, ID.unique(), p.file, perms);
+        ids.push(created.$id);
+      } catch (err: any) {
+        // Best-effort cleanup so you don’t leave orphan files
+        try {
+          for (const id of ids) {
+            try {
+              await storage.deleteFile(bucketId, id);
+            } catch {}
+          }
+        } catch {}
+
+        let msg = String(err?.message || "Upload failed.");
+        const respRaw = typeof err?.response === "string" ? err.response : "";
+        if (respRaw) {
+          try {
+            const parsed = JSON.parse(respRaw);
+            msg = String(parsed?.message || msg);
+          } catch {}
+        }
+
+        throw new Error(`Image upload failed for "${p.file?.name || "file"}": ${msg}`);
+      }
+    }
+
+    return ids;
+  }
+
+  // -----------------------------
+  // Create listing via /api/listings (JWT auth)
+  // -----------------------------
+  const handleSellSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    setSellError("");
+
+    if (!user) {
+      setSellError("Your session has expired. Please log in again.");
+      router.push("/login");
+      return;
+    }
+
+    const title = safeStr(sellForm.item_title);
+    const reserve = parseFloat(String(sellForm.reserve_price));
+    const starting =
+      sellForm.starting_price === "" ? 0 : parseFloat(String(sellForm.starting_price));
+    const buyNow = sellForm.buy_now === "" ? 0 : parseFloat(String(sellForm.buy_now));
+
+    if (!title) {
+      setSellError("Item title is required.");
+      return;
+    }
+
+    if (isNaN(reserve) || reserve < 10) {
+      setSellError("Minimum reserve price is £10.");
+      return;
+    }
+
+    if (!isNaN(starting) && starting > 0 && starting >= reserve) {
+      setSellError("Starting price must be lower than the reserve price.");
+      return;
+    }
+
+    if (!isNaN(buyNow) && buyNow > 0) {
+      const minBuyNow = Math.max(reserve, !isNaN(starting) && starting > 0 ? starting : 0);
+      if (buyNow < minBuyNow) {
+        setSellError("Buy Now price cannot be lower than your reserve price or starting price.");
+        return;
+      }
+    }
+
+    if (!sellForm.owner_confirmed) {
+      setSellError("You must confirm you own the item or have authority to sell it.");
+      return;
+    }
+
+    if (!sellForm.agreed_terms) {
+      setSellError("You must agree to the Terms & Conditions.");
+      return;
+    }
+
+    setSellSubmitting(true);
+
+    try {
+      const jwt = await account.createJWT();
+      const token = (jwt as any)?.jwt || "";
+
+      if (!token) {
+        setSellError("Could not create auth token. Please log out and log in again.");
+        return;
+      }
+
+      const uploadedImageIds = await uploadDashboardPhotosIfProvided(user.$id);
+
+      const res = await fetch("/api/listings", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          item_title: title,
+          gear_type: safeStr(sellForm.gear_type),
+          brand: safeStr(sellForm.brand),
+          model: safeStr(sellForm.model),
+          era: safeStr(sellForm.era),
+          condition: safeStr(sellForm.condition),
+          description: safeStr(sellForm.description),
+
+          // ✅ Extra fields that exist in Appwrite
+          shutter_count: safeStr((sellForm as any).shutter_count),
+          lens_mount: safeStr((sellForm as any).lens_mount),
+          focal_length: safeStr((sellForm as any).focal_length),
+          max_aperture: safeStr((sellForm as any).max_aperture),
+
+          reserve_price: reserve,
+          starting_price: !isNaN(starting) ? starting : 0,
+          buy_now: !isNaN(buyNow) ? buyNow : 0,
+
+          image_id: uploadedImageIds[0] || null,
+          image_ids: uploadedImageIds.length ? uploadedImageIds : null,
+
+          relist_until_sold: !!sellForm.relist_until_sold,
+        }),
+      });
+
+      const data = await res.json().catch(() => ({} as any));
+
+      if (!res.ok || !data?.ok) {
+        setSellError(data?.error || "Failed to create listing. Please try again.");
+        return;
+      }
+
+      // Refresh listings
+      try {
+        await refreshMyListings(user.email);
+      } catch {}
+
+      alert("Listing submitted! Awaiting approval.");
+
+      clearSellPhotos();
+
+      // ✅ Reset form (include extra fields)
+      setSellForm({
+        item_title: "",
+        gear_type: "",
+        brand: "",
+        model: "",
+        era: "",
+        condition: "",
+        description: "",
+
+        shutter_count: "",
+        lens_mount: "",
+        focal_length: "",
+        max_aperture: "",
+
+        reserve_price: "",
+        starting_price: "",
+        buy_now: "",
+        owner_confirmed: false,
+        agreed_terms: false,
+        relist_until_sold: false,
+      });
+
       setCommissionRate(0);
       setCommissionValue(0);
       setExpectedReturn(0);
-    }
-  }
-};
-
-// -----------------------------
-// Upload photos for dashboard sell (multi)
-// -----------------------------
-async function uploadDashboardPhotosIfProvided(ownerId: string): Promise<string[]> {
-  if (!sellPhotos.length) return [];
-
-  const bucketId = (process.env.NEXT_PUBLIC_APPWRITE_CAMERA_IMAGES_BUCKET_ID || "").trim();
-  if (!bucketId) {
-    throw new Error("Camera image bucket not configured (NEXT_PUBLIC_APPWRITE_CAMERA_IMAGES_BUCKET_ID).");
-  }
-
-  // ✅ Works whether Bucket File Security is ON or OFF
-  const perms = [
-    Permission.read(Role.user(ownerId)),
-    Permission.update(Role.user(ownerId)),
-    Permission.delete(Role.user(ownerId)),
-  ];
-
-  const ids: string[] = [];
-
-  for (const p of sellPhotos) {
-    try {
-      const created = await storage.createFile(bucketId, ID.unique(), p.file, perms);
-      ids.push(created.$id);
     } catch (err: any) {
-      // Best-effort cleanup so you don’t leave orphan files
-      try {
-        for (const id of ids) {
-          try {
-            await storage.deleteFile(bucketId, id);
-          } catch {}
-        }
-      } catch {}
-
-      let msg = String(err?.message || "Upload failed.");
-      const respRaw = typeof err?.response === "string" ? err.response : "";
-      if (respRaw) {
-        try {
-          const parsed = JSON.parse(respRaw);
-          msg = String(parsed?.message || msg);
-        } catch {}
-      }
-
-      throw new Error(`Image upload failed for "${p.file?.name || "file"}": ${msg}`);
+      console.error("Create listing error:", err);
+      setSellError(err?.message || "Failed to create listing. Please try again.");
+    } finally {
+      setSellSubmitting(false);
     }
-  }
-
-  return ids;
-}
-
-// -----------------------------
-// Create listing via /api/listings (JWT auth)
-// -----------------------------
-const handleSellSubmit = async (e: FormEvent) => {
-  e.preventDefault();
-  setSellError("");
-
-  if (!user) {
-    setSellError("Your session has expired. Please log in again.");
-    router.push("/login");
-    return;
-  }
-
-  const title = safeStr(sellForm.item_title);
-  const reserve = parseFloat(String(sellForm.reserve_price));
-  const starting =
-    sellForm.starting_price === "" ? 0 : parseFloat(String(sellForm.starting_price));
-  const buyNow = sellForm.buy_now === "" ? 0 : parseFloat(String(sellForm.buy_now));
-
-  if (!title) {
-    setSellError("Item title is required.");
-    return;
-  }
-
-  if (isNaN(reserve) || reserve < 10) {
-    setSellError("Minimum reserve price is £10.");
-    return;
-  }
-
-  if (!isNaN(starting) && starting > 0 && starting >= reserve) {
-    setSellError("Starting price must be lower than the reserve price.");
-    return;
-  }
-
-  if (!isNaN(buyNow) && buyNow > 0) {
-    const minBuyNow = Math.max(reserve, !isNaN(starting) && starting > 0 ? starting : 0);
-    if (buyNow < minBuyNow) {
-      setSellError("Buy Now price cannot be lower than your reserve price or starting price.");
-      return;
-    }
-  }
-
-  if (!sellForm.owner_confirmed) {
-    setSellError("You must confirm you own the item or have authority to sell it.");
-    return;
-  }
-
-  if (!sellForm.agreed_terms) {
-    setSellError("You must agree to the Terms & Conditions.");
-    return;
-  }
-
-  setSellSubmitting(true);
-
-  try {
-    const jwt = await account.createJWT();
-    const token = (jwt as any)?.jwt || "";
-
-    if (!token) {
-      setSellError("Could not create auth token. Please log out and log in again.");
-      return;
-    }
-
-   const uploadedImageIds = await uploadDashboardPhotosIfProvided(user.$id);
-
-    const res = await fetch("/api/listings", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({
-        item_title: title,
-        gear_type: safeStr(sellForm.gear_type),
-        brand: safeStr(sellForm.brand),
-        model: safeStr(sellForm.model),
-        era: safeStr(sellForm.era),
-        condition: safeStr(sellForm.condition),
-        description: safeStr(sellForm.description),
-
-        // ✅ Extra fields that exist in Appwrite
-        shutter_count: safeStr((sellForm as any).shutter_count),
-        lens_mount: safeStr((sellForm as any).lens_mount),
-        focal_length: safeStr((sellForm as any).focal_length),
-        max_aperture: safeStr((sellForm as any).max_aperture),
-
-        reserve_price: reserve,
-        starting_price: !isNaN(starting) ? starting : 0,
-        buy_now: !isNaN(buyNow) ? buyNow : 0,
-
-        image_id: uploadedImageIds[0] || null,
-        image_ids: uploadedImageIds.length ? uploadedImageIds : null,
-
-        relist_until_sold: !!sellForm.relist_until_sold,
-      }),
-    });
-
-    const data = await res.json().catch(() => ({} as any));
-
-    if (!res.ok || !data?.ok) {
-      setSellError(data?.error || "Failed to create listing. Please try again.");
-      return;
-    }
-
-    // Refresh listings
-    try {
-      await refreshMyListings(user.email);
-    } catch {}
-
-    alert("Listing submitted! Awaiting approval.");
-
-    clearSellPhotos();
-
-    // ✅ Reset form (include extra fields)
-    setSellForm({
-      item_title: "",
-      gear_type: "",
-      brand: "",
-      model: "",
-      era: "",
-      condition: "",
-      description: "",
-
-      shutter_count: "",
-      lens_mount: "",
-      focal_length: "",
-      max_aperture: "",
-
-      reserve_price: "",
-      starting_price: "",
-      buy_now: "",
-      owner_confirmed: false,
-      agreed_terms: false,
-      relist_until_sold: false,
-    });
-
-    setCommissionRate(0);
-    setCommissionValue(0);
-    setExpectedReturn(0);
-  } catch (err: any) {
-    console.error("Create listing error:", err);
-    setSellError(err?.message || "Failed to create listing. Please try again.");
-  } finally {
-    setSellSubmitting(false);
-  }
-};
+  };
 
   // -----------------------------
   // Edit queued listing (modal helpers)
@@ -1511,23 +1501,6 @@ const handleSellSubmit = async (e: FormEvent) => {
                   >
                     Log out
                   </button>
-                  <button
-  type="button"
-  onClick={async () => {
-    try {
-      const jwt = await account.createJWT();
-      const token = (jwt as any)?.jwt || "";
-      console.log("JWT:", token);
-      alert("JWT printed to console (F12 > Console). Copy it now.");
-    } catch (e) {
-      console.error(e);
-      alert("Failed to create JWT. Are you logged in?");
-    }
-  }}
-  className="px-4 py-2 rounded-md bg-neutral-950/60 hover:bg-neutral-950 text-neutral-100 text-xs font-semibold border border-neutral-800"
->
-  Print JWT (temp)
-</button>
                 </div>
               </>
             )}
@@ -1563,24 +1536,25 @@ const handleSellSubmit = async (e: FormEvent) => {
                 </div>
 
                 <div>
-  <label className="block text-xs font-semibold text-neutral-400 mb-1">
-    Gear type
-  </label>
-  <select
-    name="gear_type"
-    value={sellForm.gear_type}
-    onChange={handleSellChange}
-    className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
-  >
-   <option value="">Select type</option>
-   <option value="camera">Camera</option>
-   <option value="lens">Lens</option>
-   <option value="film_camera">Film camera</option>
-  <option value="bundle">Bundle</option>
-  <option value="accessory">Accessory</option>
-  <option value="other">Other</option>
-  </select>
-</div>
+                  <label className="block text-xs font-semibold text-neutral-400 mb-1">
+                    Gear type
+                  </label>
+                  <select
+                    name="gear_type"
+                    value={sellForm.gear_type}
+                    onChange={handleSellChange}
+                    className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                  >
+                    <option value="">Select type</option>
+                    <option value="camera">Camera</option>
+                    <option value="lens">Lens</option>
+                    <option value="film_camera">Film camera</option>
+                    <option value="bundle">Bundle</option>
+                    <option value="accessory">Accessory</option>
+                    <option value="other">Other</option>
+                  </select>
+                </div>
+
                 <div>
                   <label className="block text-xs font-semibold text-neutral-400 mb-1">Brand (optional)</label>
                   <input
@@ -1612,7 +1586,7 @@ const handleSellSubmit = async (e: FormEvent) => {
                     className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-sky-500"
                     placeholder="e.g. Modern / Vintage / 1980s"
                   />
-                               </div>
+                </div>
 
                 <div>
                   <label className="block text-xs font-semibold text-neutral-400 mb-1">Condition (optional)</label>
@@ -1633,213 +1607,213 @@ const handleSellSubmit = async (e: FormEvent) => {
                 </div>
 
                 {/* Extra details (optional) */}
-<div>
-  <label className="block text-xs font-semibold text-neutral-400 mb-1">
-    Shutter count (optional)
-  </label>
-  <input
-    name="shutter_count"
-    value={(sellForm as any).shutter_count || ""}
-    onChange={handleSellChange}
-    className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-sky-500"
-    placeholder="e.g. 12450"
-    inputMode="numeric"
-  />
-</div>
+                <div>
+                  <label className="block text-xs font-semibold text-neutral-400 mb-1">
+                    Shutter count (optional)
+                  </label>
+                  <input
+                    name="shutter_count"
+                    value={(sellForm as any).shutter_count || ""}
+                    onChange={handleSellChange}
+                    className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                    placeholder="e.g. 12450"
+                    inputMode="numeric"
+                  />
+                </div>
 
-<div>
-  <label className="block text-xs font-semibold text-neutral-400 mb-1">
-    Lens mount (optional)
-  </label>
-  <input
-    name="lens_mount"
-    value={(sellForm as any).lens_mount || ""}
-    onChange={handleSellChange}
-    className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-sky-500"
-    placeholder="e.g. Canon RF / Sony E / Nikon F"
-  />
-</div>
+                <div>
+                  <label className="block text-xs font-semibold text-neutral-400 mb-1">
+                    Lens mount (optional)
+                  </label>
+                  <input
+                    name="lens_mount"
+                    value={(sellForm as any).lens_mount || ""}
+                    onChange={handleSellChange}
+                    className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                    placeholder="e.g. Canon RF / Sony E / Nikon F"
+                  />
+                </div>
 
-<div>
-  <label className="block text-xs font-semibold text-neutral-400 mb-1">
-    Focal length (optional)
-  </label>
-  <input
-    name="focal_length"
-    value={(sellForm as any).focal_length || ""}
-    onChange={handleSellChange}
-    className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-sky-500"
-    placeholder="e.g. 24–70mm"
-  />
-</div>
+                <div>
+                  <label className="block text-xs font-semibold text-neutral-400 mb-1">
+                    Focal length (optional)
+                  </label>
+                  <input
+                    name="focal_length"
+                    value={(sellForm as any).focal_length || ""}
+                    onChange={handleSellChange}
+                    className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                    placeholder="e.g. 24–70mm"
+                  />
+                </div>
 
-<div>
-  <label className="block text-xs font-semibold text-neutral-400 mb-1">
-    Max aperture (optional)
-  </label>
-  <input
-    name="max_aperture"
-    value={(sellForm as any).max_aperture || ""}
-    onChange={handleSellChange}
-    className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-sky-500"
-    placeholder="e.g. f/2.8"
-  />
-</div>
-</div>
+                <div>
+                  <label className="block text-xs font-semibold text-neutral-400 mb-1">
+                    Max aperture (optional)
+                  </label>
+                  <input
+                    name="max_aperture"
+                    value={(sellForm as any).max_aperture || ""}
+                    onChange={handleSellChange}
+                    className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                    placeholder="e.g. f/2.8"
+                  />
+                </div>
+              </div>
 
-{/* Description */}
-<div>
-  <label className="block text-xs font-semibold text-neutral-400 mb-1">
-    Description (optional)
-  </label>
-  <textarea
-    name="description"
-    value={sellForm.description}
-    onChange={handleSellChange}
-    className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm min-h-[90px] bg-neutral-950/40 text-neutral-100 placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-sky-500"
-    placeholder="What’s included, condition details, any marks, shutter count, lens fungus, etc."
-  />
-</div>
+              {/* Description */}
+              <div>
+                <label className="block text-xs font-semibold text-neutral-400 mb-1">
+                  Description (optional)
+                </label>
+                <textarea
+                  name="description"
+                  value={sellForm.description}
+                  onChange={handleSellChange}
+                  className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm min-h-[90px] bg-neutral-950/40 text-neutral-100 placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                  placeholder="What’s included, condition details, any marks, shutter count, lens fungus, etc."
+                />
+              </div>
 
-{/* Photos Upload (multi) */}
-<div>
-  <div className="flex items-center justify-between gap-3">
-    <label className="block text-sm font-medium text-neutral-200 mb-1">
-      Photos (optional)
-    </label>
-    <span className="text-[11px] text-neutral-400">
-      {sellPhotos.length ? `${sellPhotos.length} selected` : "Up to 8 images"}
-    </span>
-  </div>
+              {/* Photos Upload (multi) */}
+              <div>
+                <div className="flex items-center justify-between gap-3">
+                  <label className="block text-sm font-medium text-neutral-200 mb-1">
+                    Photos (optional)
+                  </label>
+                  <span className="text-[11px] text-neutral-400">
+                    {sellPhotos.length ? `${sellPhotos.length} selected` : "Up to 8 images"}
+                  </span>
+                </div>
 
-  <p className="text-[11px] text-neutral-400 mb-2">
-    Cover photo = the <strong>first</strong> image. Use <strong>“Make main”</strong> on a thumbnail to change it.
-  </p>
+                <p className="text-[11px] text-neutral-400 mb-2">
+                  Cover photo = the <strong>first</strong> image. Use <strong>“Make main”</strong> on a thumbnail to change it.
+                </p>
 
-  <input
-    ref={sellPhotoInputRef}
-    type="file"
-    accept="image/*"
-    multiple
-    onChange={(e) => addSellPhotosFromFileList(e.target.files)}
-    className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100"
-  />
+                <input
+                  ref={sellPhotoInputRef}
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  onChange={(e) => addSellPhotosFromFileList(e.target.files)}
+                  className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100"
+                />
 
-  {sellPhotos.length > 0 && (
-    <>
-      <div className="mt-3 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
-        {sellPhotos.map((p, idx) => (
-          <div
-            key={p.id}
-            className="relative rounded-lg border border-neutral-800 bg-neutral-950/30 overflow-hidden"
-          >
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={p.url} alt="Preview" className="h-28 w-full object-cover" />
+                {sellPhotos.length > 0 && (
+                  <>
+                    <div className="mt-3 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+                      {sellPhotos.map((p, idx) => (
+                        <div
+                          key={p.id}
+                          className="relative rounded-lg border border-neutral-800 bg-neutral-950/30 overflow-hidden"
+                        >
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img src={p.url} alt="Preview" className="h-28 w-full object-cover" />
 
-            {idx === 0 ? (
-              <span className="absolute top-2 left-2 px-2 py-1 rounded-md bg-yellow-500 text-black text-[10px] font-extrabold">
-                MAIN
-              </span>
-            ) : (
-              <button
-                type="button"
-                onClick={() => makeSellPhotoMain(p.id)}
-                className="absolute top-2 left-2 px-2 py-1 rounded-md bg-black/70 text-white text-[11px] font-semibold border border-white/10 hover:bg-black/80"
-                title="Make this the cover photo"
-              >
-                Make main
-              </button>
-            )}
+                          {idx === 0 ? (
+                            <span className="absolute top-2 left-2 px-2 py-1 rounded-md bg-yellow-500 text-black text-[10px] font-extrabold">
+                              MAIN
+                            </span>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => makeSellPhotoMain(p.id)}
+                              className="absolute top-2 left-2 px-2 py-1 rounded-md bg-black/70 text-white text-[11px] font-semibold border border-white/10 hover:bg-black/80"
+                              title="Make this the cover photo"
+                            >
+                              Make main
+                            </button>
+                          )}
 
-            <button
-              type="button"
-              onClick={() => removeSellPhoto(p.id)}
-              className="absolute top-2 right-2 px-2 py-1 rounded-md bg-black/70 text-white text-[11px] font-semibold border border-white/10 hover:bg-black/80"
-            >
-              Remove
-            </button>
-          </div>
-        ))}
-      </div>
+                          <button
+                            type="button"
+                            onClick={() => removeSellPhoto(p.id)}
+                            className="absolute top-2 right-2 px-2 py-1 rounded-md bg-black/70 text-white text-[11px] font-semibold border border-white/10 hover:bg-black/80"
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      ))}
+                    </div>
 
-      <div className="mt-3">
-        <button
-          type="button"
-          onClick={clearSellPhotos}
-          className="px-3 py-2 rounded-md bg-neutral-950/60 hover:bg-neutral-950 text-neutral-100 text-xs font-semibold border border-neutral-800"
-        >
-          Clear all photos
-        </button>
-      </div>
-    </>
-  )}
-</div>
+                    <div className="mt-3">
+                      <button
+                        type="button"
+                        onClick={clearSellPhotos}
+                        className="px-3 py-2 rounded-md bg-neutral-950/60 hover:bg-neutral-950 text-neutral-100 text-xs font-semibold border border-neutral-800"
+                      >
+                        Clear all photos
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
 
-{/* Prices */}
-<div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-  <div>
-    <label className="block text-xs font-semibold text-neutral-400 mb-1">
-      Reserve Price (£)
-    </label>
-    <input
-      type="number"
-      name="reserve_price"
-      value={sellForm.reserve_price}
-      onChange={handleSellChange}
-      className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
-      min={0}
-    />
-  </div>
+              {/* Prices */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div>
+                  <label className="block text-xs font-semibold text-neutral-400 mb-1">
+                    Reserve Price (£)
+                  </label>
+                  <input
+                    type="number"
+                    name="reserve_price"
+                    value={sellForm.reserve_price}
+                    onChange={handleSellChange}
+                    className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                    min={0}
+                  />
+                </div>
 
-  <div>
-    <label className="block text-xs font-semibold text-neutral-400 mb-1">
-      Starting Price (£) (optional)
-    </label>
-    <input
-      type="number"
-      name="starting_price"
-      value={sellForm.starting_price}
-      onChange={handleSellChange}
-      className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
-      min={0}
-    />
-  </div>
+                <div>
+                  <label className="block text-xs font-semibold text-neutral-400 mb-1">
+                    Starting Price (£) (optional)
+                  </label>
+                  <input
+                    type="number"
+                    name="starting_price"
+                    value={sellForm.starting_price}
+                    onChange={handleSellChange}
+                    className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                    min={0}
+                  />
+                </div>
 
-  <div>
-    <label className="block text-xs font-semibold text-neutral-400 mb-1">
-      Buy Now Price (£) (optional)
-    </label>
-    <input
-      type="number"
-      name="buy_now"
-      value={sellForm.buy_now}
-      onChange={handleSellChange}
-      className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
-      min={0}
-    />
-  </div>
-</div>
+                <div>
+                  <label className="block text-xs font-semibold text-neutral-400 mb-1">
+                    Buy Now Price (£) (optional)
+                  </label>
+                  <input
+                    type="number"
+                    name="buy_now"
+                    value={sellForm.buy_now}
+                    onChange={handleSellChange}
+                    className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                    min={0}
+                  />
+                </div>
+              </div>
 
-{/* Fee preview */}
-<div className={`mt-4 p-4 ${accentBgSoft} border ${accentBorder} rounded-md space-y-2`}>
-  <h3 className="text-sm font-semibold text-sky-200">
-    Fees &amp; Expected Return (based on your reserve)
-  </h3>
+              {/* Fee preview */}
+              <div className={`mt-4 p-4 ${accentBgSoft} border ${accentBorder} rounded-md space-y-2`}>
+                <h3 className="text-sm font-semibold text-sky-200">
+                  Fees &amp; Expected Return (based on your reserve)
+                </h3>
 
-  <p className="text-xs text-neutral-200">
-    <strong>Commission rate:</strong> {commissionRate}% (estimate)
-  </p>
-  <p className="text-xs text-neutral-200">
-    <strong>Estimated commission:</strong> £{formatMoney(commissionValue)}
-  </p>
-  <p className="text-xs text-neutral-200">
-    <strong>Estimated you receive:</strong> £{formatMoney(expectedReturn)} (based on reserve)
-  </p>
+                <p className="text-xs text-neutral-200">
+                  <strong>Commission rate:</strong> {commissionRate}% (estimate)
+                </p>
+                <p className="text-xs text-neutral-200">
+                  <strong>Estimated commission:</strong> £{formatMoney(commissionValue)}
+                </p>
+                <p className="text-xs text-neutral-200">
+                  <strong>Estimated you receive:</strong> £{formatMoney(expectedReturn)} (based on reserve)
+                </p>
 
-  <p className="text-[11px] text-neutral-400">
-    This is a simple preview. Final commission is based on the final sale price.
-  </p>
-</div>
+                <p className="text-[11px] text-neutral-400">
+                  This is a simple preview. Final commission is based on the final sale price.
+                </p>
+              </div>
 
               {/* Checkboxes */}
               <div className="space-y-2 text-xs text-neutral-300">
@@ -2267,7 +2241,10 @@ const handleSellSubmit = async (e: FormEvent) => {
                     );
 
                   const canConfirmReceived =
-                    isBuyer && !isComplete && paymentLower === "paid" && ["receipt_pending", "dispatch_sent"].includes(txStatusLower);
+                    isBuyer &&
+                    !isComplete &&
+                    paymentLower === "paid" &&
+                    ["receipt_pending", "dispatch_sent"].includes(txStatusLower);
 
                   const statusChip = txStatusLabel(tx);
 
@@ -2585,25 +2562,26 @@ const handleSellSubmit = async (e: FormEvent) => {
                   ))}
 
                   <div>
-  <label className="block text-xs font-semibold text-neutral-400 mb-1">
-    Gear type
-  </label>
-  <select
-    value={editForm.gear_type}
-    onChange={(e) =>
-      setEditForm((p) => ({ ...p, gear_type: e.target.value }))
-    }
-    className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-900/40 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
-  >
-    <option value="">Select type</option>
-    <option value="camera">Camera</option>
-    <option value="lens">Lens</option>
-    <option value="film_camera">Film camera</option>
-    <option value="bundle">Bundle</option>
-    <option value="accessory">Accessory</option>
-    <option value="other">Other</option>
-  </select>
-</div>
+                    <label className="block text-xs font-semibold text-neutral-400 mb-1">
+                      Gear type
+                    </label>
+                    <select
+                      value={editForm.gear_type}
+                      onChange={(e) =>
+                        setEditForm((p) => ({ ...p, gear_type: e.target.value }))
+                      }
+                      className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-900/40 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                    >
+                      <option value="">Select type</option>
+                      <option value="camera">Camera</option>
+                      <option value="lens">Lens</option>
+                      <option value="film_camera">Film camera</option>
+                      <option value="bundle">Bundle</option>
+                      <option value="accessory">Accessory</option>
+                      <option value="other">Other</option>
+                    </select>
+                  </div>
+
                   <div>
                     <label className="block text-xs font-semibold text-neutral-400 mb-1">Condition</label>
                     <select
