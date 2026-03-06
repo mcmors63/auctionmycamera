@@ -58,7 +58,7 @@ type TxDoc = {
   seller_email?: string;
   buyer_email?: string;
 
-  payment_status?: string;       // paid | unpaid | failed (your scheduler uses paid/unpaid; webhook may mark failed)
+  payment_status?: string;       // paid | unpaid | failed
   transaction_status?: string;   // dispatch_pending | receipt_pending | complete | payment_failed
 
   stripe_payment_intent_id?: string;
@@ -107,7 +107,7 @@ async function updateDocSchemaTolerant(
       return await databases.updateDocument(dbId, colId, docId, data);
     } catch (err: any) {
       const msg = String(err?.message || "");
-      const m = msg.match(/Unknown attribute:\s*([A-Za-z0-9_]+)/i);
+      const m = msg.match(/Unknown attribute:\s*["']?([A-Za-z0-9_]+)["']?/i);
       if (m?.[1]) {
         delete data[m[1]];
         continue;
@@ -158,12 +158,33 @@ export default function AdminTransactionClient() {
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string>("");
 
-  // Admin-editable fields (camera-safe)
+  // Admin-editable fields
   const [adminNotes, setAdminNotes] = useState("");
   const [txStatus, setTxStatus] = useState<TxStatus>("dispatch_pending");
 
   // -----------------------------
-  // Verify admin (match AdminClient.tsx)
+  // JWT helper for protected admin routes
+  // -----------------------------
+  async function getJwtOrThrow(): Promise<string> {
+    const jwtRes: any = await account.createJWT();
+    const jwt = String(jwtRes?.jwt || "").trim();
+    if (!jwt) throw new Error("Missing JWT");
+    return jwt;
+  }
+
+  async function authedFetch(url: string, init?: RequestInit) {
+    const jwt = await getJwtOrThrow();
+    return fetch(url, {
+      ...init,
+      headers: {
+        ...(init?.headers || {}),
+        Authorization: `Bearer ${jwt}`,
+      },
+    });
+  }
+
+  // -----------------------------
+  // Verify admin
   // -----------------------------
   useEffect(() => {
     const verify = async () => {
@@ -213,12 +234,10 @@ export default function AdminTransactionClient() {
 
         setAdminNotes(String(doc.admin_notes || doc.notes || "").trim());
 
-        // Default status selection (camera pipeline)
         const current = String(doc.transaction_status || "").trim().toLowerCase();
         if (TX_STATUSES.includes(current as any)) {
           setTxStatus(current as TxStatus);
         } else {
-          // if unknown, keep something sane
           setTxStatus("dispatch_pending");
         }
       } catch (err) {
@@ -247,16 +266,9 @@ export default function AdminTransactionClient() {
     setError("");
 
     try {
-      /**
-       * IMPORTANT:
-       * - Stripe/webhooks are the source of truth for payment_status.
-       * - Admin can manage fulfilment status (transaction_status) + notes.
-       */
       const updateData: Record<string, any> = {
         transaction_status: txStatus,
         admin_notes: adminNotes,
-
-        // Best-effort timestamp (Appwrite has $updatedAt anyway)
         updated_at: new Date().toISOString(),
       };
 
@@ -277,7 +289,6 @@ export default function AdminTransactionClient() {
     }
   };
 
-  // Force complete (still allowed)
   const handleMarkCompleteOverride = async () => {
     if (!tx) return;
 
@@ -333,24 +344,26 @@ export default function AdminTransactionClient() {
 
     try {
       setDeleting(true);
+      setError("");
 
-      const res = await fetch("/api/admin/delete-transaction", {
+      const res = await authedFetch("/api/admin/delete-transaction", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ txId: tx.$id, reason }),
       });
 
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
+      const data = await res.json().catch(() => ({} as any));
+
+      if (!res.ok || data?.error) {
         console.error("Archive transaction failed:", data);
-        throw new Error(data.error || "Request failed");
+        throw new Error(data?.error || "Request failed");
       }
 
       alert("Transaction archived.");
       router.push("/admin");
-    } catch (err) {
+    } catch (err: any) {
       console.error("Archive transaction failed:", err);
-      alert("Failed to archive transaction.");
+      alert(err?.message || "Failed to archive transaction.");
     } finally {
       setDeleting(false);
     }
@@ -419,7 +432,7 @@ export default function AdminTransactionClient() {
               </p>
             </div>
 
-            {/* Admin controls (camera-safe) */}
+            {/* Admin controls */}
             <div className="border rounded-xl p-4 bg-neutral-50 mb-6">
               <h2 className="font-semibold text-lg mb-3">Admin Controls</h2>
 
@@ -448,7 +461,7 @@ export default function AdminTransactionClient() {
               </p>
             </div>
 
-            {/* DOCUMENTS SECTION (kept) */}
+            {/* DOCUMENTS SECTION */}
             <div className="mt-6 border rounded-xl p-4 bg-neutral-50">
               <h2 className="font-semibold text-lg mb-2">Documents &amp; uploads</h2>
               <p className="text-xs text-neutral-600 mb-3">
