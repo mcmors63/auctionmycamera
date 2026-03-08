@@ -1,8 +1,8 @@
-// app/current-listings/CurrentListingsClient.tsx
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { useEffect, useMemo, useState } from "react";
 import ListingCard from "./ListingCard";
 
 type ListingLike = {
@@ -58,6 +58,16 @@ function niceEnum(s?: string | null) {
   return cap(v.replace(/_/g, " "));
 }
 
+function pickQueryParam(sp: ReturnType<typeof useSearchParams>) {
+  return (
+    sp.get("query") ||
+    sp.get("q") ||
+    sp.get("search") ||
+    sp.get("search_term_string") ||
+    ""
+  );
+}
+
 function getListingTitle(l: ListingLike) {
   const itemTitle = String(l?.item_title || "").trim();
   if (itemTitle) return itemTitle;
@@ -74,6 +84,13 @@ function getListingTitle(l: ListingLike) {
   if (gearType) return `${niceEnum(gearType)} listing`;
 
   return "Camera gear listing";
+}
+
+function getListingLabel(l: ListingLike) {
+  const gearType = niceEnum(l?.gear_type);
+  const era = niceEnum(l?.era);
+  const parts = [gearType, era].filter(Boolean);
+  return parts.join(" • ");
 }
 
 function getSearchHaystack(l: ListingLike) {
@@ -118,6 +135,7 @@ function timeForEndingSort(l: ListingLike, tab: Tab) {
       safeTime(l.$createdAt)
     );
   }
+
   return (
     safeTime(l.auction_start) ||
     safeTime(l.start_time) ||
@@ -127,10 +145,50 @@ function timeForEndingSort(l: ListingLike, tab: Tab) {
   );
 }
 
+function formatDateLabel(value?: string | null) {
+  if (!value) return null;
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return null;
+
+  return new Intl.DateTimeFormat("en-GB", {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    timeZone: "Europe/London",
+  }).format(d);
+}
+
+function firstTimeLabel(listings: ListingLike[], tab: Tab) {
+  if (!listings.length) return null;
+  const first = listings[0];
+  return tab === "live"
+    ? formatDateLabel(first.auction_end || first.end_time || null)
+    : formatDateLabel(first.auction_start || first.start_time || null);
+}
+
+function sortLabel(sort: SortKey, tab: Tab) {
+  if (sort === "ending") return tab === "live" ? "Ending soon" : "Starting soon";
+  if (sort === "newest") return "Newest";
+  if (sort === "az") return "Title A → Z";
+  if (sort === "priceLow") return "Price low → high";
+  return "Price high → low";
+}
+
 export default function CurrentListingsClient({ initialLive, initialSoon }: Props) {
+  const searchParams = useSearchParams();
+
   const [tab, setTab] = useState<Tab>("live");
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState<SortKey>("ending");
+
+  useEffect(() => {
+    const qFromUrl = pickQueryParam(searchParams).trim();
+    if (!qFromUrl) return;
+    setSearch((prev) => (prev.trim().length ? prev : qFromUrl));
+  }, [searchParams]);
 
   const source = tab === "live" ? initialLive : initialSoon;
 
@@ -143,7 +201,9 @@ export default function CurrentListingsClient({ initialLive, initialSoon }: Prop
     let results = [...(source || [])].filter((l) => l && typeof l === "object" && l.$id);
 
     const q = normalizeText(search);
-    if (q) results = results.filter((l) => getSearchHaystack(l).includes(q));
+    if (q) {
+      results = results.filter((l) => getSearchHaystack(l).includes(q));
+    }
 
     if (sort === "ending") {
       results.sort((a, b) => timeForEndingSort(a, tab) - timeForEndingSort(b, tab));
@@ -157,8 +217,13 @@ export default function CurrentListingsClient({ initialLive, initialSoon }: Prop
       results.sort((a, b) => getListingTitle(a).localeCompare(getListingTitle(b)));
     }
 
-    if (sort === "priceLow") results.sort((a, b) => priceForSort(a) - priceForSort(b));
-    if (sort === "priceHigh") results.sort((a, b) => priceForSort(b) - priceForSort(a));
+    if (sort === "priceLow") {
+      results.sort((a, b) => priceForSort(a) - priceForSort(b));
+    }
+
+    if (sort === "priceHigh") {
+      results.sort((a, b) => priceForSort(b) - priceForSort(a));
+    }
 
     return results;
   }, [source, search, sort, tab]);
@@ -170,6 +235,24 @@ export default function CurrentListingsClient({ initialLive, initialSoon }: Prop
 
   const hasActiveFilters = search.trim().length > 0 || sort !== "ending";
 
+  const tabHeading = tab === "live" ? "Live auctions" : "Coming next";
+  const tabBody =
+    tab === "live"
+      ? "These listings are currently live for bidding in this week’s auction window."
+      : "These approved listings are queued for the next weekly auction window.";
+
+  const scheduleNote =
+    tab === "live"
+      ? "Live auctions run Monday 01:00 to Sunday 23:00, UK time."
+      : "Queued listings move into the next weekly auction once their slot opens.";
+
+  const firstLabel = useMemo(() => firstTimeLabel(filtered, tab), [filtered, tab]);
+
+  const firstTitle = useMemo(() => {
+    if (!filtered.length) return null;
+    return getListingTitle(filtered[0]);
+  }, [filtered]);
+
   const emptyTitle =
     baseCount === 0
       ? tab === "live"
@@ -180,37 +263,46 @@ export default function CurrentListingsClient({ initialLive, initialSoon }: Prop
   const emptyBody =
     baseCount === 0
       ? tab === "live"
-        ? "Check back soon — new cameras, lenses and accessories are added regularly. You can also browse what’s coming next."
+        ? "Check back soon. New cameras, lenses and accessories are added regularly, and you can also browse what is coming next."
         : "Try the Live tab, or come back later once new listings are approved and queued."
       : "Try a different search, clear filters, or switch tabs.";
 
+  const showingText =
+    search.trim().length > 0
+      ? `Showing ${filtered.length} result${filtered.length === 1 ? "" : "s"} for “${search.trim()}”.`
+      : `Showing ${filtered.length} of ${baseCount} in this tab.`;
+
   return (
-    <main className="min-h-screen bg-background text-foreground">
+    <section className="min-h-screen bg-background text-foreground">
       {/* Header */}
       <section className="border-b border-border">
         <div className="max-w-6xl mx-auto px-6 py-10">
-          <h1 className="text-3xl sm:text-4xl font-extrabold tracking-tight">Current auctions</h1>
+          <div className="max-w-3xl">
+            <h2 className="text-3xl sm:text-4xl font-extrabold tracking-tight">
+              Browse the auction board
+            </h2>
 
-          <p className="mt-2 text-sm sm:text-base text-muted-foreground max-w-2xl">
-            Browse live camera, lens and photography gear auctions — plus what’s coming next.
-          </p>
+            <p className="mt-3 text-sm sm:text-base text-muted-foreground leading-relaxed">
+              Search cameras, lenses and photography gear, switch between live and queued
+              listings, and sort the board the way you want.
+            </p>
 
-          {/* Helpful internal links */}
-          <div className="mt-3 flex flex-wrap gap-x-4 gap-y-2 text-sm">
-            <span className="text-muted-foreground">New here?</span>
-            <Link href="/how-it-works" className="text-primary underline hover:opacity-80">
-              How it works
-            </Link>
-            <Link href="/fees" className="text-primary underline hover:opacity-80">
-              Fees
-            </Link>
-            <Link href="/sell" className="text-primary underline hover:opacity-80">
-              Sell your gear
-            </Link>
+            <div className="mt-4 flex flex-wrap gap-x-4 gap-y-2 text-sm">
+              <span className="text-muted-foreground">Useful:</span>
+              <Link href="/how-it-works" className="text-primary underline hover:opacity-80">
+                How it works
+              </Link>
+              <Link href="/fees" className="text-primary underline hover:opacity-80">
+                Fees
+              </Link>
+              <Link href="/sell" className="text-primary underline hover:opacity-80">
+                Sell your gear
+              </Link>
+            </div>
           </div>
 
           {/* Tabs */}
-          <div className="mt-6 flex flex-wrap gap-3">
+          <div className="mt-7 flex flex-wrap gap-3">
             <TabButton
               active={tab === "live"}
               onClick={() => setTab("live")}
@@ -223,8 +315,26 @@ export default function CurrentListingsClient({ initialLive, initialSoon }: Prop
             />
           </div>
 
+          {/* Summary cards */}
+          <div className="mt-6 grid md:grid-cols-3 gap-4">
+            <InfoCard title={tabHeading} body={tabBody} />
+            <InfoCard title="Schedule" body={scheduleNote} />
+            <InfoCard
+              title="At a glance"
+              body={
+                filtered.length > 0
+                  ? firstLabel
+                    ? tab === "live"
+                      ? `First result to review ends ${firstLabel} UK time.`
+                      : `First result in this view starts ${firstLabel} UK time.`
+                    : `Top result in this view: ${firstTitle || "Listing available"}.`
+                  : "Use the search and sort controls below to narrow the board."
+              }
+            />
+          </div>
+
           {/* Filters */}
-          <div className="mt-6 rounded-2xl border border-border bg-card p-4 sm:p-5">
+          <div className="mt-6 rounded-3xl border border-border bg-card p-4 sm:p-5">
             <div className="grid md:grid-cols-3 gap-4">
               <div className="md:col-span-2">
                 <label className="block text-[11px] font-semibold tracking-wide text-muted-foreground uppercase mb-2">
@@ -232,10 +342,10 @@ export default function CurrentListingsClient({ initialLive, initialSoon }: Prop
                 </label>
                 <input
                   type="text"
-                  placeholder='e.g. "Canon 5D", "Leica M6", "EF 24-70", "tripod"'
+                  placeholder='Try "Canon 5D", "Leica M6", "EF 24-70", "tripod"'
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
-                  className="w-full px-4 py-2.5 rounded-xl bg-background border border-border text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+                  className="w-full px-4 py-3 rounded-xl bg-background border border-border text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
                 />
               </div>
 
@@ -246,7 +356,7 @@ export default function CurrentListingsClient({ initialLive, initialSoon }: Prop
                 <select
                   value={sort}
                   onChange={(e) => setSort(e.target.value as SortKey)}
-                  className="w-full px-4 py-2.5 rounded-xl bg-background border border-border text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                  className="w-full px-4 py-3 rounded-xl bg-background border border-border text-sm focus:outline-none focus:ring-2 focus:ring-ring"
                 >
                   <option value="ending">{tab === "live" ? "Ending soon" : "Starting soon"}</option>
                   <option value="newest">Newest</option>
@@ -257,11 +367,13 @@ export default function CurrentListingsClient({ initialLive, initialSoon }: Prop
               </div>
             </div>
 
-            <div className="mt-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-              <p className="text-[12px] text-muted-foreground">
-                Showing <span className="text-foreground font-semibold">{filtered.length}</span> of{" "}
-                <span className="text-foreground font-semibold">{baseCount}</span> in this tab.
-              </p>
+            <div className="mt-4 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
+              <div className="flex flex-wrap items-center gap-2 text-[12px]">
+                <span className="text-muted-foreground">{showingText}</span>
+                <span className="inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-semibold border border-primary/20 bg-primary/10 text-foreground">
+                  {sortLabel(sort, tab)}
+                </span>
+              </div>
 
               {hasActiveFilters ? (
                 <button
@@ -270,18 +382,18 @@ export default function CurrentListingsClient({ initialLive, initialSoon }: Prop
                     setSearch("");
                     setSort("ending");
                   }}
-                  className="px-4 py-2 rounded-xl text-sm font-semibold border border-border bg-background hover:bg-accent transition w-full sm:w-auto"
+                  className="px-4 py-2 rounded-xl text-sm font-semibold border border-border bg-background hover:bg-accent transition w-full lg:w-auto"
                 >
                   Clear filters
                 </button>
               ) : null}
             </div>
 
-            {/* Notice */}
             <div className="mt-4 rounded-2xl border border-border bg-background px-4 py-3">
               <p className="text-[12px] text-muted-foreground leading-relaxed">
-                Condition matters: sellers should describe cosmetic wear, faults, fungus/haze, shutter count (if known), and
-                what’s included. Buyers should review the description carefully before bidding.{" "}
+                Condition matters: sellers should describe cosmetic wear, faults, fungus or haze,
+                shutter count if known, and what is included. Buyers should review the
+                description carefully before bidding.{" "}
                 <Link href="/faq" className="text-primary underline hover:opacity-80">
                   Read FAQ
                 </Link>
@@ -296,8 +408,8 @@ export default function CurrentListingsClient({ initialLive, initialSoon }: Prop
       <section className="max-w-6xl mx-auto px-6 py-10">
         {filtered.length === 0 ? (
           <div className="rounded-3xl border border-border bg-card p-10 text-center">
-            <p className="font-semibold">{emptyTitle}</p>
-            <p className="mt-2 text-sm text-muted-foreground">{emptyBody}</p>
+            <p className="text-lg font-semibold">{emptyTitle}</p>
+            <p className="mt-2 text-sm text-muted-foreground max-w-2xl mx-auto">{emptyBody}</p>
 
             <div className="mt-6 flex flex-wrap justify-center gap-3">
               <Link
@@ -321,14 +433,33 @@ export default function CurrentListingsClient({ initialLive, initialSoon }: Prop
             </div>
           </div>
         ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
-            {filtered.map((listing) => (
-              <ListingCard key={listing.$id} listing={listing as any} />
-            ))}
-          </div>
+          <>
+            <div className="mb-6 flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3">
+              <div>
+                <h3 className="text-xl font-bold">{tabHeading}</h3>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  {search.trim().length > 0
+                    ? `Filtered by search match: ${search.trim()}`
+                    : tab === "live"
+                    ? "Items currently open for bidding."
+                    : "Approved items lined up for the next auction window."}
+                </p>
+              </div>
+
+              <div className="text-sm text-muted-foreground">
+                {filtered.length} result{filtered.length === 1 ? "" : "s"}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
+              {filtered.map((listing) => (
+                <ListingCard key={listing.$id} listing={listing as any} />
+              ))}
+            </div>
+          </>
         )}
       </section>
-    </main>
+    </section>
   );
 }
 
@@ -348,10 +479,23 @@ function TabButton({
       aria-pressed={active}
       className={[
         "px-4 py-2 rounded-full text-sm font-semibold border transition",
-        active ? "border-primary/40 bg-primary/10 text-foreground" : "border-border bg-card text-muted-foreground",
+        active
+          ? "border-primary/40 bg-primary/10 text-foreground"
+          : "border-border bg-card text-muted-foreground",
       ].join(" ")}
     >
       {label}
     </button>
+  );
+}
+
+function InfoCard({ title, body }: { title: string; body: string }) {
+  return (
+    <div className="rounded-2xl border border-border bg-card p-4">
+      <p className="text-[11px] font-semibold tracking-wide uppercase text-muted-foreground">
+        {title}
+      </p>
+      <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{body}</p>
+    </div>
   );
 }

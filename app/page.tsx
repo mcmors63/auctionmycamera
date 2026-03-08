@@ -10,7 +10,7 @@ const SITE_URL = (process.env.NEXT_PUBLIC_SITE_URL || "https://auctionmycamera.c
   ""
 );
 
-// ✅ Sister sites (keep as constants to avoid typos)
+// Sister sites
 const PLATE_URL = "https://auctionmyplate.co.uk";
 const SEALABID_URL = "https://sealabid.com";
 
@@ -116,8 +116,8 @@ export default function HomePage() {
   };
 
   return (
-    <div className="min-h-screen bg-background text-foreground">
-      {/* Structured data (SEO) */}
+    <main className="min-h-screen bg-background text-foreground">
+      {/* Structured data */}
       <script
         type="application/ld+json"
         dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLdOrg) }}
@@ -137,7 +137,6 @@ export default function HomePage() {
 
       {/* HERO */}
       <section className="relative overflow-hidden border-b border-border">
-        {/* Background photo (modern lens) */}
         <div className="absolute inset-0">
           <Image
             src={HERO_BG_SRC}
@@ -149,10 +148,8 @@ export default function HomePage() {
             className="object-cover"
             style={{ opacity: 0.42 }}
           />
-
           <div className="absolute inset-0 bg-gradient-to-b from-background/0 via-background/30 to-background/90" />
           <div className="absolute inset-0 bg-gradient-to-r from-background/85 via-background/35 to-transparent" />
-
           <div className="absolute -top-28 -left-28 h-80 w-80 rounded-full bg-primary/10 blur-3xl" />
           <div className="absolute -top-36 right-[-10rem] h-[28rem] w-[28rem] rounded-full bg-primary/8 blur-3xl" />
         </div>
@@ -165,22 +162,22 @@ export default function HomePage() {
                 <span className="text-muted-foreground">•</span>
                 <span className="text-muted-foreground">Secure payments</span>
                 <span className="text-muted-foreground">•</span>
-                <span className="text-muted-foreground">Modern + antique gear</span>
+                <span className="text-muted-foreground">Modern + vintage gear</span>
               </div>
 
               <h1 className="mt-6 text-4xl sm:text-5xl lg:text-6xl font-extrabold leading-[1.02] tracking-tight">
-                Sell camera gear
-                <span className="block text-primary">through a weekly auction</span>
+                Buy and sell camera gear
+                <span className="block text-primary">through a clear weekly auction</span>
               </h1>
 
-              <p className="mt-5 text-base sm:text-lg text-muted-foreground max-w-xl leading-relaxed">
-                List for free and reach serious UK buyers. Auctions run{" "}
-                <span className="font-semibold text-foreground">Monday 01:00</span>{" "}
-                to <span className="font-semibold text-foreground">Sunday 23:00</span>{" "}
-                (UK time). Clear steps for sellers and secure Stripe checkout for buyers.
+              <p className="mt-5 text-base sm:text-lg text-muted-foreground max-w-2xl leading-relaxed">
+                AuctionMyCamera is a UK marketplace for cameras, lenses, and photography gear.
+                Sellers list for free during launch, approved items enter the next auction
+                window, buyers bid through the week, and everyone follows a straightforward
+                post-sale process.
               </p>
 
-              <p className="mt-3 text-sm text-muted-foreground max-w-xl">
+              <p className="mt-4 text-sm text-muted-foreground max-w-2xl leading-relaxed">
                 New here? Start with{" "}
                 <Link href="/how-it-works" className="text-foreground underline hover:opacity-80">
                   how it works
@@ -191,24 +188,6 @@ export default function HomePage() {
                 </Link>
                 .
               </p>
-
-              <div className="mt-5 rounded-2xl border border-border bg-card px-4 py-3 max-w-xl">
-                <p className="text-sm font-semibold">Free auto-relist until sold</p>
-                <p className="mt-1 text-xs text-muted-foreground leading-relaxed">
-                  If it doesn’t sell this week, you can have it automatically re-entered
-                  into future weekly auctions — at no extra cost — until it sells.
-                </p>
-              </div>
-
-              <div className="mt-7 grid sm:grid-cols-2 lg:grid-cols-4 gap-3 max-w-3xl">
-                <Benefit title="Free to list" body="No listing fee to get started." />
-                <Benefit title="Stripe payments" body="Secure checkout and clear steps." />
-                <Benefit title="Reserves supported" body="Set a minimum you’re happy with." />
-                <Benefit
-                  title="Optional free auto-relist"
-                  body="Unsold items can re-enter future auctions until sold."
-                />
-              </div>
 
               <div className="mt-8 flex flex-wrap gap-4">
                 <Link
@@ -224,122 +203,71 @@ export default function HomePage() {
                 >
                   Sell your gear
                 </Link>
-
-                <Link
-                  href="/login-or-register"
-                  className="px-6 py-3 rounded-xl font-semibold text-sm sm:text-base transition border border-border bg-background hover:bg-accent focus:outline-none focus:ring-2 focus:ring-ring"
-                >
-                  Login / Register
-                </Link>
               </div>
 
-              <p className="mt-4 text-xs sm:text-sm text-muted-foreground max-w-xl">
-                Listings are approved, then queued for the next weekly auction window.
+              <p className="mt-4 text-sm text-muted-foreground">
+                Already have an account?{" "}
+                <Link
+                  href="/login-or-register"
+                  className="text-foreground underline underline-offset-4 hover:opacity-80"
+                >
+                  Login or register
+                </Link>
+                .
               </p>
+
+              <div className="mt-8 grid sm:grid-cols-2 lg:grid-cols-4 gap-3 max-w-4xl">
+                <HeroPill>Free to list during launch</HeroPill>
+                <HeroPill>Auctions run Monday 01:00 to Sunday 23:00</HeroPill>
+                <HeroPill>Cameras, lenses and gear</HeroPill>
+                <HeroPill>Optional free auto-relist until sold</HeroPill>
+              </div>
             </div>
 
-            <div className="lg:col-span-5 space-y-4">
+            <div className="lg:col-span-5">
               <div className="rounded-3xl p-6 sm:p-7 border border-border bg-card shadow-sm">
                 <p className="text-[11px] font-semibold tracking-[0.22em] text-muted-foreground uppercase">
-                  Seller promise
+                  This week’s auction format
                 </p>
 
-                <h3 className="mt-3 text-xl sm:text-2xl font-extrabold leading-tight">
-                  List once.
-                  <span className="block text-primary">
-                    Keep it in the weekly auction until it sells.
-                  </span>
-                </h3>
+                <h2 className="mt-3 text-2xl font-extrabold leading-tight">
+                  Simple, specialist and easy to follow.
+                </h2>
 
-                <p className="mt-3 text-sm text-muted-foreground leading-relaxed">
-                  You can opt into free auto-relist — if it doesn’t sell, it rolls into the
-                  next weekly auction automatically. No extra fees to keep it live.
-                </p>
+                <div className="mt-5 space-y-4">
+                  <HeroStep
+                    number="1"
+                    title="Seller lists the item"
+                    body="Create an account, add photos, and describe the camera, lens or gear clearly."
+                  />
+                  <HeroStep
+                    number="2"
+                    title="We approve and queue it"
+                    body="Approved listings are placed into the next weekly auction window."
+                  />
+                  <HeroStep
+                    number="3"
+                    title="Bidding runs all week"
+                    body="Auctions open Monday 01:00 and close Sunday 23:00, UK time."
+                  />
+                  <HeroStep
+                    number="4"
+                    title="Sold item moves to completion"
+                    body="Buyer pays securely and both sides follow the next steps after sale."
+                  />
+                </div>
 
-                <div className="mt-4 grid grid-cols-2 gap-3">
+                <div className="mt-6 grid grid-cols-2 gap-3">
                   <MiniPoint>✓ Free to list</MiniPoint>
                   <MiniPoint>✓ Reserve supported</MiniPoint>
                   <MiniPoint>✓ Stripe checkout</MiniPoint>
                   <MiniPoint>✓ Auto-relist option</MiniPoint>
                 </div>
 
-                <div className="mt-5 flex gap-3">
-                  <Link
-                    href="/sell"
-                    className="flex-1 px-5 py-3 rounded-xl font-semibold text-sm text-center shadow-sm transition bg-primary text-primary-foreground hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-ring"
-                  >
-                    Start selling
-                  </Link>
-                  <Link
-                    href="/how-it-works"
-                    className="flex-1 px-5 py-3 rounded-xl font-semibold text-sm text-center transition border border-border bg-card hover:bg-accent focus:outline-none focus:ring-2 focus:ring-ring"
-                  >
-                    How it works
-                  </Link>
-                </div>
-
-                <p className="mt-3 text-[11px] text-muted-foreground">
-                  You’re always in control — auto-relist is optional.
-                </p>
-              </div>
-
-              <div className="rounded-3xl p-6 sm:p-7 border border-border bg-card shadow-sm">
-                <p className="text-[11px] font-semibold tracking-[0.22em] text-muted-foreground uppercase">
-                  Auction schedule
-                </p>
-
-                <div className="mt-4 space-y-4">
-                  <InfoRow
-                    label="Opens"
-                    value={
-                      <>
-                        <span className="font-semibold text-foreground">Monday</span>{" "}
-                        <span className="text-muted-foreground">01:00</span>
-                      </>
-                    }
-                  />
-                  <InfoRow
-                    label="Closes"
-                    value={
-                      <>
-                        <span className="font-semibold text-foreground">Sunday</span>{" "}
-                        <span className="text-muted-foreground">23:00</span>
-                      </>
-                    }
-                  />
-                  <InfoRow
-                    label="If it doesn’t sell"
-                    value={<span className="text-muted-foreground">Optional free auto-relist.</span>}
-                  />
-                </div>
-
-                <div className="mt-6 flex gap-3">
-                  <Link
-                    href="/current-listings"
-                    className="flex-1 px-5 py-3 rounded-xl font-semibold text-sm text-center transition border border-border bg-card hover:bg-accent focus:outline-none focus:ring-2 focus:ring-ring"
-                  >
-                    View auctions
-                  </Link>
-                  <Link
-                    href="/sell"
-                    className="flex-1 px-5 py-3 rounded-xl font-semibold text-sm text-center shadow-sm transition bg-primary text-primary-foreground hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-ring"
-                  >
-                    Start selling
-                  </Link>
-                </div>
-              </div>
-
-              <div className="rounded-3xl p-6 sm:p-7 border border-border bg-card">
-                <p className="text-[11px] font-semibold tracking-[0.22em] text-muted-foreground uppercase">
-                  Useful pages
-                </p>
-                <div className="mt-4 grid grid-cols-2 gap-3">
-                  <QuickLink href="/sell">Sell your gear</QuickLink>
-                  <QuickLink href="/current-listings">Current auctions</QuickLink>
+                <div className="mt-6 grid grid-cols-3 gap-3">
                   <QuickLink href="/how-it-works">How it works</QuickLink>
                   <QuickLink href="/fees">Fees</QuickLink>
                   <QuickLink href="/faq">FAQ</QuickLink>
-                  <QuickLink href="/about">About</QuickLink>
                 </div>
               </div>
             </div>
@@ -347,12 +275,154 @@ export default function HomePage() {
         </div>
       </section>
 
+      {/* Banner */}
       <section className="border-b border-border">
         <HomeBannerCarousel />
       </section>
 
-      {/* ✅ NEW: Sister marketplaces (subtle, premium, non-spammy) */}
-      <section className="border-b border-border bg-background">
+      {/* HOW IT WORKS */}
+      <section className="relative border-b border-border bg-background overflow-hidden">
+        <div className="absolute inset-0">
+          <Image
+            src={ANTIQUE_BG_SRC}
+            alt=""
+            aria-hidden="true"
+            fill
+            sizes="100vw"
+            className="object-cover"
+            style={{ opacity: 0.30 }}
+          />
+          <div className="absolute inset-0 bg-background/40" />
+          <div className="absolute inset-0 bg-gradient-to-r from-background/70 via-background/40 to-transparent" />
+        </div>
+
+        <div className="relative max-w-5xl mx-auto px-6 py-16">
+          <h2 className="text-3xl sm:text-4xl font-bold text-center">How it works</h2>
+          <p className="mt-3 text-center text-muted-foreground max-w-2xl mx-auto">
+            A simple weekly auction for cameras, lenses, and photography gear — modern and vintage.
+          </p>
+
+          <div className="mt-10 grid md:grid-cols-4 gap-7">
+            <StepCard
+              step={1}
+              title="Create your listing"
+              body="Add details and upload clear photos of your item."
+            />
+            <StepCard
+              step={2}
+              title="We approve and queue it"
+              body="Approved listings are placed into the next weekly auction window."
+            />
+            <StepCard
+              step={3}
+              title="Auction runs"
+              body="Bidders compete Monday 01:00 to Sunday 23:00."
+            />
+            <StepCard
+              step={4}
+              title="Sold, then completed"
+              body="Buyer pays securely and both sides follow the next steps after sale."
+            />
+          </div>
+
+          <div className="mt-10 flex justify-center">
+            <Link
+              href="/how-it-works"
+              className="px-6 py-3 rounded-xl font-semibold text-sm sm:text-base transition border border-border bg-card hover:bg-accent focus:outline-none focus:ring-2 focus:ring-ring"
+            >
+              Read the full “How it works”
+            </Link>
+          </div>
+        </div>
+      </section>
+
+      {/* WHY PEOPLE USE IT */}
+      <section className="py-16 px-6">
+        <div className="max-w-5xl mx-auto">
+          <div className="text-center max-w-3xl mx-auto">
+            <h2 className="text-3xl sm:text-4xl font-bold">
+              Built to make camera buying and selling feel clearer
+            </h2>
+            <p className="mt-4 text-lg text-muted-foreground">
+              Not a cluttered classifieds page. Not a vague private deal. Just a specialist
+              marketplace with a weekly format people can follow.
+            </p>
+          </div>
+
+          <div className="mt-10 grid md:grid-cols-3 gap-5">
+            <TrustItem
+              title="Specialist weekly format"
+              body="Approved listings enter a defined auction window, so buyers and sellers know what happens next."
+            />
+            <TrustItem
+              title="Straightforward selling"
+              body="Listing is free during launch, reserves are supported, and unsold items can be relisted into future auctions."
+            />
+            <TrustItem
+              title="Better post-sale structure"
+              body="Secure Stripe payments and clear next steps make completion easier than informal private deals."
+            />
+          </div>
+
+          <div className="mt-8 flex flex-wrap justify-center gap-4">
+            <Link
+              href="/current-listings"
+              className="px-6 py-3 rounded-xl font-semibold text-sm sm:text-base shadow-sm transition bg-primary text-primary-foreground hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-ring"
+            >
+              Browse current auctions
+            </Link>
+            <Link
+              href="/sell"
+              className="px-6 py-3 rounded-xl font-semibold text-sm sm:text-base transition border border-border bg-card hover:bg-accent focus:outline-none focus:ring-2 focus:ring-ring"
+            >
+              Sell your gear
+            </Link>
+          </div>
+        </div>
+      </section>
+
+      {/* FAQ */}
+      <section className="border-t border-border bg-background">
+        <div className="max-w-4xl mx-auto px-6 py-16">
+          <h2 className="text-3xl font-bold text-center">Quick answers</h2>
+          <p className="mt-3 text-center text-muted-foreground max-w-2xl mx-auto">
+            The common questions people ask before they list or bid.
+          </p>
+
+          <div className="mt-8 space-y-3">
+            <FAQItem q="Is it free to list?">
+              Yes — listing is free during our launch period. You only pay commission if your item sells.
+            </FAQItem>
+            <FAQItem q="When do auctions run?">
+              Weekly from Monday 01:00 to Sunday 23:00 (UK time). Approved listings are queued into the next weekly window.
+            </FAQItem>
+            <FAQItem q="What can I sell?">
+              Cameras, lenses, and photography gear. Create a listing with photos and details, then it’s reviewed before it goes live.
+            </FAQItem>
+            <FAQItem q="How do payments work?">
+              Payments are handled securely through Stripe. Buyers and sellers follow clear steps during and after the sale.
+            </FAQItem>
+          </div>
+
+          <div className="mt-10 flex flex-wrap justify-center gap-4">
+            <Link
+              href="/fees"
+              className="px-6 py-3 rounded-xl font-semibold text-sm sm:text-base transition border border-border bg-card hover:bg-accent focus:outline-none focus:ring-2 focus:ring-ring"
+            >
+              Read fees
+            </Link>
+            <Link
+              href="/faq"
+              className="px-6 py-3 rounded-xl font-semibold text-sm sm:text-base transition border border-border bg-background hover:bg-accent focus:outline-none focus:ring-2 focus:ring-ring"
+            >
+              Full FAQ
+            </Link>
+          </div>
+        </div>
+      </section>
+
+      {/* CROSS-PROMO MOVED LOWER */}
+      <section className="border-t border-border bg-background">
         <div className="max-w-6xl mx-auto px-6 py-10">
           <div className="rounded-3xl border border-border bg-card p-6 sm:p-7 shadow-sm">
             <p className="text-[11px] font-semibold tracking-[0.22em] text-muted-foreground uppercase">
@@ -364,13 +434,13 @@ export default function HomePage() {
                 <h2 className="text-xl sm:text-2xl font-extrabold leading-tight">
                   Selling something else?
                   <span className="block text-primary">
-                    Number Plates on AuctionMyPlate · Premium goods on Sealabid
+                    Number plates on AuctionMyPlate · Premium goods on Sealabid
                   </span>
                 </h2>
 
                 <p className="mt-2 text-sm text-muted-foreground max-w-2xl leading-relaxed">
-                  We run specialist marketplaces with clear rules, secure payments, and a weekly rhythm
-                  where it makes sense.
+                  We run specialist marketplaces with clear rules, secure payments, and a weekly
+                  rhythm where it makes sense.
                 </p>
               </div>
 
@@ -398,128 +468,44 @@ export default function HomePage() {
         </div>
       </section>
 
-      <section className="relative border-b border-border bg-background overflow-hidden">
-        <div className="absolute inset-0">
-          <Image
-            src={ANTIQUE_BG_SRC}
-            alt=""
-            aria-hidden="true"
-            fill
-            sizes="100vw"
-            className="object-cover"
-            style={{ opacity: 0.30 }}
-          />
-
-          <div className="absolute inset-0 bg-background/40" />
-          <div className="absolute inset-0 bg-gradient-to-r from-background/70 via-background/40 to-transparent" />
-        </div>
-
-        <div className="relative max-w-5xl mx-auto px-6 py-16">
-          <h2 className="text-3xl sm:text-4xl font-bold text-center">How it works</h2>
-          <p className="mt-3 text-center text-muted-foreground max-w-2xl mx-auto">
-            A simple weekly auction for cameras, lenses, and photography gear — modern and antique.
-          </p>
-
-          <div className="mt-10 grid md:grid-cols-4 gap-7">
-            <StepCard step={1} title="Create your listing" body="Add details and upload clear photos of your item." />
-            <StepCard
-              step={2}
-              title="We approve & queue it"
-              body="Approved listings are placed into the next weekly auction window."
-            />
-            <StepCard step={3} title="Auction runs" body="Bidders compete Monday 01:00 to Sunday 23:00." />
-            <StepCard step={4} title="Sold → confirm → payout" body="Buyer pays securely. You follow the next steps and payout is arranged." />
-          </div>
-
-          <div className="mt-10 flex justify-center">
-            <Link
-              href="/how-it-works"
-              className="px-6 py-3 rounded-xl font-semibold text-sm sm:text-base transition border border-border bg-card hover:bg-accent focus:outline-none focus:ring-2 focus:ring-ring"
-            >
-              Read the full “How it works”
-            </Link>
-          </div>
-        </div>
-      </section>
-
-      <section className="py-16 px-6">
-        <div className="max-w-4xl mx-auto rounded-3xl p-8 sm:p-10 border border-border bg-card shadow-sm text-center">
-          <h2 className="text-3xl font-bold">A calmer, safer way to trade camera gear</h2>
-          <p className="mt-4 text-lg text-muted-foreground">
-            Built for genuine buyers and sellers — with a clear weekly schedule, secure payments,
-            optional free relist, and straightforward post-sale steps.
-          </p>
-
-          <div className="mt-7 grid sm:grid-cols-3 gap-3 text-left">
-            <TrustItem title="Clear steps" body="Simple seller flow with approval before listings go live." />
-            <TrustItem title="Secure payments" body="Stripe-powered checkout with straightforward confirmation steps." />
-            <TrustItem title="Practical selling options" body="Hidden reserves supported and optional free auto-relist until sold." />
-          </div>
-
-          <div className="mt-8 flex flex-wrap justify-center gap-4">
-            <Link
-              href="/current-listings"
-              className="px-6 py-3 rounded-xl font-semibold text-sm sm:text-base shadow-sm transition bg-primary text-primary-foreground hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-ring"
-            >
-              Browse current auctions
-            </Link>
-            <Link
-              href="/sell"
-              className="px-6 py-3 rounded-xl font-semibold text-sm sm:text-base transition border border-border bg-card hover:bg-accent focus:outline-none focus:ring-2 focus:ring-ring"
-            >
-              Sell your gear
-            </Link>
-          </div>
-        </div>
-      </section>
-
-      <section className="border-t border-border bg-background">
-        <div className="max-w-4xl mx-auto px-6 py-16">
-          <h2 className="text-3xl font-bold text-center">Quick answers</h2>
-          <p className="mt-3 text-center text-muted-foreground max-w-2xl mx-auto">
-            The common questions people ask before they bid or list.
-          </p>
-
-          <div className="mt-8 space-y-3">
-            <FAQItem q="Is it free to list?">
-              Yes — listing is free during our launch period. You only pay commission if your item sells.
-            </FAQItem>
-            <FAQItem q="When do auctions run?">
-              Weekly from Monday 01:00 to Sunday 23:00 (UK time). Approved listings are queued into the next weekly window.
-            </FAQItem>
-            <FAQItem q="What can I sell?">
-              Cameras, lenses, and photography gear. Create a listing with photos and details, then it’s reviewed before it goes live.
-            </FAQItem>
-            <FAQItem q="How do payments work?">
-              Payments are handled securely through Stripe. Buyers and sellers follow clear steps during and after the sale.
-            </FAQItem>
-          </div>
-
-          <div className="mt-10 flex flex-wrap justify-center gap-4">
-            <Link
-              href="/fees"
-              className="px-6 py-3 rounded-xl font-semibold text-sm sm:text-base transition border border-border bg-card hover:bg-accent focus:outline-none focus:ring-2 focus:ring-ring"
-            >
-              Read Fees
-            </Link>
-            <Link
-              href="/faq"
-              className="px-6 py-3 rounded-xl font-semibold text-sm sm:text-base transition border border-border bg-background hover:bg-accent focus:outline-none focus:ring-2 focus:ring-ring"
-            >
-              Full FAQ
-            </Link>
-          </div>
-        </div>
-      </section>
-
       <div className="h-10" />
-    </div>
+    </main>
   );
 }
 
 /* ------------------------------------------------------------------ */
 /* Small components                                                    */
 /* ------------------------------------------------------------------ */
+
+function HeroPill({ children }: { children: ReactNode }) {
+  return (
+    <div className="rounded-2xl px-4 py-3 border border-border text-sm text-muted-foreground bg-card">
+      {children}
+    </div>
+  );
+}
+
+function HeroStep({
+  number,
+  title,
+  body,
+}: {
+  number: string;
+  title: string;
+  body: string;
+}) {
+  return (
+    <div className="flex items-start gap-3">
+      <div className="h-7 w-7 rounded-full flex items-center justify-center text-xs font-extrabold shrink-0 bg-primary text-primary-foreground">
+        {number}
+      </div>
+      <div>
+        <p className="text-sm font-semibold">{title}</p>
+        <p className="mt-1 text-xs text-muted-foreground leading-relaxed">{body}</p>
+      </div>
+    </div>
+  );
+}
 
 function Benefit({ title, body }: { title: string; body: string }) {
   return (
@@ -538,20 +524,11 @@ function MiniPoint({ children }: { children: ReactNode }) {
   );
 }
 
-function InfoRow({ label, value }: { label: string; value: ReactNode }) {
-  return (
-    <div className="flex items-start justify-between gap-4">
-      <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{label}</p>
-      <div className="text-sm text-right">{value}</div>
-    </div>
-  );
-}
-
 function TrustItem({ title, body }: { title: string; body: string }) {
   return (
     <div className="rounded-2xl p-5 border border-border bg-background">
       <p className="text-sm font-semibold">{title}</p>
-      <p className="mt-1 text-xs text-muted-foreground leading-relaxed">{body}</p>
+      <p className="mt-1 text-sm text-muted-foreground leading-relaxed">{body}</p>
     </div>
   );
 }

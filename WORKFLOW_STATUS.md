@@ -1,6 +1,6 @@
 AuctionMyCamera — Workflow Status (Source of Truth)
 
-Last updated: 2026-02-28
+Last updated: 2026-03-06
 Owner: Shaun
 Repo: auctionmycamera.co.uk
 Stack: Next.js 16 + Appwrite + Stripe + Vercel
@@ -13,7 +13,7 @@ Dashboard loads profile correctly — DONE
 Profile update works — DONE
 Password change works — DONE
 "Copy JWT (testing)" removed — DONE
-Delete account workflow verified end-to-end — TODO (requires production deletion test + DB confirmation)
+Delete account workflow verified end-to-end — DONE
 
 Auth & Security
 
@@ -31,9 +31,9 @@ Listing appears in Awaiting / Approved+Queued / Live tabs — DONE
 
 Queued Listing Controls
 
-Seller can edit queued listing — DONE (needs final production validation)
-Seller can withdraw queued listing — DONE (status = withdrawn; needs production validation)
-Listing images verified in production — TODO
+Seller can edit queued listing — DONE
+Seller can withdraw queued listing — DONE
+Listing images verified in production — DONE
 
 Image Handling
 
@@ -47,8 +47,8 @@ SECTION C — Admin Approval & Sales Control
 
 Admin dashboard exists and reachable — DONE
 Admin can view pending listings — DONE
-Admin approve sets status + schedules auction dates — DONE (final lifecycle validation pending)
-Admin reject sets status + emails seller — DONE (production confirmation pending)
+Admin approve sets status + schedules auction dates — DONE (queued/approve flow confirmed; final lifecycle validation still belongs in Section D)
+Admin reject sets status + emails seller — DONE
 
 Admin Transaction Management
 
@@ -59,9 +59,9 @@ Archive (soft delete) transaction (archived flag + reason + timestamp) — DONE
 
 Pending Admin Work
 
-Ensure transactions dashboard excludes archived=true — TODO
-Admin delete listing route hardened (JWT confirm) — TODO
-Admin notified when listing submitted — TODO
+Ensure transactions dashboard excludes archived=true — TODO (code filter present; live archive-hide re-test still needed)
+Admin delete listing route hardened (JWT confirm) — DONE
+Admin notified when listing submitted — DONE
 Admin transaction UI full production validation — TODO
 
 ============================================================
@@ -86,6 +86,7 @@ DISABLE_WINNER_CHARGES safeguard implemented — DONE
 ============================================================
 
 SECTION E — Payments (Stripe)
+
 Saved Card System
 
 /payment-method page exists (noindex) — DONE
@@ -122,6 +123,7 @@ Full production verification in Stripe dashboard — TODO
 ============================================================
 
 SECTION F — Transactions (Seller & Buyer Workflow)
+
 Transaction Creation
 
 Created only after successful Stripe charge — DONE
@@ -169,6 +171,7 @@ Production UI validation of every status — TODO
 ============================================================
 
 SECTION H — Email Notifications
+
 Completed
 
 Buyer “You won” email — DONE
@@ -176,6 +179,8 @@ Seller “Your item sold” email — DONE
 Admin “Auction won” email — DONE
 Payment-required email — DONE
 Auto-relist email — DONE
+Admin new listing submitted email — DONE
+Seller rejection email — DONE
 
 Pending
 
@@ -188,6 +193,7 @@ Full production inbox validation (SPF/DKIM) — TODO
 SECTION I — Security & Safeguards
 
 Admin delete transaction requires JWT + ADMIN_EMAIL — DONE
+Admin delete listing requires JWT + requireAdmin — DONE
 Stripe routes require JWT — DONE
 Scheduler requires CRON_SECRET — DONE
 DISABLE_WINNER_CHARGES toggle — DONE
@@ -207,50 +213,3 @@ Keep DISABLE_WINNER_CHARGES=true during lifecycle testing.
 Admin routes are JWT-protected — never expose secrets client-side.
 
 ============================================================
-
-🧪 RECOMMENDED TEST ORDER (Production Hardening Pass)
-
-Keep DISABLE_WINNER_CHARGES=true → validate lifecycle transitions safely.
-
-Test full card flow:
-
-Add card
-
-Confirm default
-
-Verify has-payment-method returns true
-
-Switch to Stripe TEST mode:
-
-Run scheduler manually
-
-Confirm charge attempt
-
-Confirm transaction creation
-
-Simulate failure:
-
-Remove card
-
-Use declined test card
-
-Validate payment_failed state + emails
-
-Confirm webhook events logged in:
-
-Stripe dashboard
-
-Vercel logs
-
-Remove DISABLE_WINNER_CHARGES and perform final controlled live test.
-
-============================================================
-
-If you want the next session ultra-focused, title it:
-
-“AuctionMyCamera — Final Payment & Dispatch Hardening”
-
-And we’ll move into strict production validation + email finalisation + payout logic verification.
-
-You’re now at the “platform stabilisation” phase — not feature building.
-That’s a very good place to be.

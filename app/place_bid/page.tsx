@@ -17,22 +17,22 @@ const client = new Client()
 const db = new Databases(client);
 const account = new Account(client);
 
-// ✅ Listings envs ONLY (with safe fallbacks for clones)
 const LISTINGS_DB =
   process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID ||
-  process.env.NEXT_PUBLIC_APPWRITE_DATABASE_ID || // fallback if you still use a generic DB env
+  process.env.NEXT_PUBLIC_APPWRITE_DATABASE_ID ||
   "";
 
 const LISTINGS_COLLECTION =
   process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_COLLECTION_ID ||
-  process.env.NEXT_PUBLIC_APPWRITE_COLLECTION_ID || // fallback if you still use a generic collection env
+  process.env.NEXT_PUBLIC_APPWRITE_COLLECTION_ID ||
   "";
 
 // ----------------------------------------------------
-// TYPES
+// Types
 // ----------------------------------------------------
 type Listing = {
   $id: string;
+  $createdAt?: string;
 
   item_title?: string | null;
   brand?: string | null;
@@ -42,20 +42,22 @@ type Listing = {
   era?: string | null;
   condition?: string | null;
 
-  // ✅ Either a direct URL OR an Appwrite file id (most reliable via proxy)
   image_url?: string | null;
-  image_id?: string | null; // common field name
-  imageId?: string | null; // alt clone field name
-  image_file_id?: string | null; // alt clone field name
-  imageFileId?: string | null; // alt clone field name
+  image_id?: string | null;
+  image_ids?: string[] | string | null;
+  imageId?: string | null;
+  imageIds?: string[] | string | null;
+  image_file_id?: string | null;
+  imageFileId?: string | null;
 
-  listing_id?: string;
-  status?: string;
+  listing_id?: string | null;
+  status?: string | null;
 
   current_bid?: number | null;
   starting_price?: number | null;
-  bids?: number | null;
+  bids?: number | string | null;
   reserve_price?: number | null;
+  reserve_met?: boolean | null;
 
   auction_start?: string | null;
   auction_end?: string | null;
@@ -65,15 +67,53 @@ type Listing = {
   buy_now?: number | null;
   buy_now_price?: number | null;
 
-  description?: string;
+  description?: string | null;
   interesting_fact?: string | null;
+
+  sold_price?: number | null;
+  sold_via?: "auction" | "buy_now" | null;
+  sale_status?: string | null;
+  payment_status?: string | null;
 };
 
 type TimerStatus = "queued" | "live" | "ended";
 
 // ----------------------------------------------------
-// SIMPLE LOCAL TIMER
+// Helpers
 // ----------------------------------------------------
+function cap(s: string) {
+  if (!s) return s;
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+function niceEnum(s?: string | null) {
+  const v = String(s || "").trim();
+  if (!v) return "";
+  return cap(v.replace(/_/g, " "));
+}
+
+function money(n?: number | null) {
+  if (typeof n !== "number" || Number.isNaN(n)) return null;
+  return `£${n.toLocaleString("en-GB")}`;
+}
+
+function formatUkDateTime(input?: string | null) {
+  const s = String(input || "").trim();
+  if (!s) return null;
+  const d = new Date(s);
+  if (Number.isNaN(d.getTime())) return null;
+
+  return new Intl.DateTimeFormat("en-GB", {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    timeZone: "Europe/London",
+  }).format(d);
+}
+
 function formatRemaining(ms: number) {
   if (ms <= 0) return "00:00:00";
 
@@ -94,42 +134,28 @@ function formatRemaining(ms: number) {
     .padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`;
 }
 
-function LocalAuctionTimer({
-  start,
-  end,
-  status,
-}: {
-  start: string | null;
-  end: string | null;
-  status: TimerStatus;
-}) {
-  const [now, setNow] = useState(() => Date.now());
-
-  useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(id);
-  }, []);
-
-  let targetStr: string | null = null;
-  if (status === "queued") targetStr = start ?? null;
-  else if (status === "live") targetStr = end ?? null;
-
-  if (!targetStr) return <span className="font-mono text-sm">—</span>;
-
-  const targetMs = Date.parse(targetStr);
-  if (!Number.isFinite(targetMs)) return <span className="font-mono text-sm">—</span>;
-
-  const diff = targetMs - now;
-  return (
-    <span className="font-mono text-sm">
-      {diff <= 0 ? "00:00:00" : formatRemaining(diff)}
-    </span>
-  );
+function parseMaybeDate(input: unknown): number | null {
+  const s = String(input || "").trim();
+  if (!s) return null;
+  const t = Date.parse(s);
+  return Number.isFinite(t) ? t : null;
 }
 
-// ----------------------------------------------------
-// BID INCREMENTS
-// ----------------------------------------------------
+function parseBids(value: number | string | null | undefined) {
+  if (typeof value === "number") return value;
+  if (typeof value === "string") {
+    const n = parseInt(value, 10);
+    return Number.isFinite(n) ? n : 0;
+  }
+  return 0;
+}
+
+function parseGBPWholePounds(input: string): number | null {
+  const n = Number(String(input || "").trim());
+  if (!Number.isFinite(n)) return null;
+  return Math.round(n);
+}
+
 function getBidIncrement(current: number): number {
   if (current < 100) return 5;
   if (current < 500) return 10;
@@ -146,18 +172,167 @@ function pickBuyNow(listing: Listing): number | null {
     (listing.buy_now_price as number | null | undefined) ??
     (listing.buy_now as number | null | undefined) ??
     null;
+
   return typeof raw === "number" && raw > 0 ? raw : null;
 }
 
-function parseGBPWholePounds(input: string): number | null {
-  const n = Number(String(input || "").trim());
-  if (!Number.isFinite(n)) return null;
-  // Auctions + increments here are whole pounds
-  return Math.round(n);
+function getListingTitle(listing: Listing) {
+  const itemTitle = String(listing.item_title || "").trim();
+  if (itemTitle) return itemTitle;
+
+  const brand = String(listing.brand || "").trim();
+  const model = String(listing.model || "").trim();
+  const bm = [brand, model].filter(Boolean).join(" ");
+  if (bm) return bm;
+
+  const gearType = String(listing.gear_type || "").trim();
+  if (gearType) return `${niceEnum(gearType)} listing`;
+
+  return "Camera gear listing";
+}
+
+function getListingMeta(listing: Listing) {
+  return [niceEnum(listing.gear_type), niceEnum(listing.condition), niceEnum(listing.era)]
+    .filter(Boolean)
+    .join(" • ");
+}
+
+function buildLocalImageProxyUrl(fileId: string) {
+  const id = String(fileId || "").trim();
+  if (!id) return null;
+  return `/api/camera-image/${encodeURIComponent(id)}`;
+}
+
+function coerceIdList(raw: any): string[] {
+  if (!raw) return [];
+
+  if (Array.isArray(raw)) {
+    return raw.map((x) => String(x || "").trim()).filter(Boolean);
+  }
+
+  if (typeof raw === "string") {
+    const s = raw.trim();
+    if (!s) return [];
+
+    if ((s.startsWith("[") && s.endsWith("]")) || (s.startsWith('"') && s.endsWith('"'))) {
+      try {
+        const parsed = JSON.parse(s);
+        if (Array.isArray(parsed)) {
+          return parsed.map((x) => String(x || "").trim()).filter(Boolean);
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    return s
+      .split(",")
+      .map((x) => String(x || "").trim())
+      .filter(Boolean);
+  }
+
+  return [];
+}
+
+function allImageIds(listing: Listing): string[] {
+  const rawIds = (listing as any).image_ids ?? (listing as any).imageIds ?? null;
+  const ids = coerceIdList(rawIds);
+
+  const singles = [
+    String(listing.image_id || "").trim(),
+    String((listing as any).imageId || "").trim(),
+    String((listing as any).image_file_id || "").trim(),
+    String((listing as any).imageFileId || "").trim(),
+  ].filter(Boolean);
+
+  const seen = new Set<string>();
+  const out: string[] = [];
+
+  for (const id of [...ids, ...singles]) {
+    if (!seen.has(id)) {
+      seen.add(id);
+      out.push(id);
+    }
+  }
+
+  return out;
+}
+
+function pickFallbackImage(listing: Listing) {
+  const gear = String(listing.gear_type || "").toLowerCase();
+  const era = String(listing.era || "").toLowerCase();
+
+  if (era === "antique" || era === "vintage") return "/hero/antique-cameras.jpg";
+  if (gear === "lens") return "/hero/modern-lens.jpg";
+  return "/hero/modern-lens.jpg";
+}
+
+function pickMainImage(listing: Listing, selectedImageId: string | null) {
+  if (selectedImageId) {
+    return buildLocalImageProxyUrl(selectedImageId) || pickFallbackImage(listing);
+  }
+
+  const firstId = allImageIds(listing)[0];
+  if (firstId) {
+    return buildLocalImageProxyUrl(firstId) || pickFallbackImage(listing);
+  }
+
+  const direct = String(listing.image_url || "").trim();
+  if (direct) return direct;
+
+  return pickFallbackImage(listing);
+}
+
+function normStatus(s: unknown) {
+  return String(s || "").trim().toLowerCase();
+}
+
+function isEndedLifecycleStatus(status: string) {
+  return ["sold", "completed", "not_sold", "payment_required", "payment_failed"].includes(
+    status
+  );
+}
+
+function LocalAuctionTimer({
+  start,
+  end,
+  status,
+  nowMs,
+}: {
+  start: string | null;
+  end: string | null;
+  status: TimerStatus;
+  nowMs: number | null;
+}) {
+  let targetStr: string | null = null;
+
+  if (status === "queued") targetStr = start ?? null;
+  else if (status === "live") targetStr = end ?? null;
+
+  if (!targetStr) {
+    return <span className="font-mono text-sm text-muted-foreground">—</span>;
+  }
+
+  const targetMs = Date.parse(targetStr);
+  if (!Number.isFinite(targetMs)) {
+    return <span className="font-mono text-sm text-muted-foreground">—</span>;
+  }
+
+  if (nowMs === null) {
+    return <span className="font-mono text-sm">--:--:--</span>;
+  }
+
+  const diff = targetMs - nowMs;
+
+  return (
+    <span className="font-mono text-sm">
+      {diff <= 0 ? "00:00:00" : formatRemaining(diff)}
+    </span>
+  );
 }
 
 // ----------------------------------------------------
-// PAGE
+// Page
 // ----------------------------------------------------
 export default function PlaceBidPage() {
   const searchParams = useSearchParams();
@@ -179,16 +354,26 @@ export default function PlaceBidPage() {
   const [checkingPaymentMethod, setCheckingPaymentMethod] = useState(false);
   const [paymentMethodError, setPaymentMethodError] = useState<string | null>(null);
 
-  // simple notice (non-DVLA)
   const [noticeAccepted, setNoticeAccepted] = useState(false);
+  const [nowMs, setNowMs] = useState<number | null>(null);
+
+  const [selectedImageId, setSelectedImageId] = useState<string | null>(null);
+
   const NOTICE_KEY_PREFIX = "amc_notice_accepted_";
 
-  const nextUrl = listingId ? `/place_bid?id=${encodeURIComponent(listingId)}` : "/auctions";
+  const nextUrl = listingId ? `/place_bid?id=${encodeURIComponent(listingId)}` : "/current-listings";
   const paymentMethodHref = `/payment-method?next=${encodeURIComponent(nextUrl)}`;
   const loginHref = `/login?next=${encodeURIComponent(nextUrl)}`;
 
+  useEffect(() => {
+    const tick = () => setNowMs(Date.now());
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, []);
+
   // ----------------------------------------------------
-  // LOGIN CHECK
+  // Login check
   // ----------------------------------------------------
   useEffect(() => {
     const checkLogin = async () => {
@@ -206,7 +391,7 @@ export default function PlaceBidPage() {
   }, []);
 
   // ----------------------------------------------------
-  // STRIPE – CHECK SAVED PAYMENT METHOD (AUTH REQUIRED)
+  // Payment method check
   // ----------------------------------------------------
   useEffect(() => {
     const checkPaymentMethod = async () => {
@@ -229,11 +414,14 @@ export default function PlaceBidPage() {
         });
 
         const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error((data as any).error || "Could not verify your payment method.");
+        if (!res.ok) {
+          throw new Error((data as any).error || "Could not verify your payment method.");
+        }
 
         setHasPaymentMethod(Boolean((data as any).hasPaymentMethod));
       } catch (err: any) {
         const msg = err?.message || "Could not verify your payment method.";
+
         if (msg.includes("Stripe is not configured on the server")) {
           setPaymentMethodError(null);
           setHasPaymentMethod(null);
@@ -250,7 +438,7 @@ export default function PlaceBidPage() {
   }, [loggedIn, jwtToken]);
 
   // ----------------------------------------------------
-  // LOAD LISTING
+  // Load listing
   // ----------------------------------------------------
   useEffect(() => {
     (async () => {
@@ -300,66 +488,105 @@ export default function PlaceBidPage() {
   }, [listingId]);
 
   // ----------------------------------------------------
-  // PER-LISTING NOTICE STATE
+  // Notice state
   // ----------------------------------------------------
   useEffect(() => {
     if (typeof window === "undefined") return;
     if (!listing?.$id) return;
+
     const key = `${NOTICE_KEY_PREFIX}${listing.$id}`;
     setNoticeAccepted(window.localStorage.getItem(key) === "true");
   }, [listing?.$id]);
 
-  if (loading)
+  // ----------------------------------------------------
+  // Keep gallery selection valid
+  // ----------------------------------------------------
+  useEffect(() => {
+    if (!listing) {
+      setSelectedImageId(null);
+      return;
+    }
+
+    const ids = allImageIds(listing);
+    const first = ids[0] || null;
+
+    setSelectedImageId((prev) => {
+      if (prev && ids.includes(prev)) return prev;
+      return first;
+    });
+  }, [listing]);
+
+  if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-black">
-        <p className="text-lg text-gray-200">Loading listing…</p>
+      <div className="min-h-screen flex items-center justify-center bg-background">
+        <p className="text-lg text-foreground">Loading listing…</p>
       </div>
     );
+  }
 
-  if (!listing)
+  if (!listing) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-black px-4">
+      <div className="min-h-screen flex items-center justify-center bg-background px-4">
         <div className="max-w-2xl w-full">
-          <p className="text-red-400 text-xl whitespace-pre-line">{error || "Listing not found."}</p>
+          <p className="text-destructive text-xl whitespace-pre-line">
+            {error || "Listing not found."}
+          </p>
           <div className="mt-6">
-            <Link href="/auctions" className="text-sm text-[#d6b45f] underline">
+            <Link
+              href="/current-listings"
+              className="text-sm text-primary underline hover:opacity-80"
+            >
               ← Back to auctions
             </Link>
           </div>
         </div>
       </div>
     );
+  }
 
   // ----------------------------------------------------
-  // CALCULATIONS
+  // Calculations
   // ----------------------------------------------------
+  const title = getListingTitle(listing);
+  const metaLine = getListingMeta(listing);
+
   const effectiveBaseBid =
     listing.current_bid != null ? listing.current_bid : listing.starting_price ?? 0;
 
   const bidIncrement = getBidIncrement(effectiveBaseBid);
   const minimumAllowed = effectiveBaseBid + bidIncrement;
 
-  const bidsCount = listing.bids ?? 0;
+  const bidsCount = parseBids(listing.bids);
 
-  const hasReserve = typeof listing.reserve_price === "number" && listing.reserve_price > 0;
-  const reserveMet = hasReserve && effectiveBaseBid >= (listing.reserve_price as number);
+  const hasReserve =
+    typeof listing.reserve_price === "number" && listing.reserve_price > 0;
+
+  const reserveMet =
+    typeof listing.reserve_met === "boolean"
+      ? listing.reserve_met
+      : hasReserve
+      ? effectiveBaseBid >= (listing.reserve_price as number)
+      : false;
+
+  const reserveText =
+    reserveMet ? "Reserve met" : hasReserve ? "Hidden reserve applies" : "No reserve shown";
 
   const buyNowPrice = pickBuyNow(listing);
 
-  const isLiveStatus = listing.status === "live";
-  const isComingStatus = listing.status === "queued";
-  const isSoldStatus = listing.status === "sold";
+  const statusLower = normStatus(listing.status);
+  const isLiveStatus = statusLower === "live" || statusLower === "active";
+  const isComingStatus = statusLower === "queued" || statusLower === "upcoming" || statusLower === "pending";
+  const isSoldStatus = statusLower === "sold";
 
   const displayId = listing.listing_id || `AMC-${listing.$id.slice(-6).toUpperCase()}`;
 
   const auctionStart = listing.auction_start ?? listing.start_time ?? null;
   const auctionEnd = listing.auction_end ?? listing.end_time ?? null;
 
-  const auctionEndMs = auctionEnd ? Date.parse(auctionEnd) : null;
-  const auctionEndedTime =
-    auctionEndMs !== null && Number.isFinite(auctionEndMs) ? auctionEndMs <= Date.now() : false;
+  const auctionEndMs = parseMaybeDate(auctionEnd);
+  const auctionEndedTime = nowMs !== null && auctionEndMs !== null ? auctionEndMs <= nowMs : false;
+  const auctionEnded = auctionEndedTime || isEndedLifecycleStatus(statusLower);
 
-  const auctionEnded = auctionEndedTime || isSoldStatus;
   const isSoldForDisplay = isSoldStatus || (auctionEnded && reserveMet);
 
   const canBidOrBuyNow = isLiveStatus && !auctionEnded;
@@ -372,32 +599,13 @@ export default function PlaceBidPage() {
   const paymentBlocked =
     loggedIn && !checkingPaymentMethod && hasPaymentMethod === false && !paymentMethodError;
 
-  const title =
-    (listing.item_title || "").trim() ||
-    [listing.brand, listing.model].filter(Boolean).join(" ").trim() ||
-    "Listing";
-
-  // ✅ Robust hero image pick:
-  // 1) Prefer image_id (served via same-origin proxy route) to avoid Next/Image remote host rules
-  // 2) Otherwise use image_url (may be remote)
-  // 3) Otherwise fallback to local hero
-  const rawImageId =
-    (listing.image_id ||
-      listing.imageId ||
-      listing.image_file_id ||
-      listing.imageFileId ||
-      "")?.toString()?.trim() || "";
-
-  const rawImageUrl = (listing.image_url || "").toString().trim();
-
-  const heroImg = rawImageId
-    ? `/api/camera-image/${encodeURIComponent(rawImageId)}`
-    : rawImageUrl || "/hero/modern-lens.jpg";
-
+  const heroImg = pickMainImage(listing, selectedImageId);
   const heroIsSameOrigin = heroImg.startsWith("/");
+  const imageIds = allImageIds(listing);
+  const fallbackImg = pickFallbackImage(listing);
 
   // ----------------------------------------------------
-  // HANDLE BID
+  // Handle bid
   // ----------------------------------------------------
   const handleBid = async () => {
     setError(null);
@@ -430,7 +638,7 @@ export default function PlaceBidPage() {
     }
 
     if (amount < minimumAllowed) {
-      setError(`Minimum bid is £${minimumAllowed.toLocaleString("en-GB")}`);
+      setError(`Minimum bid is £${minimumAllowed.toLocaleString("en-GB")}.`);
       return;
     }
 
@@ -444,10 +652,8 @@ export default function PlaceBidPage() {
           Authorization: `Bearer ${jwtToken}`,
         },
         body: JSON.stringify({
-          // ✅ Send both shapes (safe across cloned codebases)
           listingId: listing.$id,
           plateId: listing.$id,
-
           amount,
           bidAmount: amount,
         }),
@@ -470,7 +676,7 @@ export default function PlaceBidPage() {
       }
 
       if (data.updatedListing) setListing(data.updatedListing);
-      setSuccess("Bid placed successfully!");
+      setSuccess("Bid placed successfully.");
       setBidAmount("");
     } catch (err: any) {
       setError(err?.message || "Failed to place bid.");
@@ -480,7 +686,7 @@ export default function PlaceBidPage() {
   };
 
   // ----------------------------------------------------
-  // HANDLE BUY NOW
+  // Handle Buy Now
   // ----------------------------------------------------
   const handleBuyNow = async () => {
     setError(null);
@@ -515,8 +721,9 @@ export default function PlaceBidPage() {
       !window.confirm(
         `Use Buy Now for £${buyNowPrice.toLocaleString("en-GB")}?\n\nThis ends the auction immediately.`
       )
-    )
+    ) {
       return;
+    }
 
     try {
       setSubmitting(true);
@@ -575,270 +782,459 @@ export default function PlaceBidPage() {
     }
   };
 
-  // ----------------------------------------------------
-  // RENDER
-  // ----------------------------------------------------
   return (
-    <div className="min-h-screen bg-black text-gray-100 py-8 px-4">
-      <div className="max-w-4xl mx-auto mb-4">
-        <Link href="/auctions" className="text-sm text-[#d6b45f] underline hover:opacity-90">
-          ← Back to auctions
-        </Link>
-      </div>
-
-      <div className="max-w-4xl mx-auto mb-6">
-        <div className="relative w-full max-w-3xl mx-auto rounded-xl overflow-hidden shadow-lg bg-black border border-white/10">
-          {heroIsSameOrigin ? (
-            <Image
-              src={heroImg}
-              alt={title}
-              width={1600}
-              height={900}
-              className="w-full h-[280px] object-cover"
-              priority
-            />
-          ) : (
-            <img
-              src={heroImg}
-              alt={title}
-              className="w-full h-[280px] object-cover"
-              loading="eager"
-            />
-          )}
-
-          <div className="absolute inset-0 bg-black/35" />
-          <div className="absolute left-0 bottom-0 p-5">
-            <p className="text-xs text-white/70">Listing ID: {displayId}</p>
-            <h1 className="mt-1 text-xl sm:text-2xl font-extrabold text-white">{title}</h1>
-          </div>
-        </div>
-      </div>
-
-      <div className="max-w-4xl mx-auto bg-[#111111] rounded-2xl border border-white/10 shadow-lg p-6 sm:p-8 space-y-8">
-        <div className="flex justify-end gap-2">
-          {isSoldForDisplay && (
-            <span className="px-4 py-1 bg-red-700 text-white rounded-full font-bold text-sm">SOLD</span>
-          )}
-          {!isSoldForDisplay && canBidOrBuyNow && (
-            <span className="px-4 py-1 bg-[#d6b45f] border border-black rounded-full font-bold text-sm text-black">
-              LIVE
-            </span>
-          )}
-          {!isSoldForDisplay && isComingStatus && !auctionEnded && (
-            <span className="px-4 py-1 bg-gray-700 text-gray-100 rounded-full font-bold text-sm">Queued</span>
-          )}
-          {!isSoldForDisplay && auctionEnded && (
-            <span className="px-4 py-1 bg-gray-600 text-gray-100 rounded-full font-bold text-sm">ENDED</span>
-          )}
+    <main className="min-h-screen bg-background text-foreground py-8 px-4">
+      <div className="max-w-6xl mx-auto">
+        <div className="mb-5">
+          <Link
+            href="/current-listings"
+            className="text-sm text-primary underline hover:opacity-80"
+          >
+            ← Back to auctions
+          </Link>
         </div>
 
-        <div>
-          <h2 className={`text-4xl font-extrabold ${isSoldForDisplay ? "text-red-400" : "text-green-400"}`}>
-            £{effectiveBaseBid.toLocaleString("en-GB")}
-          </h2>
-          <p className="text-gray-300">{isSoldForDisplay ? "Winning bid" : "Current Bid"}</p>
+        {/* Hero */}
+        <section className="rounded-3xl border border-border bg-card overflow-hidden shadow-sm">
+          <div className="grid lg:grid-cols-12 gap-0">
+            <div className="lg:col-span-7 p-6 sm:p-7 border-b lg:border-b-0 lg:border-r border-border">
+              <p className="text-[11px] uppercase tracking-[0.22em] text-muted-foreground">
+                Place a bid
+              </p>
 
-          <p className="mt-4 font-semibold text-lg text-gray-100">
-            {bidsCount} {bidsCount === 1 ? "Bid" : "Bids"}
-          </p>
+              <h1 className="mt-3 text-2xl sm:text-3xl lg:text-4xl font-extrabold tracking-tight">
+                {title}
+              </h1>
 
-          {reserveMet && <p className="mt-2 font-bold text-green-400">Reserve Met</p>}
+              <p className="mt-3 text-sm sm:text-base text-muted-foreground max-w-3xl leading-relaxed">
+                {metaLine ? `${metaLine}. ` : ""}
+                Review the listing carefully, check the images, and place your bid only if you are ready to buy.
+              </p>
 
-          {canShowBuyNow && buyNowPrice !== null && (
-            <p className="mt-2 text-sm font-semibold text-emerald-300">
-              Buy Now available: £{buyNowPrice.toLocaleString("en-GB")}
-            </p>
-          )}
-        </div>
+              <div className="mt-4 flex flex-wrap gap-2">
+                <InfoPill label={`Listing ID: ${displayId}`} />
+                {metaLine ? <InfoPill label={metaLine} /> : null}
+              </div>
 
-        <div>
-          <p className="text-xs text-gray-400 uppercase">
-            {auctionEnded ? "AUCTION ENDED" : isLiveStatus ? "AUCTION ENDS IN" : "AUCTION STARTS IN"}
-          </p>
-          <div className="inline-block mt-1 px-3 py-2 bg-black border border-white/10 rounded-lg shadow-sm font-semibold text-[#d6b45f]">
-            <LocalAuctionTimer start={auctionStart} end={auctionEnd} status={timerStatus} />
-          </div>
-        </div>
-
-        <div className="bg-[#181818] border border-white/10 rounded-xl p-6 shadow-sm space-y-4">
-          <div className="border border-white/10 bg-white/5 rounded-lg p-3 text-sm text-white/85">
-            <p className="font-semibold">Important notice</p>
-            <p className="mt-1">Please check the listing details carefully before bidding. All bids are binding.</p>
-
-            {loggedIn && (
-              <label className="mt-3 flex items-center gap-2 text-xs">
-                <input
-                  type="checkbox"
-                  checked={noticeAccepted}
-                  onChange={(e) => {
-                    const checked = e.target.checked;
-                    setNoticeAccepted(checked);
-                    if (typeof window !== "undefined" && listing?.$id) {
-                      const key = `${NOTICE_KEY_PREFIX}${listing.$id}`;
-                      window.localStorage.setItem(key, checked ? "true" : "false");
-                    }
-                  }}
-                />
-                <span className="text-white/85">I understand and accept this notice.</span>
-              </label>
-            )}
-          </div>
-
-          {loggedIn && (
-            <div className="space-y-2 mt-2">
-              {checkingPaymentMethod && <p className="text-xs text-gray-400">Checking your saved payment method…</p>}
-
-              {paymentMethodError && (
-                <p className="bg-red-900 text-red-100 border border-red-500 p-2 rounded text-xs">{paymentMethodError}</p>
-              )}
-
-              {hasPaymentMethod === false && !checkingPaymentMethod && !paymentMethodError && (
-                <div className="bg-yellow-900 text-yellow-50 border border-yellow-600 p-3 rounded text-xs">
-                  <p className="font-semibold">Action needed</p>
-                  <p className="mt-1">Before you can bid or use Buy Now, you must add a payment method.</p>
-                  <Link
-                    href={paymentMethodHref}
-                    className="mt-2 inline-block text-xs font-semibold text-yellow-200 underline"
-                  >
-                    Add / manage payment method
-                  </Link>
+              <div className="mt-6">
+                <div className="relative w-full rounded-2xl overflow-hidden bg-background border border-border">
+                  {heroIsSameOrigin ? (
+                    <Image
+                      src={heroImg}
+                      alt={title}
+                      width={1600}
+                      height={900}
+                      className="w-full h-[320px] md:h-[420px] object-cover block"
+                      priority
+                    />
+                  ) : (
+                    <img
+                      src={heroImg}
+                      alt={title}
+                      className="w-full h-[320px] md:h-[420px] object-cover block"
+                      loading="eager"
+                      onError={(e) => {
+                        const el = e.currentTarget as HTMLImageElement;
+                        if (el.src !== fallbackImg) el.src = fallbackImg;
+                      }}
+                    />
+                  )}
                 </div>
-              )}
-            </div>
-          )}
 
-          {!loggedIn ? (
-            <div className="mt-4 border border-white/10 bg-black rounded-lg p-4 space-y-3">
-              <p className="font-semibold text-[#d6b45f]">Log in to bid</p>
-              <p className="text-sm text-gray-200">You need an account to place bids and use Buy Now.</p>
-              <div className="flex flex-wrap gap-3 mt-2">
-                <Link
-                  href={loginHref}
-                  className="px-5 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold text-sm"
-                >
-                  Login
-                </Link>
-                <Link
-                  href="/register"
-                  className="px-5 py-2 rounded-lg border border-blue-400 text-blue-200 hover:bg-blue-950 font-semibold text-sm"
-                >
-                  Register
-                </Link>
+                {imageIds.length > 1 ? (
+                  <div className="mt-3">
+                    <div className="flex items-center justify-between text-xs text-muted-foreground">
+                      <span>{imageIds.length} photos</span>
+                      <span>
+                        {(selectedImageId ? Math.max(0, imageIds.indexOf(selectedImageId)) : 0) + 1} /{" "}
+                        {imageIds.length}
+                      </span>
+                    </div>
+
+                    <div className="mt-2 grid grid-cols-4 sm:grid-cols-6 md:grid-cols-8 gap-2">
+                      {imageIds.slice(0, 16).map((id) => {
+                        const src = buildLocalImageProxyUrl(id) || fallbackImg;
+                        const isSel = id === selectedImageId;
+
+                        return (
+                          <button
+                            key={id}
+                            type="button"
+                            onClick={() => setSelectedImageId(id)}
+                            className={[
+                              "rounded-lg overflow-hidden border bg-background",
+                              isSel ? "border-primary" : "border-border",
+                            ].join(" ")}
+                            aria-label="View photo"
+                            title="View photo"
+                          >
+                            <img
+                              src={src}
+                              alt=""
+                              className="h-16 w-full object-cover block"
+                              loading="lazy"
+                              onError={(e) => {
+                                const el = e.currentTarget as HTMLImageElement;
+                                if (el.src !== fallbackImg) el.src = fallbackImg;
+                              }}
+                            />
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ) : null}
               </div>
             </div>
-          ) : auctionEnded ? (
-            <div className="mt-4 border border-red-700 bg-red-950 rounded-lg p-4 space-y-2">
-              <p className="font-semibold text-red-100">
-                {isSoldForDisplay ? "This listing has been sold." : "Auction has already ended."}
-              </p>
-              <p className="text-sm text-red-200">
-                No further bids or Buy Now purchases can be made on this listing.
-              </p>
-            </div>
-          ) : (
-            <>
-              {error && (
-                <p className="bg-red-950 text-red-100 border border-red-700 p-3 rounded whitespace-pre-line">
-                  {error}
-                </p>
-              )}
-              {success && (
-                <p className="bg-green-950 text-green-100 border border-green-700 p-3 rounded">{success}</p>
-              )}
 
-              <p className="text-sm text-gray-200">
-                Minimum bid: <strong>£{minimumAllowed.toLocaleString("en-GB")}</strong>{" "}
-                <span className="text-xs text-gray-400">(increments of £{bidIncrement})</span>
+            <div className="lg:col-span-5 p-6 sm:p-7">
+              <p className="text-[11px] uppercase tracking-[0.22em] text-muted-foreground">
+                Auction summary
               </p>
 
-              <input
-                type="number"
-                value={bidAmount}
-                onChange={(e) => setBidAmount(e.target.value)}
-                min={minimumAllowed}
-                step={bidIncrement}
-                inputMode="numeric"
-                placeholder={`£${minimumAllowed.toLocaleString("en-GB")}`}
-                className="w-full border border-white/10 rounded-lg p-3 text-lg text-center bg-black text-gray-100"
-              />
+              <div className="mt-4 flex flex-wrap gap-2">
+                {isSoldForDisplay ? <StatusBadge tone="sold">Sold</StatusBadge> : null}
+                {!isSoldForDisplay && canBidOrBuyNow ? <StatusBadge tone="live">Live</StatusBadge> : null}
+                {!isSoldForDisplay && isComingStatus && !auctionEnded ? (
+                  <StatusBadge tone="queued">Queued</StatusBadge>
+                ) : null}
+                {!isSoldForDisplay && auctionEnded ? <StatusBadge tone="muted">Ended</StatusBadge> : null}
+                {canShowBuyNow ? <StatusBadge tone="buyNow">Buy Now available</StatusBadge> : null}
+              </div>
 
-              <div className="flex flex-col sm:flex-row gap-3 mt-2">
-                <button
-                  onClick={() => {
-                    if (paymentBlocked) {
-                      router.push(paymentMethodHref);
-                      return;
+              <div className="mt-5 space-y-4">
+                <StatCard
+                  label={isSoldForDisplay ? "Winning bid" : "Current bid"}
+                  value={money(effectiveBaseBid) || "£0"}
+                  accent
+                  helper={
+                    listing.current_bid == null && listing.starting_price
+                      ? `Starting price is ${money(listing.starting_price)}.`
+                      : "Latest visible auction price."
+                  }
+                />
+
+                <div className="grid grid-cols-2 gap-4">
+                  <StatCard
+                    label="Bids"
+                    value={String(bidsCount)}
+                    helper={`${bidsCount} ${bidsCount === 1 ? "bid" : "bids"} recorded.`}
+                  />
+                  <StatCard
+                    label={auctionEnded ? "Auction ended" : isLiveStatus ? "Auction ends" : "Auction starts"}
+                    value={
+                      <LocalAuctionTimer
+                        start={auctionStart}
+                        end={auctionEnd}
+                        status={timerStatus}
+                        nowMs={nowMs}
+                      />
                     }
-                    void handleBid();
-                  }}
-                  disabled={!canBidOrBuyNow || submitting || checkingPaymentMethod}
-                  className={`flex-1 rounded-lg py-3 text-lg font-semibold text-white ${
-                    canBidOrBuyNow && !checkingPaymentMethod
-                      ? "bg-blue-600 hover:bg-blue-700"
-                      : "bg-gray-600 cursor-not-allowed"
-                  }`}
-                >
-                  {canBidOrBuyNow
-                    ? submitting
-                      ? "Processing…"
-                      : checkingPaymentMethod
-                      ? "Checking Payment…"
-                      : "Place Bid"
-                    : "Auction Not Live"}
-                </button>
+                    helper={
+                      auctionEnded
+                        ? formatUkDateTime(auctionEnd) || "Auction closed"
+                        : isLiveStatus
+                        ? formatUkDateTime(auctionEnd) || "Live now"
+                        : formatUkDateTime(auctionStart) || "Queued"
+                    }
+                  />
+                </div>
 
-                {canShowBuyNow && buyNowPrice !== null && (
-                  <button
-                    onClick={() => {
-                      if (paymentBlocked) {
-                        router.push(paymentMethodHref);
-                        return;
-                      }
-                      void handleBuyNow();
-                    }}
-                    disabled={!canBidOrBuyNow || submitting || checkingPaymentMethod}
-                    className={`flex-1 rounded-lg py-3 text-lg font-semibold ${
-                      canBidOrBuyNow && !checkingPaymentMethod
-                        ? "bg-emerald-600 hover:bg-emerald-700 text-white"
-                        : "bg-gray-600 text-gray-300 cursor-not-allowed"
-                    }`}
-                  >
-                    {canBidOrBuyNow
-                      ? submitting
-                        ? "Processing Buy Now…"
-                        : checkingPaymentMethod
-                        ? "Checking Payment…"
-                        : `Buy Now £${buyNowPrice.toLocaleString("en-GB")}`
-                      : "Buy Now Unavailable"}
-                  </button>
+                {buyNowPrice ? (
+                  <StatCard
+                    label="Buy Now"
+                    value={money(buyNowPrice) || "Available"}
+                    helper="This ends the auction immediately if used."
+                  />
+                ) : null}
+
+                <StatCard label="Reserve" value={reserveText} helper="Listings only sell if the reserve is met." />
+              </div>
+
+              <div className="mt-6 flex flex-col gap-3">
+                {!loggedIn ? (
+                  <>
+                    <Link
+                      href={loginHref}
+                      className="inline-flex items-center justify-center rounded-xl px-5 py-3 font-semibold bg-primary text-primary-foreground"
+                    >
+                      Login to bid
+                    </Link>
+                    <Link
+                      href="/register"
+                      className="inline-flex items-center justify-center rounded-xl px-5 py-3 font-semibold border border-border bg-background hover:bg-accent"
+                    >
+                      Register
+                    </Link>
+                  </>
+                ) : auctionEnded ? (
+                  <>
+                    <div className="rounded-2xl border border-destructive/30 bg-destructive/10 p-4">
+                      <p className="font-semibold">
+                        {isSoldForDisplay ? "This listing has been sold." : "Auction has already ended."}
+                      </p>
+                      <p className="mt-1 text-sm text-muted-foreground">
+                        No further bids or Buy Now purchases can be made on this listing.
+                      </p>
+                    </div>
+
+                    <Link
+                      href="/current-listings"
+                      className="inline-flex items-center justify-center rounded-xl px-5 py-3 font-semibold bg-primary text-primary-foreground"
+                    >
+                      Browse current auctions
+                    </Link>
+                  </>
+                ) : (
+                  <>
+                    {error ? (
+                      <div className="rounded-2xl border border-destructive/30 bg-destructive/10 p-3 text-sm whitespace-pre-line">
+                        {error}
+                      </div>
+                    ) : null}
+
+                    {success ? (
+                      <div className="rounded-2xl border border-emerald-500/30 bg-emerald-500/10 p-3 text-sm">
+                        {success}
+                      </div>
+                    ) : null}
+
+                    <div className="rounded-2xl border border-border bg-background p-4">
+                      <p className="text-sm text-muted-foreground">
+                        Minimum bid:{" "}
+                        <strong className="text-foreground">
+                          £{minimumAllowed.toLocaleString("en-GB")}
+                        </strong>{" "}
+                        <span className="text-xs">
+                          (increments of £{bidIncrement.toLocaleString("en-GB")})
+                        </span>
+                      </p>
+
+                      <input
+                        type="number"
+                        value={bidAmount}
+                        onChange={(e) => setBidAmount(e.target.value)}
+                        min={minimumAllowed}
+                        step={bidIncrement}
+                        inputMode="numeric"
+                        placeholder={`£${minimumAllowed.toLocaleString("en-GB")}`}
+                        className="w-full mt-4 rounded-xl border border-border p-3 text-lg text-center bg-background"
+                      />
+                    </div>
+
+                    <div className="rounded-2xl border border-border bg-background p-4 text-sm">
+                      <p className="font-semibold">Important notice</p>
+                      <p className="mt-2 text-muted-foreground">
+                        Please check the listing details carefully before bidding. All bids are binding.
+                      </p>
+
+                      <label className="mt-3 flex items-start gap-2 text-sm">
+                        <input
+                          type="checkbox"
+                          checked={noticeAccepted}
+                          onChange={(e) => {
+                            const checked = e.target.checked;
+                            setNoticeAccepted(checked);
+
+                            if (typeof window !== "undefined" && listing?.$id) {
+                              const key = `${NOTICE_KEY_PREFIX}${listing.$id}`;
+                              window.localStorage.setItem(key, checked ? "true" : "false");
+                            }
+                          }}
+                          className="mt-1"
+                        />
+                        <span className="text-muted-foreground">
+                          I understand and accept this notice.
+                        </span>
+                      </label>
+                    </div>
+
+                    {checkingPaymentMethod ? (
+                      <p className="text-sm text-muted-foreground">
+                        Checking your saved payment method…
+                      </p>
+                    ) : null}
+
+                    {paymentMethodError ? (
+                      <div className="rounded-2xl border border-destructive/30 bg-destructive/10 p-3 text-sm">
+                        {paymentMethodError}
+                      </div>
+                    ) : null}
+
+                    {hasPaymentMethod === false && !checkingPaymentMethod && !paymentMethodError ? (
+                      <div className="rounded-2xl border border-primary/30 bg-primary/10 p-4 text-sm">
+                        <p className="font-semibold">Action needed</p>
+                        <p className="mt-1 text-muted-foreground">
+                          Before you can bid or use Buy Now, you must add a payment method.
+                        </p>
+                        <Link
+                          href={paymentMethodHref}
+                          className="mt-3 inline-block text-primary underline hover:opacity-80"
+                        >
+                          Add or manage payment method
+                        </Link>
+                      </div>
+                    ) : null}
+
+                    <div className="flex flex-col gap-3">
+                      <button
+                        onClick={() => {
+                          if (paymentBlocked) {
+                            router.push(paymentMethodHref);
+                            return;
+                          }
+                          void handleBid();
+                        }}
+                        disabled={!canBidOrBuyNow || submitting || checkingPaymentMethod}
+                        className="rounded-xl py-3 text-lg font-semibold text-white transition disabled:cursor-not-allowed"
+                        style={{
+                          backgroundColor:
+                            canBidOrBuyNow && !checkingPaymentMethod ? "#2563eb" : "rgba(107,114,128,0.8)",
+                        }}
+                      >
+                        {canBidOrBuyNow
+                          ? submitting
+                            ? "Processing…"
+                            : checkingPaymentMethod
+                            ? "Checking payment…"
+                            : "Place bid"
+                          : "Auction not live"}
+                      </button>
+
+                      {canShowBuyNow && buyNowPrice !== null ? (
+                        <button
+                          onClick={() => {
+                            if (paymentBlocked) {
+                              router.push(paymentMethodHref);
+                              return;
+                            }
+                            void handleBuyNow();
+                          }}
+                          disabled={!canBidOrBuyNow || submitting || checkingPaymentMethod}
+                          className="rounded-xl py-3 text-lg font-semibold text-white transition disabled:cursor-not-allowed"
+                          style={{
+                            backgroundColor:
+                              canBidOrBuyNow && !checkingPaymentMethod
+                                ? "rgba(16,185,129,0.88)"
+                                : "rgba(107,114,128,0.8)",
+                          }}
+                        >
+                          {canBidOrBuyNow
+                            ? submitting
+                              ? "Processing Buy Now…"
+                              : checkingPaymentMethod
+                              ? "Checking payment…"
+                              : `Buy Now £${buyNowPrice.toLocaleString("en-GB")}`
+                            : "Buy Now unavailable"}
+                        </button>
+                      ) : null}
+                    </div>
+
+                    <div>
+                      <Link
+                        href={paymentMethodHref}
+                        className="text-xs text-primary underline hover:opacity-80"
+                      >
+                        Manage payment method
+                      </Link>
+                    </div>
+                  </>
                 )}
-              </div>
 
-              <div className="mt-3">
-                <Link href={paymentMethodHref} className="text-xs text-blue-300 underline">
-                  Manage payment method
-                </Link>
+                <p className="text-xs text-muted-foreground leading-relaxed">
+                  New here?{" "}
+                  <Link href="/how-it-works" className="text-primary underline hover:opacity-80">
+                    Read how it works
+                  </Link>
+                  {" "}or{" "}
+                  <Link href="/fees" className="text-primary underline hover:opacity-80">
+                    see fees
+                  </Link>
+                  .
+                </p>
               </div>
-            </>
-          )}
+            </div>
+          </div>
+        </section>
+
+        {/* Description / extra info */}
+        <div className="mt-6 grid lg:grid-cols-12 gap-6">
+          <section className="lg:col-span-7 rounded-3xl border border-border bg-card p-6 shadow-sm">
+            <h2 className="text-xl font-bold">Description</h2>
+            <div className="mt-4 rounded-2xl border border-border bg-background p-5 whitespace-pre-line text-sm leading-relaxed text-muted-foreground">
+              {listing.description || "No description has been added yet."}
+            </div>
+          </section>
+
+          <section className="lg:col-span-5 rounded-3xl border border-border bg-card p-6 shadow-sm">
+            <h2 className="text-xl font-bold">History & interesting facts</h2>
+            <div className="mt-4 rounded-2xl border border-border bg-background p-5 whitespace-pre-line text-sm leading-relaxed text-muted-foreground">
+              {listing.interesting_fact || "No extra details have been added yet."}
+            </div>
+          </section>
         </div>
       </div>
+    </main>
+  );
+}
 
-      <div className="max-w-4xl mx-auto mt-6 mb-10 space-y-6">
-        <div>
-          <h3 className="text-lg font-bold mb-2 text-[#d6b45f]">Description</h3>
-          <div className="border border-white/10 rounded-lg p-4 bg-[#111111] text-sm text-gray-200 whitespace-pre-line">
-            {listing.description || "No description has been added yet."}
-          </div>
-        </div>
+function StatusBadge({
+  children,
+  tone,
+}: {
+  children: React.ReactNode;
+  tone: "live" | "queued" | "sold" | "buyNow" | "muted";
+}) {
+  const cls =
+    tone === "live"
+      ? "border-emerald-500/30 bg-emerald-500/10 text-foreground"
+      : tone === "queued"
+      ? "border-primary/30 bg-primary/10 text-foreground"
+      : tone === "sold"
+      ? "border-destructive/30 bg-destructive/10 text-foreground"
+      : tone === "buyNow"
+      ? "border-sky-500/30 bg-sky-500/10 text-foreground"
+      : "border-border bg-background text-muted-foreground";
 
-        <div>
-          <h3 className="text-base font-bold mb-2 text-[#d6b45f]">History &amp; interesting facts</h3>
-          <div className="border border-white/10 rounded-lg p-3 bg-[#111111] text-sm text-gray-200 whitespace-pre-line">
-            {listing.interesting_fact || "No extra details have been added yet."}
-          </div>
-        </div>
+  return (
+    <span
+      className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold border ${cls}`}
+    >
+      {children}
+    </span>
+  );
+}
+
+function InfoPill({ label }: { label: string }) {
+  return (
+    <span className="inline-flex items-center rounded-full px-3 py-1.5 text-xs font-semibold border border-border bg-background text-muted-foreground">
+      {label}
+    </span>
+  );
+}
+
+function StatCard({
+  label,
+  value,
+  helper,
+  accent = false,
+}: {
+  label: string;
+  value: React.ReactNode;
+  helper?: string | null;
+  accent?: boolean;
+}) {
+  return (
+    <div className="rounded-2xl border border-border bg-background p-4">
+      <p className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground">
+        {label}
+      </p>
+      <div className={`mt-2 text-lg font-extrabold ${accent ? "text-primary" : ""}`}>
+        {value}
       </div>
+      {helper ? (
+        <p className="mt-2 text-xs text-muted-foreground leading-relaxed">{helper}</p>
+      ) : null}
     </div>
   );
 }

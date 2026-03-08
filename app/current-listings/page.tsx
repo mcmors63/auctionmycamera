@@ -7,7 +7,7 @@ import { Client, Databases, Query } from "node-appwrite";
 
 export const runtime = "nodejs";
 
-// ✅ Use ISR instead of force-dynamic so Google gets stable HTML
+// Use ISR so Google gets stable HTML
 export const revalidate = 300; // 5 minutes
 
 const PROD_SITE_URL = "https://auctionmycamera.co.uk";
@@ -28,9 +28,7 @@ function getSiteUrl() {
   const onVercel = !!process.env.VERCEL_ENV;
   const isProd = isProdEnv();
 
-  // ✅ Always use the real domain in production (canonical consistency)
   if (isProd) return PROD_SITE_URL;
-
   if (explicit) return explicit;
 
   const vercelUrl = normalizeBaseUrl(
@@ -73,8 +71,6 @@ const endpoint = endpointRaw.replace(/\/+$/, "");
 const projectId = process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID!;
 const apiKey = process.env.APPWRITE_API_KEY!;
 
-// ✅ IMPORTANT: Only use LISTINGS envs (no LISTINGS fallback).
-// If these are missing, we'd rather fail loudly than silently query the wrong database.
 const DB_ID =
   process.env.APPWRITE_LISTINGS_DATABASE_ID ||
   process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID ||
@@ -90,7 +86,10 @@ function serverDb() {
   return new Databases(client);
 }
 
-async function fetchByStatuses(statuses: string[]) {
+async function fetchByStatuses(
+  statuses: string[],
+  preferredOrder?: { field: string; dir: "asc" | "desc" }
+) {
   if (!DB_ID || !COLLECTION_ID) {
     throw new Error(
       "Missing Appwrite LISTINGS env vars. Set APPWRITE_LISTINGS_DATABASE_ID + APPWRITE_LISTINGS_COLLECTION_ID (or NEXT_PUBLIC equivalents)."
@@ -101,14 +100,31 @@ async function fetchByStatuses(statuses: string[]) {
   if (clean.length === 0) return [];
 
   const db = serverDb();
-  const res = await db.listDocuments(DB_ID, COLLECTION_ID, [
-    // Appwrite supports passing an array to equal() for OR matching on a single attribute
-    Query.equal("status", clean),
+  const base = [Query.equal("status", clean), Query.limit(200)];
+
+  if (preferredOrder?.field) {
+    try {
+      const res = await db.listDocuments(DB_ID, COLLECTION_ID, [
+        ...base,
+        preferredOrder.dir === "asc"
+          ? Query.orderAsc(preferredOrder.field)
+          : Query.orderDesc(preferredOrder.field),
+      ]);
+      return res.documents as any[];
+    } catch (err) {
+      console.warn(
+        `[current-listings] preferred order failed (${preferredOrder.field}); falling back:`,
+        err
+      );
+    }
+  }
+
+  const fallback = await db.listDocuments(DB_ID, COLLECTION_ID, [
+    ...base,
     Query.orderDesc("$updatedAt"),
-    Query.limit(200),
   ]);
 
-  return res.documents as any[];
+  return fallback.documents as any[];
 }
 
 function listingHref(doc: any) {
@@ -144,19 +160,59 @@ function getListingLabel(doc: any) {
   return bits.length ? bits.join(" • ") : "";
 }
 
+function parseMaybeDate(value: any): Date | null {
+  if (!value) return null;
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function formatDateLabel(value: any) {
+  const d = parseMaybeDate(value);
+  if (!d) return null;
+
+  return new Intl.DateTimeFormat("en-GB", {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    timeZone: "Europe/London",
+  }).format(d);
+}
+
+function getAuctionStart(doc: any) {
+  return doc?.auction_start ?? doc?.start_time ?? doc?.startsAt ?? null;
+}
+
+function getAuctionEnd(doc: any) {
+  return doc?.auction_end ?? doc?.end_time ?? doc?.endsAt ?? null;
+}
+
+function firstLiveEndingText(live: any[]) {
+  if (!live.length) return "No live auctions right now";
+  const label = formatDateLabel(getAuctionEnd(live[0]));
+  return label ? `Earliest closing listing ends ${label} UK time` : "Live auctions are running now";
+}
+
+function firstQueuedStartingText(soon: any[]) {
+  if (!soon.length) return "No queued listings right now";
+  const label = formatDateLabel(getAuctionStart(soon[0]));
+  return label ? `Next queued listing starts ${label} UK time` : "Queued listings are lined up for the next window";
+}
+
 export default async function CurrentListingsPage() {
   let live: any[] = [];
   let soon: any[] = [];
   let loadFailed = false;
 
   try {
-    // Be tolerant to common cloned-project status naming
     const LIVE_STATUSES = ["live", "active"];
     const SOON_STATUSES = ["queued", "upcoming"];
 
     [live, soon] = await Promise.all([
-      fetchByStatuses(LIVE_STATUSES),
-      fetchByStatuses(SOON_STATUSES),
+      fetchByStatuses(LIVE_STATUSES, { field: "auction_end", dir: "asc" }),
+      fetchByStatuses(SOON_STATUSES, { field: "auction_start", dir: "asc" }),
     ]);
   } catch (err) {
     console.error("Failed to load current listings (server):", err);
@@ -165,15 +221,14 @@ export default async function CurrentListingsPage() {
     soon = [];
   }
 
-  // JSON-LD for crawlable auction links (kept small)
-  const liveForLd = live.slice(0, 50);
+  const combinedForLd = [...live, ...soon].slice(0, 50);
 
   const jsonLdItemList = {
     "@context": "https://schema.org",
     "@type": "ItemList",
     itemListOrder: "https://schema.org/ItemListUnordered",
-    numberOfItems: liveForLd.length,
-    itemListElement: liveForLd.map((doc, idx) => {
+    numberOfItems: combinedForLd.length,
+    itemListElement: combinedForLd.map((doc, idx) => {
       const name = `${getListingTitle(doc)} – Camera Gear Auction`;
       const url = `${SITE_URL}${listingHref(doc)}`;
       return {
@@ -190,13 +245,20 @@ export default async function CurrentListingsPage() {
     "@type": "BreadcrumbList",
     itemListElement: [
       { "@type": "ListItem", position: 1, name: "Home", item: `${SITE_URL}/` },
-      { "@type": "ListItem", position: 2, name: "Current auctions", item: `${SITE_URL}/current-listings` },
+      {
+        "@type": "ListItem",
+        position: 2,
+        name: "Current auctions",
+        item: `${SITE_URL}/current-listings`,
+      },
     ],
   };
 
+  const topLive = live.slice(0, 8);
+  const topSoon = soon.slice(0, 8);
+
   return (
     <>
-      {/* Structured data for SEO */}
       <Script
         id="ld-current-itemlist"
         type="application/ld+json"
@@ -208,33 +270,262 @@ export default async function CurrentListingsPage() {
         dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLdBreadcrumbs) }}
       />
 
-      {/* Crawlable block (uses SAME theme tokens as homepage) */}
-      <section className="bg-background text-foreground px-4 pt-6">
-        <div className="max-w-6xl mx-auto">
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
-            <span className="text-muted-foreground">Useful:</span>
-            <Link href="/sell" className="text-primary underline hover:opacity-80">
-              Sell your gear
-            </Link>
-            <Link href="/how-it-works" className="text-primary underline hover:opacity-80">
-              How it works
-            </Link>
-            <Link href="/fees" className="text-primary underline hover:opacity-80">
-              Fees
-            </Link>
-            <Link href="/faq" className="text-primary underline hover:opacity-80">
-              FAQ
-            </Link>
+      {/* Server-rendered top section */}
+      <section className="relative overflow-hidden border-b border-border bg-background text-foreground">
+        <div className="absolute inset-0 bg-gradient-to-b from-background via-background to-background/95" />
+        <div className="absolute -top-28 -left-28 h-80 w-80 rounded-full bg-primary/10 blur-3xl" />
+        <div className="absolute -top-36 right-[-10rem] h-[28rem] w-[28rem] rounded-full bg-primary/8 blur-3xl" />
+
+        <div className="relative max-w-6xl mx-auto px-4 pt-10 pb-10">
+          <div className="max-w-4xl">
+            <p className="inline-flex items-center rounded-full border border-border bg-card px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-primary">
+              AuctionMyCamera • UK camera & photography gear marketplace
+            </p>
+
+            <h1 className="mt-4 text-3xl md:text-5xl font-extrabold tracking-tight">
+              Current camera gear auctions
+            </h1>
+
+            <p className="mt-4 max-w-3xl text-sm md:text-base leading-relaxed text-muted-foreground">
+              Browse live auctions and queued listings for cameras, lenses, and photography
+              gear. See what is active now, what is coming next, and move into a
+              clearer post-sale process when an item is won.
+            </p>
+
+            <div className="mt-6 flex flex-wrap gap-3">
+              <Link
+                href="/login-or-register"
+                className="rounded-xl px-5 py-3 text-sm font-semibold shadow-sm transition bg-primary text-primary-foreground hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-ring"
+              >
+                Create an account to bid
+              </Link>
+
+              <Link
+                href="/sell"
+                className="rounded-xl border border-border bg-card px-5 py-3 text-sm font-semibold transition hover:bg-accent focus:outline-none focus:ring-2 focus:ring-ring"
+              >
+                Sell your gear
+              </Link>
+
+              <Link
+                href="/how-it-works"
+                className="rounded-xl border border-border bg-background px-5 py-3 text-sm font-semibold transition hover:bg-accent focus:outline-none focus:ring-2 focus:ring-ring"
+              >
+                How it works
+              </Link>
+            </div>
+
+            <div className="mt-8 grid sm:grid-cols-2 lg:grid-cols-4 gap-3">
+              <SnapshotCard
+                title="Live now"
+                value={String(live.length)}
+                body={firstLiveEndingText(live)}
+              />
+              <SnapshotCard
+                title="Coming next"
+                value={String(soon.length)}
+                body={firstQueuedStartingText(soon)}
+              />
+              <SnapshotCard
+                title="Auction window"
+                value="Mon–Sun"
+                body="Weekly schedule: Monday 01:00 to Sunday 23:00, UK time."
+              />
+              <SnapshotCard
+                title="After sale"
+                value="Structured"
+                body="Secure checkout first, then both sides follow the next steps clearly."
+              />
+            </div>
+
+            <div className="mt-6 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-muted-foreground">
+              <span>Useful:</span>
+              <Link href="/sell" className="text-primary underline hover:opacity-80">
+                Sell your gear
+              </Link>
+              <Link href="/fees" className="text-primary underline hover:opacity-80">
+                Fees
+              </Link>
+              <Link href="/faq" className="text-primary underline hover:opacity-80">
+                FAQ
+              </Link>
+            </div>
           </div>
 
-          <details className="mt-4 rounded-2xl border border-border bg-card p-4">
+          {/* Featured previews */}
+          <div className="mt-10 grid lg:grid-cols-2 gap-6">
+            <div className="rounded-3xl border border-border bg-card p-5 shadow-sm">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                    Live now
+                  </p>
+                  <h2 className="mt-1 text-lg font-bold">Auctions ending soon</h2>
+                </div>
+                <Link
+                  href="#interactive-current-listings"
+                  className="text-sm text-primary underline hover:opacity-80"
+                >
+                  Jump to listings
+                </Link>
+              </div>
+
+              {topLive.length === 0 ? (
+                <div className="mt-4 rounded-2xl border border-border bg-background p-4">
+                  <p className="text-sm">No live auctions right now.</p>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    Check back soon or browse queued listings below.
+                  </p>
+                </div>
+              ) : (
+                <div className="mt-4 grid sm:grid-cols-2 gap-3">
+                  {topLive.map((doc) => {
+                    const title = getListingTitle(doc);
+                    const label = getListingLabel(doc);
+                    const endLabel = formatDateLabel(getAuctionEnd(doc));
+
+                    return (
+                      <Link
+                        key={doc?.$id}
+                        href={listingHref(doc)}
+                        className="rounded-2xl border border-border bg-background p-4 transition hover:bg-accent"
+                      >
+                        <p className="text-base font-extrabold">{title}</p>
+                        {label ? (
+                          <p className="mt-1 text-xs uppercase tracking-wide text-muted-foreground">
+                            {label}
+                          </p>
+                        ) : null}
+                        <p className="mt-2 text-sm text-muted-foreground">
+                          {endLabel ? `Ends ${endLabel}` : "Live now"}
+                        </p>
+                        <p className="mt-3 text-sm font-semibold text-primary">
+                          View listing
+                        </p>
+                      </Link>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            <div className="rounded-3xl border border-border bg-card p-5 shadow-sm">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                    Coming next
+                  </p>
+                  <h2 className="mt-1 text-lg font-bold">Queued listings</h2>
+                </div>
+                <Link
+                  href="/sell"
+                  className="text-sm text-primary underline hover:opacity-80"
+                >
+                  Want to list yours?
+                </Link>
+              </div>
+
+              {topSoon.length === 0 ? (
+                <div className="mt-4 rounded-2xl border border-border bg-background p-4">
+                  <p className="text-sm">Nothing queued right now.</p>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    Sellers can submit items for the next weekly auction window.
+                  </p>
+                </div>
+              ) : (
+                <div className="mt-4 grid sm:grid-cols-2 gap-3">
+                  {topSoon.map((doc) => {
+                    const title = getListingTitle(doc);
+                    const label = getListingLabel(doc);
+                    const startLabel = formatDateLabel(getAuctionStart(doc));
+
+                    return (
+                      <Link
+                        key={doc?.$id}
+                        href={listingHref(doc)}
+                        className="rounded-2xl border border-border bg-background p-4 transition hover:bg-accent"
+                      >
+                        <p className="text-base font-extrabold">{title}</p>
+                        {label ? (
+                          <p className="mt-1 text-xs uppercase tracking-wide text-muted-foreground">
+                            {label}
+                          </p>
+                        ) : null}
+                        <p className="mt-2 text-sm text-muted-foreground">
+                          {startLabel
+                            ? `Starts ${startLabel}`
+                            : "Coming into the next auction window"}
+                        </p>
+                        <p className="mt-3 text-sm font-semibold text-primary">
+                          View listing
+                        </p>
+                      </Link>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Crawlable link lists */}
+          <div className="mt-8 grid md:grid-cols-2 gap-6">
+            <div className="rounded-2xl border border-border bg-card p-4">
+              <h2 className="text-sm font-bold text-primary mb-3">Browse live auction links</h2>
+              {live.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No live auctions right now.</p>
+              ) : (
+                <ul className="space-y-2 text-sm">
+                  {live.slice(0, 16).map((doc) => {
+                    const title = getListingTitle(doc);
+                    const label = getListingLabel(doc);
+                    return (
+                      <li key={doc?.$id}>
+                        <Link href={listingHref(doc)} className="underline hover:opacity-80">
+                          {title}
+                        </Link>
+                        {label ? (
+                          <span className="text-xs text-muted-foreground">{"  "}({label})</span>
+                        ) : null}
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </div>
+
+            <div className="rounded-2xl border border-border bg-card p-4">
+              <h2 className="text-sm font-bold text-primary mb-3">Browse queued listing links</h2>
+              {soon.length === 0 ? (
+                <p className="text-sm text-muted-foreground">Nothing queued right now.</p>
+              ) : (
+                <ul className="space-y-2 text-sm">
+                  {soon.slice(0, 16).map((doc) => {
+                    const title = getListingTitle(doc);
+                    const label = getListingLabel(doc);
+                    return (
+                      <li key={doc?.$id}>
+                        <Link href={listingHref(doc)} className="underline hover:opacity-80">
+                          {title}
+                        </Link>
+                        {label ? (
+                          <span className="text-xs text-muted-foreground">{"  "}({label})</span>
+                        ) : null}
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </div>
+          </div>
+
+          <details className="mt-5 rounded-2xl border border-border bg-card p-4">
             <summary className="cursor-pointer font-semibold">
-              Crawlable auction links (Live: {live.length} • Coming next: {soon.length})
+              Full crawlable auction links (Live: {live.length} • Coming next: {soon.length})
             </summary>
 
             <div className="mt-4 grid md:grid-cols-2 gap-6">
               <div>
-                <h2 className="text-sm font-bold text-primary mb-2">Live auctions</h2>
+                <h3 className="text-sm font-bold text-primary mb-2">Live auctions</h3>
                 {live.length === 0 ? (
                   <p className="text-sm text-muted-foreground">No live auctions right now.</p>
                 ) : (
@@ -258,7 +549,7 @@ export default async function CurrentListingsPage() {
               </div>
 
               <div>
-                <h2 className="text-sm font-bold text-primary mb-2">Coming next</h2>
+                <h3 className="text-sm font-bold text-primary mb-2">Coming next</h3>
                 {soon.length === 0 ? (
                   <p className="text-sm text-muted-foreground">Nothing queued right now.</p>
                 ) : (
@@ -283,8 +574,7 @@ export default async function CurrentListingsPage() {
             </div>
 
             <p className="mt-4 text-xs text-muted-foreground">
-              Tip: this block helps crawlers discover listings even if scripts are slow. Your full interactive UI is just
-              below.
+              This block helps crawlers discover listings even if scripts are slow.
             </p>
 
             {!DB_ID || !COLLECTION_ID ? (
@@ -302,8 +592,7 @@ export default async function CurrentListingsPage() {
               <div className="mt-4 rounded-xl border border-destructive/30 bg-destructive/10 p-3 text-xs">
                 <p className="font-semibold">Listings temporarily unavailable</p>
                 <p className="mt-1">
-                  The server couldn’t reach the listings database just now. This usually means Appwrite env keys/scopes,
-                  endpoint, or permissions are misconfigured. Check server logs for the exact error.
+                  The server couldn’t reach the listings database just now. Check server logs for the exact Appwrite error.
                 </p>
               </div>
             ) : null}
@@ -312,7 +601,29 @@ export default async function CurrentListingsPage() {
       </section>
 
       {/* Interactive client UI */}
-      <CurrentListingsClient initialLive={live} initialSoon={soon} />
+      <div id="interactive-current-listings">
+        <CurrentListingsClient initialLive={live} initialSoon={soon} />
+      </div>
     </>
+  );
+}
+
+function SnapshotCard({
+  title,
+  value,
+  body,
+}: {
+  title: string;
+  value: string;
+  body: string;
+}) {
+  return (
+    <div className="rounded-2xl border border-border bg-card p-4 shadow-sm">
+      <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+        {title}
+      </p>
+      <p className="mt-2 text-2xl font-extrabold">{value}</p>
+      <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{body}</p>
+    </div>
   );
 }
