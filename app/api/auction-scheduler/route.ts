@@ -54,7 +54,7 @@ const TRANSACTIONS_COLLECTION_ID =
   process.env.NEXT_PUBLIC_APPWRITE_TRANSACTIONS_COLLECTION_ID ||
   "";
 
-// Profiles may be separate DB/collection (✅ important!)
+// Profiles may be separate DB/collection (important)
 const PROFILES_DB_ID =
   process.env.APPWRITE_PROFILES_DATABASE_ID ||
   process.env.NEXT_PUBLIC_APPWRITE_PROFILES_DATABASE_ID ||
@@ -97,7 +97,7 @@ function cronAuthed(req: NextRequest) {
 const stripeSecret = (process.env.STRIPE_SECRET_KEY || "").trim();
 const stripe = stripeSecret ? new Stripe(stripeSecret) : null;
 
-// ✅ SAFETY SWITCH (prevents real charges while testing)
+// SAFETY SWITCH (prevents real charges while testing)
 const DISABLE_WINNER_CHARGES =
   (process.env.DISABLE_WINNER_CHARGES || "").trim() === "1" ||
   (process.env.DISABLE_WINNER_CHARGES || "").trim().toLowerCase() === "true";
@@ -164,6 +164,19 @@ function esc(s: string) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#039;");
+}
+
+function getErrorMessage(err: any) {
+  if (!err) return "Unknown error";
+  if (typeof err === "string") return err;
+  if (typeof err?.message === "string" && err.message.trim()) return err.message.trim();
+  if (typeof err?.response === "string" && err.response.trim()) return err.response.trim();
+
+  try {
+    return JSON.stringify(err);
+  } catch {
+    return "Unknown error";
+  }
 }
 
 // -----------------------------
@@ -374,7 +387,7 @@ async function createTransactionForWinner(params: {
     return null;
   }
 
-  // ✅ prevent duplicate tx creation (scheduler reruns)
+  // prevent duplicate tx creation (scheduler reruns)
   const existing = await findAnyTransactionForListing(databases, String(listing.$id || ""));
   if (existing && String(existing.payment_status || "").toLowerCase() === "paid") {
     return existing;
@@ -386,7 +399,7 @@ async function createTransactionForWinner(params: {
   const sellerEmail = String(listing.seller_email || listing.sellerEmail || "").trim();
 
   const commissionRate = getNumeric(listing.commission_rate); // %
-  const salePrice = roundTo2(finalBidAmount); // ✅ keep pennies
+  const salePrice = roundTo2(finalBidAmount); // keep pennies
 
   const commissionAmount = roundTo2(commissionRate > 0 ? (salePrice * commissionRate) / 100 : 0);
   const sellerPayout = roundTo2(Math.max(0, salePrice - commissionAmount - EXTRA_FEE_GBP));
@@ -408,12 +421,12 @@ async function createTransactionForWinner(params: {
     buyer_email: winnerEmail,
     buyer_id: winnerUserId,
 
-    sale_price: salePrice, // ✅
+    sale_price: salePrice,
 
     commission_rate: commissionRate,
-    commission_amount: commissionAmount, // ✅
+    commission_amount: commissionAmount,
 
-    seller_payout: sellerPayout, // ✅
+    seller_payout: sellerPayout,
 
     dvla_fee: 0,
 
@@ -455,7 +468,7 @@ async function createPaymentFailedTransaction(params: {
 
   if (!TRANSACTIONS_COLLECTION_ID) return null;
 
-  // ✅ prevent endless failure tx spam
+  // prevent endless failure tx spam
   const existing = await findAnyTransactionForListing(databases, String(listing.$id || ""));
   if (existing && String(existing.transaction_status || "").toLowerCase() === "payment_failed") {
     return existing;
@@ -483,7 +496,7 @@ async function createPaymentFailedTransaction(params: {
     buyer_email: winnerEmail,
     buyer_id: winnerUserId,
 
-    sale_price: roundTo2(finalBidAmount), // ✅ keep pennies
+    sale_price: roundTo2(finalBidAmount),
 
     payment_status: "unpaid",
     transaction_status: "payment_failed",
@@ -718,6 +731,8 @@ async function sendPaymentRequiredEmails(params: {
 // -----------------------------
 export async function GET(req: NextRequest) {
   const winnerCharges: any[] = [];
+  const promotionErrors: Array<{ listingId: string; stage: string; error: string }> = [];
+  const liveEndErrors: Array<{ listingId: string; stage: string; error: string }> = [];
 
   try {
     if (!cronAuthed(req)) {
@@ -761,33 +776,62 @@ export async function GET(req: NextRequest) {
     for (const doc of queuedDocs as any[]) {
       const lid = String(doc.$id || "");
 
-      let startTs = parseTimestamp(doc.auction_start);
-      let endTs = parseTimestamp(doc.auction_end);
+      try {
+        let startTs = parseTimestamp(doc.auction_start);
+        let endTs = parseTimestamp(doc.auction_end);
 
-      if (!startTs || !endTs) {
-        const { currentStart, currentEnd, nextStart, nextEnd, now: wnNow } = getAuctionWindow();
-        const useNext = wnNow.getTime() > currentEnd.getTime();
+        if (!startTs || !endTs) {
+          const { currentStart, currentEnd, nextStart, nextEnd, now: wnNow } = getAuctionWindow();
+          const useNext = wnNow.getTime() > currentEnd.getTime();
 
-        const start = useNext ? nextStart : currentStart;
-        const end = useNext ? nextEnd : currentEnd;
+          const start = useNext ? nextStart : currentStart;
+          const end = useNext ? nextEnd : currentEnd;
+
+          try {
+            await databases.updateDocument(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, lid, {
+              auction_start: start.toISOString(),
+              auction_end: end.toISOString(),
+            });
+            repairedQueuedDates++;
+            startTs = start.getTime();
+            endTs = end.getTime();
+          } catch (err: any) {
+            const message = getErrorMessage(err);
+            console.error(`[auction-scheduler] queued date repair failed for ${lid}:`, err);
+            promotionErrors.push({
+              listingId: lid,
+              stage: "repair_dates",
+              error: message,
+            });
+            continue;
+          }
+        }
+
+        if (startTs > nowTs) continue;
 
         try {
-          await databases.updateDocument(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, lid, {
-            auction_start: start.toISOString(),
-            auction_end: end.toISOString(),
+          await databases.updateDocument(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, lid, { status: "live" });
+          promoted++;
+        } catch (err: any) {
+          const message = getErrorMessage(err);
+          console.error(`[auction-scheduler] queued->live failed for ${lid}:`, err);
+          promotionErrors.push({
+            listingId: lid,
+            stage: "promote_live",
+            error: message,
           });
-          repairedQueuedDates++;
-          startTs = start.getTime();
-          endTs = end.getTime();
-        } catch {
           continue;
         }
+      } catch (err: any) {
+        const message = getErrorMessage(err);
+        console.error(`[auction-scheduler] unexpected queued listing error for ${lid}:`, err);
+        promotionErrors.push({
+          listingId: lid,
+          stage: "unexpected",
+          error: message,
+        });
+        continue;
       }
-
-      if (startTs > nowTs) continue;
-
-      await databases.updateDocument(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, lid, { status: "live" });
-      promoted++;
     }
 
     // ---------------------------------
@@ -810,73 +854,117 @@ export async function GET(req: NextRequest) {
     const justCompletedForCharging: any[] = [];
 
     for (const doc of liveToEndDocs as any[]) {
-      const lid = doc.$id as string;
+      const lid = String(doc.$id || "");
 
-      const currentBid = getNumeric(doc.current_bid);
-      const reserve = getNumeric(doc.reserve_price);
-      const wantsAutoRelist = !!doc.relist_until_sold;
+      try {
+        const currentBid = getNumeric(doc.current_bid);
+        const reserve = getNumeric(doc.reserve_price);
+        const wantsAutoRelist = !!doc.relist_until_sold;
 
-      const hasBid = currentBid > 0;
-      const reserveMet = reserve <= 0 ? hasBid : currentBid >= reserve;
+        const hasBid = currentBid > 0;
+        const reserveMet = reserve <= 0 ? hasBid : currentBid >= reserve;
 
-      if (hasBid && reserveMet) {
-        const updated = await databases.updateDocument(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, lid, { status: "completed" });
-        completed++;
-        justCompletedForCharging.push(updated);
-        continue;
-      }
-
-      if (wantsAutoRelist) {
-        const { currentStart, currentEnd, nextStart, nextEnd, now: wnNow } = getAuctionWindow();
-
-        const useNext = wnNow.getTime() > currentEnd.getTime();
-        const start = useNext ? nextStart : currentStart;
-        const end = useNext ? nextEnd : currentEnd;
-
-        await databases.updateDocument(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, lid, {
-          status: "queued",
-          auction_start: start.toISOString(),
-          auction_end: end.toISOString(),
-
-          current_bid: null,
-          highest_bidder: null,
-          last_bidder: null,
-          last_bid_time: null,
-          bids: 0,
-          bidder_email: null,
-          bidder_id: null,
-        });
-
-        relisted++;
-
-        const sellerEmail = String(doc.seller_email || "").trim();
-        const title = getListingLabel(doc);
-
-        if (mailer && sellerEmail && isValidEmail(sellerEmail) && isValidEmail(FROM_ADDRESS)) {
+        if (hasBid && reserveMet) {
           try {
-            await mailer.sendMail({
-              from: { name: FROM_NAME, address: FROM_ADDRESS },
-              to: sellerEmail,
-              subject: `✅ ${title} has been re-listed`,
-              text: `Your listing "${title}" did not sell this week, so we have automatically re-listed it for the next auction window.
+            const updated = await databases.updateDocument(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, lid, {
+              status: "completed",
+            });
+            completed++;
+            justCompletedForCharging.push(updated);
+          } catch (err: any) {
+            const message = getErrorMessage(err);
+            console.error(`[auction-scheduler] live->completed failed for ${lid}:`, err);
+            liveEndErrors.push({
+              listingId: lid,
+              stage: "mark_completed",
+              error: message,
+            });
+          }
+          continue;
+        }
+
+        if (wantsAutoRelist) {
+          const { currentStart, currentEnd, nextStart, nextEnd, now: wnNow } = getAuctionWindow();
+
+          const useNext = wnNow.getTime() > currentEnd.getTime();
+          const start = useNext ? nextStart : currentStart;
+          const end = useNext ? nextEnd : currentEnd;
+
+          try {
+            await databases.updateDocument(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, lid, {
+              status: "queued",
+              auction_start: start.toISOString(),
+              auction_end: end.toISOString(),
+
+              current_bid: null,
+              highest_bidder: null,
+              last_bidder: null,
+              last_bid_time: null,
+              bids: 0,
+              bidder_email: null,
+              bidder_id: null,
+            });
+
+            relisted++;
+          } catch (err: any) {
+            const message = getErrorMessage(err);
+            console.error(`[auction-scheduler] live->queued relist failed for ${lid}:`, err);
+            liveEndErrors.push({
+              listingId: lid,
+              stage: "relist",
+              error: message,
+            });
+            continue;
+          }
+
+          const sellerEmail = String(doc.seller_email || "").trim();
+          const title = getListingLabel(doc);
+
+          if (mailer && sellerEmail && isValidEmail(sellerEmail) && isValidEmail(FROM_ADDRESS)) {
+            try {
+              await mailer.sendMail({
+                from: { name: FROM_NAME, address: FROM_ADDRESS },
+                to: sellerEmail,
+                subject: `✅ ${title} has been re-listed`,
+                text: `Your listing "${title}" did not sell this week, so we have automatically re-listed it for the next auction window.
 
 Start: ${fmtLondon(start)}
 End:   ${fmtLondon(end)}
 
 — AuctionMyCamera Team`,
-            });
+              });
 
-            relistEmailsSent++;
-          } catch (mailErr) {
-            console.error("Failed to send auto-relist email:", mailErr);
+              relistEmailsSent++;
+            } catch (mailErr) {
+              console.error("Failed to send auto-relist email:", mailErr);
+            }
           }
+
+          continue;
         }
 
+        try {
+          await databases.updateDocument(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, lid, { status: "not_sold" });
+          markedNotSold++;
+        } catch (err: any) {
+          const message = getErrorMessage(err);
+          console.error(`[auction-scheduler] live->not_sold failed for ${lid}:`, err);
+          liveEndErrors.push({
+            listingId: lid,
+            stage: "mark_not_sold",
+            error: message,
+          });
+        }
+      } catch (err: any) {
+        const message = getErrorMessage(err);
+        console.error(`[auction-scheduler] unexpected live listing error for ${lid}:`, err);
+        liveEndErrors.push({
+          listingId: lid,
+          stage: "unexpected",
+          error: message,
+        });
         continue;
       }
-
-      await databases.updateDocument(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, lid, { status: "not_sold" });
-      markedNotSold++;
     }
 
     // ---------------------------------
@@ -893,6 +981,8 @@ End:   ${fmtLondon(end)}
         relisted,
         relistEmailsSent,
         winnerCharges: [],
+        promotionErrors,
+        liveEndErrors,
         note: "DISABLE_WINNER_CHARGES is enabled — skipped winner charging.",
       });
     }
@@ -908,6 +998,8 @@ End:   ${fmtLondon(end)}
         relisted,
         relistEmailsSent,
         winnerCharges: [],
+        promotionErrors,
+        liveEndErrors,
         note: "Stripe or BIDS collection not configured — skipped winner charging.",
       });
     }
@@ -915,7 +1007,7 @@ End:   ${fmtLondon(end)}
     for (const listing of justCompletedForCharging) {
       const lid = listing.$id as string;
 
-      // ✅ Appwrite-level idempotency: if already paid, do not re-charge
+      // Appwrite-level idempotency: if already paid, do not re-charge
       const alreadyIntent = String(listing?.stripe_payment_intent_id || "").trim();
       if (alreadyIntent) {
         winnerCharges.push({ listingId: lid, skipped: true, reason: "listing already has stripe_payment_intent_id" });
@@ -1002,7 +1094,7 @@ End:   ${fmtLondon(end)}
       const totalToCharge = finalBidAmount;
       const amountInPence = Math.round(totalToCharge * 100);
 
-      // ✅ Load buyer profile snapshot from PROFILES_DB_ID (fixes delivery details)
+      // Load buyer profile snapshot from PROFILES_DB_ID (fixes delivery details)
       let buyerProfile: any = null;
       if ((winnerUserId || winnerEmail) && PROFILES_COLLECTION_ID) {
         if (winnerUserId) {
@@ -1033,7 +1125,7 @@ End:   ${fmtLondon(end)}
         const paymentMethod = await pickPaymentMethodForCustomer(customer.id);
 
         if (!paymentMethod) {
-          // ✅ align listing.status with public page + workflow
+          // align listing.status with public page + workflow
           try {
             await databases.updateDocument(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, lid, {
               status: "payment_required",
@@ -1078,7 +1170,7 @@ End:   ${fmtLondon(end)}
           continue;
         }
 
-        // ✅ Stronger idempotency: key is listingId only (not amount)
+        // Stronger idempotency: key is listingId only (not amount)
         const idempotencyKey = `winner-charge-${lid}`;
 
         const label = getListingLabel(listing);
@@ -1104,7 +1196,7 @@ End:   ${fmtLondon(end)}
           { idempotencyKey }
         );
 
-        // ✅ Write PI id onto listing immediately (prevents repeats)
+        // Write PI id onto listing immediately (prevents repeats)
         try {
           await databases.updateDocument(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, lid, {
             stripe_payment_intent_id: intent.id,
@@ -1112,7 +1204,7 @@ End:   ${fmtLondon(end)}
         } catch {}
 
         if (intent.status !== "succeeded") {
-          // ✅ align listing.status with public page + workflow
+          // align listing.status with public page + workflow
           try {
             await databases.updateDocument(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, lid, {
               status: "payment_failed",
@@ -1160,7 +1252,7 @@ End:   ${fmtLondon(end)}
           continue;
         }
 
-        // ✅ Payment succeeded: mark listing SOLD (fixes “ended” messaging issues)
+        // Payment succeeded: mark listing SOLD
         try {
           const commissionRate = getNumeric(listing.commission_rate);
           const soldPrice = finalBidAmount;
@@ -1231,7 +1323,7 @@ End:   ${fmtLondon(end)}
         const piId =
           anyErr?.raw?.payment_intent?.id || anyErr?.payment_intent?.id || anyErr?.paymentIntentId || "";
 
-        // ✅ align listing.status with public page + workflow
+        // align listing.status with public page + workflow
         try {
           await databases.updateDocument(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, lid, {
             status: "payment_failed",
@@ -1289,6 +1381,8 @@ End:   ${fmtLondon(end)}
       relisted,
       relistEmailsSent,
       winnerCharges,
+      promotionErrors,
+      liveEndErrors,
     });
   } catch (err: any) {
     console.error("auction-scheduler error", err);
