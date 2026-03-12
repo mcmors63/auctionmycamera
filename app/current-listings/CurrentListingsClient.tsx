@@ -1,9 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import ListingCard from "./ListingCard";
+import {
+  getCameraCategorySectionByKey,
+  getGearTypeLabel,
+} from "@/lib/camera-categories";
 
 type ListingLike = {
   $id: string;
@@ -81,15 +85,16 @@ function getListingTitle(l: ListingLike) {
   if (legacy) return legacy;
 
   const gearType = String(l?.gear_type || "").trim();
-  if (gearType) return `${niceEnum(gearType)} listing`;
+  if (gearType) return `${getGearTypeLabel(gearType) || niceEnum(gearType)} listing`;
 
   return "Camera gear listing";
 }
 
 function getListingLabel(l: ListingLike) {
-  const gearType = niceEnum(l?.gear_type);
+  const brand = String(l?.brand || "").trim();
+  const gearType = getGearTypeLabel(l?.gear_type);
   const era = niceEnum(l?.era);
-  const parts = [gearType, era].filter(Boolean);
+  const parts = [brand, gearType, era].filter(Boolean);
   return parts.join(" • ");
 }
 
@@ -178,17 +183,48 @@ function sortLabel(sort: SortKey, tab: Tab) {
 }
 
 export default function CurrentListingsClient({ initialLive, initialSoon }: Props) {
+  const router = useRouter();
   const searchParams = useSearchParams();
 
   const [tab, setTab] = useState<Tab>("live");
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState<SortKey>("ending");
 
+  const sectionFilter = (searchParams.get("section") || "").trim();
+  const gearTypeFilter = (searchParams.get("gear_type") || "").trim();
+  const brandFilter = (searchParams.get("brand") || "").trim();
+
+  const sectionLabel = useMemo(() => {
+    return getCameraCategorySectionByKey(sectionFilter)?.label || "";
+  }, [sectionFilter]);
+
+  const gearTypeLabel = useMemo(() => {
+    return getGearTypeLabel(gearTypeFilter);
+  }, [gearTypeFilter]);
+
+  const activeUrlFilters = useMemo(() => {
+    const pills: string[] = [];
+
+    if (sectionLabel) pills.push(`Category: ${sectionLabel}`);
+    if (gearTypeLabel) pills.push(`Type: ${gearTypeLabel}`);
+    if (brandFilter) pills.push(`Brand: ${brandFilter}`);
+
+    return pills;
+  }, [sectionLabel, gearTypeLabel, brandFilter]);
+
+  const hasUrlFilters = activeUrlFilters.length > 0;
+
   useEffect(() => {
     const qFromUrl = pickQueryParam(searchParams).trim();
     if (!qFromUrl) return;
     setSearch((prev) => (prev.trim().length ? prev : qFromUrl));
   }, [searchParams]);
+
+  useEffect(() => {
+    if (initialLive.length === 0 && initialSoon.length > 0) {
+      setTab("soon");
+    }
+  }, [initialLive.length, initialSoon.length]);
 
   const source = tab === "live" ? initialLive : initialSoon;
 
@@ -233,7 +269,8 @@ export default function CurrentListingsClient({ initialLive, initialSoon }: Prop
     soon: (initialSoon || []).filter((l) => l && l.$id).length,
   };
 
-  const hasActiveFilters = search.trim().length > 0 || sort !== "ending";
+  const hasLocalFilters = search.trim().length > 0 || sort !== "ending";
+  const hasAnyFilters = hasLocalFilters || hasUrlFilters;
 
   const tabHeading = tab === "live" ? "Live auctions" : "Coming next";
   const tabBody =
@@ -272,6 +309,15 @@ export default function CurrentListingsClient({ initialLive, initialSoon }: Prop
       ? `Showing ${filtered.length} result${filtered.length === 1 ? "" : "s"} for “${search.trim()}”.`
       : `Showing ${filtered.length} of ${baseCount} in this tab.`;
 
+  const clearAllFilters = () => {
+    setSearch("");
+    setSort("ending");
+
+    if (hasUrlFilters) {
+      router.push("/current-listings");
+    }
+  };
+
   return (
     <section className="min-h-screen bg-background text-foreground">
       {/* Header */}
@@ -299,6 +345,25 @@ export default function CurrentListingsClient({ initialLive, initialSoon }: Prop
                 Sell your gear
               </Link>
             </div>
+
+            {hasUrlFilters && (
+              <div className="mt-5">
+                <div className="flex flex-wrap gap-2">
+                  {activeUrlFilters.map((pill) => (
+                    <span
+                      key={pill}
+                      className="inline-flex items-center rounded-full border border-border bg-card px-3 py-1 text-[11px] font-semibold text-foreground"
+                    >
+                      {pill}
+                    </span>
+                  ))}
+                </div>
+
+                <p className="mt-2 text-xs text-muted-foreground">
+                  You’re viewing a filtered browse page from the header dropdown.
+                </p>
+              </div>
+            )}
           </div>
 
           {/* Tabs */}
@@ -375,13 +440,10 @@ export default function CurrentListingsClient({ initialLive, initialSoon }: Prop
                 </span>
               </div>
 
-              {hasActiveFilters ? (
+              {hasAnyFilters ? (
                 <button
                   type="button"
-                  onClick={() => {
-                    setSearch("");
-                    setSort("ending");
-                  }}
+                  onClick={clearAllFilters}
                   className="px-4 py-2 rounded-xl text-sm font-semibold border border-border bg-background hover:bg-accent transition w-full lg:w-auto"
                 >
                   Clear filters
@@ -412,12 +474,13 @@ export default function CurrentListingsClient({ initialLive, initialSoon }: Prop
             <p className="mt-2 text-sm text-muted-foreground max-w-2xl mx-auto">{emptyBody}</p>
 
             <div className="mt-6 flex flex-wrap justify-center gap-3">
-              <Link
-                href="/current-listings"
+              <button
+                type="button"
+                onClick={clearAllFilters}
                 className="px-5 py-2.5 rounded-xl text-sm font-semibold border border-border bg-background hover:bg-accent transition"
               >
-                Refresh listings
-              </Link>
+                {hasAnyFilters ? "Clear filters" : "Refresh listings"}
+              </button>
               <Link
                 href="/sell"
                 className="px-5 py-2.5 rounded-xl text-sm font-semibold bg-primary text-primary-foreground hover:opacity-90 transition"
@@ -440,6 +503,8 @@ export default function CurrentListingsClient({ initialLive, initialSoon }: Prop
                 <p className="mt-1 text-sm text-muted-foreground">
                   {search.trim().length > 0
                     ? `Filtered by search match: ${search.trim()}`
+                    : hasUrlFilters
+                    ? "Filtered by the browse menu selection in the header."
                     : tab === "live"
                     ? "Items currently open for bidding."
                     : "Approved items lined up for the next auction window."}

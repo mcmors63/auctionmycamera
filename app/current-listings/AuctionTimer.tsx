@@ -11,44 +11,63 @@ type Props = {
 };
 
 export default function AuctionTimer({ mode, endTime }: Props) {
-  const [now, setNow] = useState(() => Date.now());
+  const [now, setNow] = useState<number | null>(null);
 
-  // Tick every second
   useEffect(() => {
-    const id = window.setInterval(() => setNow(Date.now()), 1000);
+    setNow(Date.now());
+
+    const id = window.setInterval(() => {
+      setNow(Date.now());
+    }, 1000);
+
     return () => window.clearInterval(id);
   }, []);
 
+  const isComing = mode === "coming";
+
+  // ✅ Hook must always run on every render
   const { target, label } = useMemo(() => {
     const { currentStart, currentEnd, nextStart } = getAuctionWindow();
+    const compareNow = now ?? 0;
 
-    // -------------------------
-    // COMING MODE
-    // -------------------------
     if (mode === "coming") {
-      // If we haven't reached currentStart yet → count to currentStart
-      if (now < currentStart.getTime()) {
+      if (compareNow < currentStart.getTime()) {
         return { target: currentStart, label: "Auction starts in" };
       }
 
-      // Otherwise → count to nextStart
       return { target: nextStart, label: "Auction starts in" };
     }
 
-    // -------------------------
-    // LIVE MODE
-    // -------------------------
-    // If a per-listing endTime is supplied (place_bid page), use that
     if (endTime) {
       const parsed = new Date(endTime);
-      if (!isNaN(parsed.getTime())) {
+      if (!Number.isNaN(parsed.getTime())) {
         return { target: parsed, label: "Auction ends in" };
       }
     }
 
-    // Fallback: use weekly auction window end
     return { target: currentEnd, label: "Auction ends in" };
   }, [mode, endTime, now]);
+
+  // ✅ Safe to return after hooks have been called
+  if (now === null) {
+    return (
+      <div
+        className={`inline-flex flex-col rounded-md px-3 py-2 text-xs font-semibold shadow ring-1 ${
+          isComing
+            ? "bg-green-600 text-white ring-green-700/40"
+            : "bg-black/85 text-white ring-black/20 backdrop-blur-sm"
+        }`}
+      >
+        <span className="text-[10px] uppercase tracking-wide text-white/70">
+          {isComing ? "Auction starts in" : "Auction ends in"}
+        </span>
+        <span className="mt-0.5 inline-flex items-center gap-1">
+          <span aria-hidden="true">⏱</span>
+          <span>Loading…</span>
+        </span>
+      </div>
+    );
+  }
 
   const diff = target.getTime() - now;
 
@@ -56,12 +75,12 @@ export default function AuctionTimer({ mode, endTime }: Props) {
     return (
       <span
         className={`inline-flex items-center rounded-md px-3 py-2 text-xs font-semibold shadow ring-1 ${
-          mode === "coming"
+          isComing
             ? "bg-green-600 text-white ring-green-700/40"
             : "bg-neutral-900 text-white ring-black/30"
         }`}
       >
-        {mode === "coming" ? "Auction now live" : "Auction ended"}
+        {isComing ? "Auction now live" : "Auction ended"}
       </span>
     );
   }

@@ -1,4 +1,3 @@
-// components/ui/Navbar.tsx
 "use client";
 
 import { useEffect, useRef, useState } from "react";
@@ -40,7 +39,7 @@ export default function Navbar() {
   const loadedOnceRef = useRef(false);
   const browseRef = useRef<HTMLDivElement | null>(null);
 
-  // Load current session (refresh on route change so login/logout updates without hard refresh)
+  // Load current session
   useEffect(() => {
     let alive = true;
 
@@ -75,7 +74,7 @@ export default function Navbar() {
     };
   }, [pathname]);
 
-  // Close mobile / browse menus when route changes
+  // Close menus when route changes
   useEffect(() => {
     setMobileOpen(false);
     setBrowseOpen(false);
@@ -94,7 +93,7 @@ export default function Navbar() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [mobileOpen]);
 
-  // Close browse menu on outside click / Escape
+  // Close desktop browse on outside click / Escape
   useEffect(() => {
     if (!browseOpen) return;
 
@@ -118,7 +117,6 @@ export default function Navbar() {
     };
   }, [browseOpen]);
 
-  // Allow either admin email while you’re still copying projects around
   const adminEmails = new Set<string>([
     "admin@auctionmycamera.co.uk",
     "admin@auctionmyplate.co.uk",
@@ -144,7 +142,6 @@ export default function Navbar() {
     }
 
     clearAuthStorage();
-
     setUser(null);
     router.push("/");
     router.refresh();
@@ -219,64 +216,66 @@ export default function Navbar() {
             </button>
 
             {browseOpen && (
-              <div className="absolute left-0 top-full mt-3 w-[min(92vw,1000px)] rounded-2xl border border-border bg-background p-5 shadow-2xl">
-                <div className="grid grid-cols-12 gap-6">
-                  <div className="col-span-12 lg:col-span-9">
-                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
-                      {CAMERA_CATEGORY_SECTIONS.map((section) => (
-                        <div key={section.key} className="space-y-2">
-                          <Link
-                            href={section.href}
-                            className="block text-sm font-semibold text-foreground hover:text-primary"
-                          >
-                            {section.label}
-                          </Link>
+              <div className="absolute left-0 top-full pt-3">
+                <div className="w-[min(92vw,1000px)] rounded-2xl border border-border bg-background p-5 shadow-2xl">
+                  <div className="grid grid-cols-12 gap-6">
+                    <div className="col-span-12 lg:col-span-9">
+                      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
+                        {CAMERA_CATEGORY_SECTIONS.map((section) => (
+                          <div key={section.key} className="space-y-2">
+                            <Link
+                              href={section.href}
+                              className="block text-sm font-semibold text-foreground hover:text-primary"
+                            >
+                              {section.label}
+                            </Link>
 
-                          <div className="space-y-1">
-                            {section.options.map((option) => (
-                              <Link
-                                key={option.value}
-                                href={option.href}
-                                className="block rounded-md px-2 py-1.5 text-[13px] text-muted-foreground transition hover:bg-accent hover:text-foreground"
-                              >
-                                {option.label}
-                              </Link>
-                            ))}
+                            <div className="space-y-1">
+                              {section.options.map((option) => (
+                                <Link
+                                  key={option.value}
+                                  href={option.href}
+                                  className="block rounded-md px-2 py-1.5 text-[13px] text-muted-foreground transition hover:bg-accent hover:text-foreground"
+                                >
+                                  {option.label}
+                                </Link>
+                              ))}
+                            </div>
                           </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div className="col-span-12 lg:col-span-3 border-t border-border pt-5 lg:border-t-0 lg:border-l lg:pt-0 lg:pl-5">
-                    <div className="space-y-2">
-                      <p className="text-sm font-semibold text-foreground">Popular brands</p>
-
-                      <div className="grid grid-cols-2 gap-1">
-                        {CAMERA_BRANDS.map((brand) => (
-                          <Link
-                            key={brand.value}
-                            href={brand.href}
-                            className="rounded-md px-2 py-1.5 text-[13px] text-muted-foreground transition hover:bg-accent hover:text-foreground"
-                          >
-                            {brand.label}
-                          </Link>
                         ))}
                       </div>
+                    </div>
 
-                      <div className="border-t border-border pt-3 mt-3 space-y-2">
-                        <Link
-                          href="/current-listings"
-                          className="block rounded-md px-2 py-1.5 text-sm font-medium text-foreground transition hover:bg-accent"
-                        >
-                          Browse all auctions
-                        </Link>
-                        <Link
-                          href="/dashboard"
-                          className="block rounded-md px-2 py-1.5 text-sm font-medium text-foreground transition hover:bg-accent"
-                        >
-                          Sell an item
-                        </Link>
+                    <div className="col-span-12 lg:col-span-3 border-t border-border pt-5 lg:border-t-0 lg:border-l lg:pt-0 lg:pl-5">
+                      <div className="space-y-2">
+                        <p className="text-sm font-semibold text-foreground">Popular brands</p>
+
+                        <div className="grid grid-cols-2 gap-1">
+                          {CAMERA_BRANDS.map((brand) => (
+                            <Link
+                              key={brand.value}
+                              href={brand.href}
+                              className="rounded-md px-2 py-1.5 text-[13px] text-muted-foreground transition hover:bg-accent hover:text-foreground"
+                            >
+                              {brand.label}
+                            </Link>
+                          ))}
+                        </div>
+
+                        <div className="mt-3 space-y-2 border-t border-border pt-3">
+                          <Link
+                            href="/current-listings"
+                            className="block rounded-md px-2 py-1.5 text-sm font-medium text-foreground transition hover:bg-accent"
+                          >
+                            Browse all auctions
+                          </Link>
+                          <Link
+                            href="/dashboard"
+                            className="block rounded-md px-2 py-1.5 text-sm font-medium text-foreground transition hover:bg-accent"
+                          >
+                            Sell an item
+                          </Link>
+                        </div>
                       </div>
                     </div>
                   </div>
