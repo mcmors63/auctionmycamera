@@ -16,6 +16,7 @@ import { CheckCircleIcon, XCircleIcon } from "@heroicons/react/24/solid";
 import {
   CAMERA_CATEGORY_SECTIONS,
   findCameraCategorySectionKey,
+  getBrandsForSection,
   getCameraCategorySectionByKey,
   getGearTypeLabel,
 } from "@/lib/camera-categories";
@@ -312,29 +313,32 @@ export default function DashboardPage() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
 
   // Sell form (camera)
- const [sellForm, setSellForm] = useState({
-  item_title: "",
-  category_group: "",
-  gear_type: "",
-  brand: "",
-  model: "",
-  era: "",
-  condition: "",
-  description: "",
+  const [sellForm, setSellForm] = useState({
+    item_title: "",
+    category_group: "",
+    gear_type: "",
+    brand: "",
+    model: "",
+    era: "",
+    condition: "",
+    description: "",
 
-  // ✅ Extra fields that exist in Appwrite
-  shutter_count: "",
-  lens_mount: "",
-  focal_length: "",
-  max_aperture: "",
+    // ✅ Extra fields that exist in Appwrite
+    shutter_count: "",
+    lens_mount: "",
+    focal_length: "",
+    max_aperture: "",
 
-  reserve_price: "",
-  starting_price: "",
-  buy_now: "",
-  owner_confirmed: false,
-  agreed_terms: false,
-  relist_until_sold: false,
-});
+    reserve_price: "",
+    starting_price: "",
+    buy_now: "",
+    owner_confirmed: false,
+    agreed_terms: false,
+    relist_until_sold: false,
+  });
+
+  const [sellBrandMode, setSellBrandMode] = useState<"list" | "custom">("list");
+  const [editBrandMode, setEditBrandMode] = useState<"list" | "custom">("list");
 
   // ✅ Photos (multi)
   const [sellPhotos, setSellPhotos] = useState<SellPreview[]>([]);
@@ -375,33 +379,43 @@ export default function DashboardPage() {
   const [editError, setEditError] = useState("");
   const [editSaving, setEditSaving] = useState(false);
 
- const [editForm, setEditForm] = useState({
-  item_title: "",
-  category_group: "",
-  gear_type: "",
-  brand: "",
-  model: "",
-  era: "",
-  condition: "",
-  description: "",
-  reserve_price: "",
-  starting_price: "",
-  buy_now: "",
-  relist_until_sold: false,
-});
-const sellSelectedSection = useMemo(() => {
-  return (
-    getCameraCategorySectionByKey(sellForm.category_group) ||
-    getCameraCategorySectionByKey(findCameraCategorySectionKey(sellForm.gear_type))
-  );
-}, [sellForm.category_group, sellForm.gear_type]);
+  const [editForm, setEditForm] = useState({
+    item_title: "",
+    category_group: "",
+    gear_type: "",
+    brand: "",
+    model: "",
+    era: "",
+    condition: "",
+    description: "",
+    reserve_price: "",
+    starting_price: "",
+    buy_now: "",
+    relist_until_sold: false,
+  });
 
-const editSelectedSection = useMemo(() => {
-  return (
-    getCameraCategorySectionByKey(editForm.category_group) ||
-    getCameraCategorySectionByKey(findCameraCategorySectionKey(editForm.gear_type))
-  );
-}, [editForm.category_group, editForm.gear_type]);
+  const sellSelectedSection = useMemo(() => {
+    return (
+      getCameraCategorySectionByKey(sellForm.category_group) ||
+      getCameraCategorySectionByKey(findCameraCategorySectionKey(sellForm.gear_type))
+    );
+  }, [sellForm.category_group, sellForm.gear_type]);
+
+  const editSelectedSection = useMemo(() => {
+    return (
+      getCameraCategorySectionByKey(editForm.category_group) ||
+      getCameraCategorySectionByKey(findCameraCategorySectionKey(editForm.gear_type))
+    );
+  }, [editForm.category_group, editForm.gear_type]);
+
+  const sellBrandOptions = useMemo(() => {
+    return getBrandsForSection(sellForm.category_group);
+  }, [sellForm.category_group]);
+
+  const editBrandOptions = useMemo(() => {
+    return getBrandsForSection(editForm.category_group);
+  }, [editForm.category_group]);
+
   // -----------------------------
   // Multi-photo helpers
   // -----------------------------
@@ -950,10 +964,12 @@ const editSelectedSection = useMemo(() => {
 
   setSellForm((prev) => {
     if (name === "category_group") {
+      setSellBrandMode("list");
       return {
         ...prev,
         category_group: String(val),
         gear_type: "",
+        brand: "",
       };
     }
 
@@ -1180,11 +1196,18 @@ const editSelectedSection = useMemo(() => {
   setEditError("");
   setEditingListing(l);
 
+  const sectionKey = findCameraCategorySectionKey(safeStr(l.gear_type));
+  const brandValue = safeStr(l.brand);
+  const validBrands = getBrandsForSection(sectionKey);
+  const useCustomBrand = !!brandValue && !validBrands.includes(brandValue);
+
+  setEditBrandMode(useCustomBrand ? "custom" : "list");
+
   setEditForm({
     item_title: safeStr(l.item_title),
-    category_group: findCameraCategorySectionKey(safeStr(l.gear_type)),
+    category_group: sectionKey,
     gear_type: safeStr(l.gear_type),
-    brand: safeStr(l.brand),
+    brand: brandValue,
     model: safeStr(l.model),
     era: safeStr(l.era),
     condition: safeStr(l.condition),
@@ -1196,11 +1219,12 @@ const editSelectedSection = useMemo(() => {
   });
 }
 
-  function closeEditQueuedModal() {
-    setEditingListing(null);
-    setEditError("");
-    setEditSaving(false);
-  }
+ function closeEditQueuedModal() {
+  setEditingListing(null);
+  setEditError("");
+  setEditSaving(false);
+  setEditBrandMode("list");
+}
 
   async function saveQueuedEdit() {
     if (!user?.email || !editingListing) return;
@@ -1644,44 +1668,46 @@ if (!safeStr(sellForm.gear_type)) {
     </p>
   </div>
 
-  <div>
-    <label className="block text-xs font-semibold text-neutral-400 mb-1">
-      Brand (optional)
-    </label>
+<div>
+  <label className="block text-xs font-semibold text-neutral-400 mb-1">Brand (optional)</label>
+
+  <select
+    value={sellBrandMode === "custom" ? "__custom__" : sellForm.brand}
+    onChange={(e) => {
+      const value = e.target.value;
+
+      if (value === "__custom__") {
+        setSellBrandMode("custom");
+        setSellForm((prev) => ({ ...prev, brand: "" }));
+      } else {
+        setSellBrandMode("list");
+        setSellForm((prev) => ({ ...prev, brand: value }));
+      }
+
+      setSellError("");
+    }}
+    disabled={!(sellForm as any).category_group}
+    className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-sky-500 disabled:opacity-50 disabled:cursor-not-allowed"
+  >
+    <option value="">Select brand</option>
+    {sellBrandOptions.map((brand) => (
+      <option key={brand} value={brand}>
+        {brand}
+      </option>
+    ))}
+    <option value="__custom__">Other / not listed</option>
+  </select>
+
+  {sellBrandMode === "custom" && (
     <input
       name="brand"
       value={sellForm.brand}
       onChange={handleSellChange}
-      className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-sky-500"
-      placeholder="e.g. Canon"
+      className="mt-2 border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-sky-500"
+      placeholder="Type brand manually"
     />
-  </div>
-
-  <div>
-    <label className="block text-xs font-semibold text-neutral-400 mb-1">
-      Model (optional)
-    </label>
-    <input
-      name="model"
-      value={sellForm.model}
-      onChange={handleSellChange}
-      className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-sky-500"
-      placeholder="e.g. R6 Mark II"
-    />
-  </div>
-
-  <div>
-    <label className="block text-xs font-semibold text-neutral-400 mb-1">
-      Era (optional)
-    </label>
-    <input
-      name="era"
-      value={sellForm.era}
-      onChange={handleSellChange}
-      className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-sky-500"
-      placeholder="e.g. Modern / Vintage / 1980s"
-    />
-  </div>
+  )}
+</div>
 
   <div>
     <label className="block text-xs font-semibold text-neutral-400 mb-1">
@@ -1759,15 +1785,24 @@ if (!safeStr(sellForm.gear_type)) {
 
 {/* Description */}
 <div>
-  <label className="block text-xs font-semibold text-neutral-400 mb-1">
-    Description (optional)
-  </label>
-  <textarea
-    name="description"
-    value={sellForm.description}
+  <label className="block text-xs font-semibold text-neutral-400 mb-1">Model (optional)</label>
+  <input
+    name="model"
+    value={sellForm.model}
     onChange={handleSellChange}
-    className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm min-h-[90px] bg-neutral-950/40 text-neutral-100 placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-sky-500"
-    placeholder="What’s included, condition details, any marks, shutter count, lens fungus, etc."
+    className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-sky-500"
+    placeholder="e.g. R6 Mark II"
+  />
+</div>
+
+<div>
+  <label className="block text-xs font-semibold text-neutral-400 mb-1">Era (optional)</label>
+  <input
+    name="era"
+    value={sellForm.era}
+    onChange={handleSellChange}
+    className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-sky-500"
+    placeholder="e.g. Modern / Vintage / 1980s"
   />
 </div>
               {/* Photos Upload (multi) */}
@@ -2653,13 +2688,15 @@ if (!safeStr(sellForm.gear_type)) {
     <label className="block text-xs font-semibold text-neutral-400 mb-1">Category</label>
     <select
       value={(editForm as any).category_group}
-      onChange={(e) =>
-        setEditForm((p) => ({
-          ...p,
-          category_group: e.target.value,
-          gear_type: "",
-        }))
-      }
+      onChange={(e) => {
+  setEditBrandMode("list");
+  setEditForm((p) => ({
+    ...p,
+    category_group: e.target.value,
+    gear_type: "",
+    brand: "",
+  }));
+}}
       className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-900/40 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
     >
       <option value="">Select category</option>
@@ -2690,14 +2727,43 @@ if (!safeStr(sellForm.gear_type)) {
     </select>
   </div>
 
-  <div>
-    <label className="block text-xs font-semibold text-neutral-400 mb-1">Brand (optional)</label>
+ <div>
+  <label className="block text-xs font-semibold text-neutral-400 mb-1">Brand (optional)</label>
+
+  <select
+    value={editBrandMode === "custom" ? "__custom__" : editForm.brand}
+    onChange={(e) => {
+      const value = e.target.value;
+
+      if (value === "__custom__") {
+        setEditBrandMode("custom");
+        setEditForm((prev) => ({ ...prev, brand: "" }));
+      } else {
+        setEditBrandMode("list");
+        setEditForm((prev) => ({ ...prev, brand: value }));
+      }
+    }}
+    disabled={!(editForm as any).category_group}
+    className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-900/40 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-sky-500 disabled:opacity-50 disabled:cursor-not-allowed"
+  >
+    <option value="">Select brand</option>
+    {editBrandOptions.map((brand) => (
+      <option key={brand} value={brand}>
+        {brand}
+      </option>
+    ))}
+    <option value="__custom__">Other / not listed</option>
+  </select>
+
+  {editBrandMode === "custom" && (
     <input
       value={editForm.brand}
-      onChange={(e) => setEditForm((p) => ({ ...p, brand: e.target.value }))}
-      className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-900/40 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
+      onChange={(e) => setEditForm((prev) => ({ ...prev, brand: e.target.value }))}
+      className="mt-2 border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-900/40 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
+      placeholder="Type brand manually"
     />
-  </div>
+  )}
+</div>
 
   <div>
     <label className="block text-xs font-semibold text-neutral-400 mb-1">Model (optional)</label>

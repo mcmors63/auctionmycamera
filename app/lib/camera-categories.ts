@@ -1,4 +1,4 @@
-// lib/camera-categories.ts
+// app/lib/camera-categories.ts
 
 export type CameraCategoryOption = {
   label: string;
@@ -160,6 +160,125 @@ export const CAMERA_BRANDS: CameraBrandOption[] = [
   href: `/current-listings?brand=${encodeURIComponent(brand)}`,
 }));
 
+const CAMERA_BRANDS_BY_SECTION: Record<string, string[]> = {
+  cameras: [
+    "Canon",
+    "Nikon",
+    "Sony",
+    "Fujifilm",
+    "Panasonic",
+    "Leica",
+    "OM System",
+    "Olympus",
+    "Sigma",
+    "Hasselblad",
+    "Pentax",
+    "Ricoh",
+    "Contax",
+    "Mamiya",
+    "Minolta",
+  ],
+  lenses: [
+    "Canon",
+    "Nikon",
+    "Sony",
+    "Fujifilm",
+    "Panasonic",
+    "Leica",
+    "Sigma",
+    "Tamron",
+    "Tokina",
+    "Zeiss",
+    "Voigtländer",
+    "Samyang",
+    "Laowa",
+    "OM System",
+    "Olympus",
+    "Hasselblad",
+    "Pentax",
+  ],
+  video: [
+    "Sony",
+    "Panasonic",
+    "Canon",
+    "Blackmagic Design",
+    "RED",
+    "DJI",
+    "GoPro",
+    "Nikon",
+    "Fujifilm",
+    "Z CAM",
+  ],
+  audio: [
+    "RØDE",
+    "Sennheiser",
+    "Shure",
+    "DJI",
+    "Zoom",
+    "Tascam",
+    "Sony",
+    "Hollyland",
+    "Deity",
+    "Audio-Technica",
+  ],
+  lighting: [
+    "Godox",
+    "Profoto",
+    "Elinchrom",
+    "Broncolor",
+    "Neewer",
+    "Aputure",
+    "Nanlite",
+    "Westcott",
+    "Canon",
+    "Nikon",
+    "Sony",
+  ],
+  support: [
+    "Manfrotto",
+    "Benro",
+    "Gitzo",
+    "Peak Design",
+    "SmallRig",
+    "DJI",
+    "Zhiyun",
+    "Tilta",
+    "Neewer",
+    "Sachtler",
+  ],
+  accessories: [
+    "Peak Design",
+    "Lowepro",
+    "Think Tank",
+    "Billingham",
+    "Tenba",
+    "Hoya",
+    "B+W",
+    "Tiffen",
+    "Lexar",
+    "SanDisk",
+    "SmallRig",
+    "Canon",
+    "Nikon",
+    "Sony",
+    "DJI",
+  ],
+  optics_specialist: [
+    "Leica",
+    "Zeiss",
+    "Swarovski",
+    "Celestron",
+    "Sky-Watcher",
+    "Nikon",
+    "Canon",
+    "Fujifilm",
+    "Pentax",
+    "Hasselblad",
+    "Mamiya",
+    "Voigtländer",
+  ],
+};
+
 const LEGACY_GEAR_TYPE_LABELS: Record<string, string> = {
   camera: "Camera / general",
   lens: "Lens / general",
@@ -184,6 +303,12 @@ function titleCaseWords(input: string) {
     .replace(/\s+/g, " ")
     .trim()
     .replace(/\b\w/g, (match) => match.toUpperCase());
+}
+
+export function getBrandsForSection(sectionKey?: string | null) {
+  const key = String(sectionKey || "").trim();
+  if (!key) return CAMERA_BRANDS.map((brand) => brand.label);
+  return CAMERA_BRANDS_BY_SECTION[key] || CAMERA_BRANDS.map((brand) => brand.label);
 }
 
 export function getCameraCategorySectionByKey(key?: string | null) {
