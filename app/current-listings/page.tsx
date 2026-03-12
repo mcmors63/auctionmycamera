@@ -169,7 +169,7 @@ export async function generateMetadata({
     openGraph: {
       title: buildPageTitle(filters),
       description: buildPageDescription(filters),
-      url: filtered ? `${SITE_URL}/current-listings` : `${SITE_URL}/current-listings`,
+      url: `${SITE_URL}/current-listings`,
       siteName: "AuctionMyCamera",
       type: "website",
     },
@@ -381,7 +381,7 @@ function buildHeroDescription(filters: ListingFilters) {
 }
 
 function buildActiveFilterPills(filters: ListingFilters) {
-  const pills: { label: string; href?: string }[] = [];
+  const pills: { label: string }[] = [];
 
   if (filters.section) {
     const section = getCameraCategorySectionByKey(filters.section);
@@ -450,7 +450,12 @@ export default async function CurrentListingsPage({ searchParams }: PageProps) {
     }),
   };
 
-  const breadcrumbItems: Array<{ "@type": "ListItem"; position: number; name: string; item: string }> = [
+  const breadcrumbItems: Array<{
+    "@type": "ListItem";
+    position: number;
+    name: string;
+    item: string;
+  }> = [
     { "@type": "ListItem", position: 1, name: "Home", item: `${SITE_URL}/` },
     {
       "@type": "ListItem",
@@ -540,7 +545,7 @@ export default async function CurrentListingsPage({ searchParams }: PageProps) {
             <div className="mt-6 flex flex-wrap gap-3">
               <Link
                 href="/login-or-register"
-                className="rounded-xl px-5 py-3 text-sm font-semibold shadow-sm transition bg-primary text-primary-foreground hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-ring"
+                className="rounded-xl bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground shadow-sm transition hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-ring"
               >
                 Create an account to bid
               </Link>
@@ -560,29 +565,6 @@ export default async function CurrentListingsPage({ searchParams }: PageProps) {
               </Link>
             </div>
 
-            <div className="mt-8 grid sm:grid-cols-2 lg:grid-cols-4 gap-3">
-              <SnapshotCard
-                title="Live now"
-                value={String(live.length)}
-                body={firstLiveEndingText(live)}
-              />
-              <SnapshotCard
-                title="Coming next"
-                value={String(soon.length)}
-                body={firstQueuedStartingText(soon)}
-              />
-              <SnapshotCard
-                title="Auction window"
-                value="Mon–Sun"
-                body="Weekly schedule: Monday 01:00 to Sunday 23:00, UK time."
-              />
-              <SnapshotCard
-                title="After sale"
-                value="Structured"
-                body="Secure checkout first, then both sides follow the next steps clearly."
-              />
-            </div>
-
             <div className="mt-6 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-muted-foreground">
               <span>Useful:</span>
               <Link href="/sell" className="text-primary underline hover:opacity-80">
@@ -595,40 +577,68 @@ export default async function CurrentListingsPage({ searchParams }: PageProps) {
                 FAQ
               </Link>
             </div>
+          </div>
 
-            {!filtered && (
-              <div className="mt-8 grid md:grid-cols-2 gap-6">
-                <div className="rounded-2xl border border-border bg-card p-4">
-                  <h2 className="text-sm font-bold text-primary mb-3">Browse by category</h2>
-                  <div className="flex flex-wrap gap-2">
-                    {CAMERA_CATEGORY_SECTIONS.map((section) => (
-                      <Link
-                        key={section.key}
-                        href={section.href}
-                        className="rounded-full border border-border bg-background px-3 py-1.5 text-xs font-semibold transition hover:bg-accent"
-                      >
-                        {section.label}
-                      </Link>
-                    ))}
-                  </div>
-                </div>
+          {/* Interactive client UI moved higher */}
+          <div id="interactive-current-listings" className="mt-8">
+            <CurrentListingsClient initialLive={live} initialSoon={soon} />
+          </div>
 
-                <div className="rounded-2xl border border-border bg-card p-4">
-                  <h2 className="text-sm font-bold text-primary mb-3">Popular brands</h2>
-                  <div className="flex flex-wrap gap-2">
-                    {CAMERA_BRANDS.slice(0, 10).map((brand) => (
-                      <Link
-                        key={brand.value}
-                        href={brand.href}
-                        className="rounded-full border border-border bg-background px-3 py-1.5 text-xs font-semibold transition hover:bg-accent"
-                      >
-                        {brand.label}
-                      </Link>
-                    ))}
-                  </div>
+          {!filtered && (
+            <div className="mt-8 grid md:grid-cols-2 gap-6">
+              <div className="rounded-2xl border border-border bg-card p-4">
+                <h2 className="mb-3 text-sm font-bold text-primary">Browse by category</h2>
+                <div className="flex flex-wrap gap-2">
+                  {CAMERA_CATEGORY_SECTIONS.map((section) => (
+                    <Link
+                      key={section.key}
+                      href={section.href}
+                      className="rounded-full border border-border bg-background px-3 py-1.5 text-xs font-semibold transition hover:bg-accent"
+                    >
+                      {section.label}
+                    </Link>
+                  ))}
                 </div>
               </div>
-            )}
+
+              <div className="rounded-2xl border border-border bg-card p-4">
+                <h2 className="mb-3 text-sm font-bold text-primary">Popular brands</h2>
+                <div className="flex flex-wrap gap-2">
+                  {CAMERA_BRANDS.slice(0, 10).map((brand) => (
+                    <Link
+                      key={brand.value}
+                      href={brand.href}
+                      className="rounded-full border border-border bg-background px-3 py-1.5 text-xs font-semibold transition hover:bg-accent"
+                    >
+                      {brand.label}
+                    </Link>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
+          <div className="mt-8 grid sm:grid-cols-2 lg:grid-cols-4 gap-3">
+            <SnapshotCard
+              title="Live now"
+              value={String(live.length)}
+              body={firstLiveEndingText(live)}
+            />
+            <SnapshotCard
+              title="Coming next"
+              value={String(soon.length)}
+              body={firstQueuedStartingText(soon)}
+            />
+            <SnapshotCard
+              title="Auction window"
+              value="Mon–Sun"
+              body="Weekly schedule: Monday 01:00 to Sunday 23:00, UK time."
+            />
+            <SnapshotCard
+              title="After sale"
+              value="Structured"
+              body="Secure checkout first, then both sides follow the next steps clearly."
+            />
           </div>
 
           {/* Featured previews */}
@@ -761,7 +771,7 @@ export default async function CurrentListingsPage({ searchParams }: PageProps) {
           {/* Crawlable link lists */}
           <div className="mt-8 grid md:grid-cols-2 gap-6">
             <div className="rounded-2xl border border-border bg-card p-4">
-              <h2 className="text-sm font-bold text-primary mb-3">
+              <h2 className="mb-3 text-sm font-bold text-primary">
                 {filtered ? "Filtered live auction links" : "Browse live auction links"}
               </h2>
               {live.length === 0 ? (
@@ -789,7 +799,7 @@ export default async function CurrentListingsPage({ searchParams }: PageProps) {
             </div>
 
             <div className="rounded-2xl border border-border bg-card p-4">
-              <h2 className="text-sm font-bold text-primary mb-3">
+              <h2 className="mb-3 text-sm font-bold text-primary">
                 {filtered ? "Filtered queued listing links" : "Browse queued listing links"}
               </h2>
               {soon.length === 0 ? (
@@ -824,7 +834,7 @@ export default async function CurrentListingsPage({ searchParams }: PageProps) {
 
             <div className="mt-4 grid md:grid-cols-2 gap-6">
               <div>
-                <h3 className="text-sm font-bold text-primary mb-2">Live auctions</h3>
+                <h3 className="mb-2 text-sm font-bold text-primary">Live auctions</h3>
                 {live.length === 0 ? (
                   <p className="text-sm text-muted-foreground">
                     {filtered ? "No live auctions match this filter right now." : "No live auctions right now."}
@@ -850,7 +860,7 @@ export default async function CurrentListingsPage({ searchParams }: PageProps) {
               </div>
 
               <div>
-                <h3 className="text-sm font-bold text-primary mb-2">Coming next</h3>
+                <h3 className="mb-2 text-sm font-bold text-primary">Coming next</h3>
                 {soon.length === 0 ? (
                   <p className="text-sm text-muted-foreground">
                     {filtered ? "No queued listings match this filter right now." : "Nothing queued right now."}
@@ -902,11 +912,6 @@ export default async function CurrentListingsPage({ searchParams }: PageProps) {
           </details>
         </div>
       </section>
-
-      {/* Interactive client UI */}
-      <div id="interactive-current-listings">
-        <CurrentListingsClient initialLive={live} initialSoon={soon} />
-      </div>
     </>
   );
 }
