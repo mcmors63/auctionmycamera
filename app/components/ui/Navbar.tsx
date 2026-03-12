@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { Client, Account } from "appwrite";
+import { CAMERA_BRANDS, CAMERA_CATEGORY_SECTIONS } from "@/lib/camera-categories";
 
 type User = {
   $id: string;
@@ -33,15 +34,17 @@ export default function Navbar() {
   const [user, setUser] = useState<User | null>(null);
   const [loadingUser, setLoadingUser] = useState(true);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [browseOpen, setBrowseOpen] = useState(false);
+  const [mobileBrowseOpen, setMobileBrowseOpen] = useState(false);
 
   const loadedOnceRef = useRef(false);
+  const browseRef = useRef<HTMLDivElement | null>(null);
 
   // Load current session (refresh on route change so login/logout updates without hard refresh)
   useEffect(() => {
     let alive = true;
 
     const load = async () => {
-      // If Appwrite isn't configured, behave as logged out (and don't crash UI)
       if (!account) {
         if (!alive) return;
         setUser(null);
@@ -72,9 +75,11 @@ export default function Navbar() {
     };
   }, [pathname]);
 
-  // Close mobile menu when route changes
+  // Close mobile / browse menus when route changes
   useEffect(() => {
     setMobileOpen(false);
+    setBrowseOpen(false);
+    setMobileBrowseOpen(false);
   }, [pathname]);
 
   // Close mobile menu on Escape
@@ -89,6 +94,30 @@ export default function Navbar() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [mobileOpen]);
 
+  // Close browse menu on outside click / Escape
+  useEffect(() => {
+    if (!browseOpen) return;
+
+    const onPointerDown = (e: MouseEvent) => {
+      if (!browseRef.current) return;
+      if (!browseRef.current.contains(e.target as Node)) {
+        setBrowseOpen(false);
+      }
+    };
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setBrowseOpen(false);
+    };
+
+    document.addEventListener("mousedown", onPointerDown);
+    window.addEventListener("keydown", onKeyDown);
+
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [browseOpen]);
+
   // Allow either admin email while you’re still copying projects around
   const adminEmails = new Set<string>([
     "admin@auctionmycamera.co.uk",
@@ -99,7 +128,6 @@ export default function Navbar() {
 
   const clearAuthStorage = () => {
     if (typeof window === "undefined") return;
-    // clear both old + new keys to avoid “ghost login” when cloning projects
     window.localStorage.removeItem("amp_user_email");
     window.localStorage.removeItem("amp_user_id");
     window.localStorage.removeItem("amc_user_email");
@@ -129,7 +157,6 @@ export default function Navbar() {
     { href: "/how-it-works", label: "How it works" },
     { href: "/fees", label: "Fees" },
     { href: "/faq", label: "FAQ" },
-    // ✅ Blog removed for now
     { href: "/about", label: "About" },
   ];
 
@@ -138,34 +165,126 @@ export default function Navbar() {
     return pathname?.startsWith(href);
   };
 
+  const browseActive = pathname?.startsWith("/current-listings");
+
   return (
     <header className="sticky top-0 z-40 border-b border-border bg-background/80 backdrop-blur supports-[backdrop-filter]:bg-background/70">
       <nav className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3 md:py-4">
-       {/* LOGO */}
-<div className="flex items-center gap-3">
-  <Link
-    href="/"
-    className="flex items-center gap-3"
-    aria-label="AuctionMyCamera home"
-  >
-    {/* keep your existing logo/icon bits EXACTLY as they were, inside here */}
-    <span className="leading-tight">
-      {/* keep your existing site name text spans here */}
-    </span>
-  </Link>
+        {/* LOGO */}
+        <div className="flex items-center gap-3">
+          <Link
+            href="/"
+            className="flex items-center gap-3"
+            aria-label="AuctionMyCamera home"
+          >
+            {/* keep your existing logo/icon bits EXACTLY as they were, inside here */}
+            <span className="leading-tight">
+              {/* keep your existing site name text spans here */}
+            </span>
+          </Link>
 
-  {/* ✅ MUST be a sibling, not inside the home Link */}
-  <Link
-    href="/our-marketplace-network"
-    className="mt-1 inline-flex w-fit items-center rounded-full border border-border bg-card px-2.5 py-1 text-[10px] font-semibold text-muted-foreground transition hover:text-foreground hover:bg-accent"
-    title="Learn about our specialist marketplace network"
-  >
-    Part of the Specialist Auction Network
-  </Link>
-</div>
+          <Link
+            href="/our-marketplace-network"
+            className="mt-1 inline-flex w-fit items-center rounded-full border border-border bg-card px-2.5 py-1 text-[10px] font-semibold text-muted-foreground transition hover:bg-accent hover:text-foreground"
+            title="Learn about our specialist marketplace network"
+          >
+            Part of the Specialist Auction Network
+          </Link>
+        </div>
 
         {/* DESKTOP NAV LINKS */}
         <div className="hidden lg:flex items-center gap-1">
+          <div
+            ref={browseRef}
+            className="relative"
+            onMouseEnter={() => setBrowseOpen(true)}
+            onMouseLeave={() => setBrowseOpen(false)}
+          >
+            <button
+              type="button"
+              aria-haspopup="menu"
+              aria-expanded={browseOpen}
+              onClick={() => setBrowseOpen((v) => !v)}
+              className={[
+                "relative inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition",
+                "text-muted-foreground hover:text-foreground hover:bg-accent",
+                browseActive ? "text-foreground bg-accent" : "",
+              ].join(" ")}
+            >
+              Browse Gear
+              <span className="text-xs">{browseOpen ? "▴" : "▾"}</span>
+              {browseActive ? (
+                <span className="absolute left-3 right-3 -bottom-[7px] h-[2px] rounded-full bg-primary" />
+              ) : null}
+            </button>
+
+            {browseOpen && (
+              <div className="absolute left-0 top-full mt-3 w-[min(92vw,1000px)] rounded-2xl border border-border bg-background p-5 shadow-2xl">
+                <div className="grid grid-cols-12 gap-6">
+                  <div className="col-span-12 lg:col-span-9">
+                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
+                      {CAMERA_CATEGORY_SECTIONS.map((section) => (
+                        <div key={section.key} className="space-y-2">
+                          <Link
+                            href={section.href}
+                            className="block text-sm font-semibold text-foreground hover:text-primary"
+                          >
+                            {section.label}
+                          </Link>
+
+                          <div className="space-y-1">
+                            {section.options.map((option) => (
+                              <Link
+                                key={option.value}
+                                href={option.href}
+                                className="block rounded-md px-2 py-1.5 text-[13px] text-muted-foreground transition hover:bg-accent hover:text-foreground"
+                              >
+                                {option.label}
+                              </Link>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="col-span-12 lg:col-span-3 border-t border-border pt-5 lg:border-t-0 lg:border-l lg:pt-0 lg:pl-5">
+                    <div className="space-y-2">
+                      <p className="text-sm font-semibold text-foreground">Popular brands</p>
+
+                      <div className="grid grid-cols-2 gap-1">
+                        {CAMERA_BRANDS.map((brand) => (
+                          <Link
+                            key={brand.value}
+                            href={brand.href}
+                            className="rounded-md px-2 py-1.5 text-[13px] text-muted-foreground transition hover:bg-accent hover:text-foreground"
+                          >
+                            {brand.label}
+                          </Link>
+                        ))}
+                      </div>
+
+                      <div className="border-t border-border pt-3 mt-3 space-y-2">
+                        <Link
+                          href="/current-listings"
+                          className="block rounded-md px-2 py-1.5 text-sm font-medium text-foreground transition hover:bg-accent"
+                        >
+                          Browse all auctions
+                        </Link>
+                        <Link
+                          href="/dashboard"
+                          className="block rounded-md px-2 py-1.5 text-sm font-medium text-foreground transition hover:bg-accent"
+                        >
+                          Sell an item
+                        </Link>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
           {navLinks.map((link) => {
             const active = isActive(link.href);
             return (
@@ -194,13 +313,13 @@ export default function Navbar() {
             <>
               <Link
                 href={isAdmin ? "/admin" : "/dashboard"}
-                className="px-4 py-2 text-sm font-semibold rounded-lg border border-border bg-card hover:bg-accent transition focus:outline-none focus:ring-2 focus:ring-ring"
+                className="rounded-lg border border-border bg-card px-4 py-2 text-sm font-semibold transition hover:bg-accent focus:outline-none focus:ring-2 focus:ring-ring"
               >
                 {isAdmin ? "Admin" : "Dashboard"}
               </Link>
               <button
                 onClick={handleLogout}
-                className="px-4 py-2 text-sm font-semibold rounded-lg bg-secondary text-secondary-foreground hover:bg-accent transition focus:outline-none focus:ring-2 focus:ring-ring"
+                className="rounded-lg bg-secondary px-4 py-2 text-sm font-semibold text-secondary-foreground transition hover:bg-accent focus:outline-none focus:ring-2 focus:ring-ring"
               >
                 Logout
               </button>
@@ -209,13 +328,13 @@ export default function Navbar() {
             <>
               <Link
                 href="/login"
-                className="px-4 py-2 text-sm font-semibold rounded-lg border border-border bg-card hover:bg-accent transition focus:outline-none focus:ring-2 focus:ring-ring"
+                className="rounded-lg border border-border bg-card px-4 py-2 text-sm font-semibold transition hover:bg-accent focus:outline-none focus:ring-2 focus:ring-ring"
               >
                 Login
               </Link>
               <Link
                 href="/register"
-                className="px-4 py-2 text-sm font-semibold rounded-lg bg-primary text-primary-foreground hover:opacity-90 transition focus:outline-none focus:ring-2 focus:ring-ring"
+                className="rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground transition hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-ring"
               >
                 Register
               </Link>
@@ -225,7 +344,7 @@ export default function Navbar() {
 
         {/* MOBILE TOGGLE */}
         <button
-          className="lg:hidden inline-flex items-center justify-center w-10 h-10 rounded-lg border border-border bg-card hover:bg-accent transition focus:outline-none focus:ring-2 focus:ring-ring"
+          className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-border bg-card transition hover:bg-accent focus:outline-none focus:ring-2 focus:ring-ring lg:hidden"
           onClick={() => setMobileOpen((o) => !o)}
           aria-label="Toggle menu"
           aria-expanded={mobileOpen}
@@ -237,8 +356,62 @@ export default function Navbar() {
 
       {/* MOBILE MENU */}
       {mobileOpen && (
-        <div id="mobile-nav" className="lg:hidden border-t border-border bg-background">
-          <div className="mx-auto max-w-6xl px-4 py-4 space-y-4">
+        <div id="mobile-nav" className="border-t border-border bg-background lg:hidden">
+          <div className="mx-auto max-w-6xl space-y-4 px-4 py-4">
+            <div className="rounded-xl border border-border bg-card/40 p-2">
+              <button
+                type="button"
+                onClick={() => setMobileBrowseOpen((v) => !v)}
+                className="flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm font-semibold text-foreground transition hover:bg-accent"
+                aria-expanded={mobileBrowseOpen}
+              >
+                <span>Browse Gear</span>
+                <span className="text-xs">{mobileBrowseOpen ? "▴" : "▾"}</span>
+              </button>
+
+              {mobileBrowseOpen && (
+                <div className="space-y-4 px-1 pb-2 pt-2">
+                  {CAMERA_CATEGORY_SECTIONS.map((section) => (
+                    <div key={section.key} className="rounded-lg border border-border bg-background/70 p-3">
+                      <Link
+                        href={section.href}
+                        className="block text-sm font-semibold text-foreground"
+                      >
+                        {section.label}
+                      </Link>
+
+                      <div className="mt-2 grid grid-cols-1 gap-1">
+                        {section.options.map((option) => (
+                          <Link
+                            key={option.value}
+                            href={option.href}
+                            className="rounded-md px-2 py-1.5 text-[13px] text-muted-foreground transition hover:bg-accent hover:text-foreground"
+                          >
+                            {option.label}
+                          </Link>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+
+                  <div className="rounded-lg border border-border bg-background/70 p-3">
+                    <p className="text-sm font-semibold text-foreground">Popular brands</p>
+                    <div className="mt-2 grid grid-cols-2 gap-1">
+                      {CAMERA_BRANDS.map((brand) => (
+                        <Link
+                          key={brand.value}
+                          href={brand.href}
+                          className="rounded-md px-2 py-1.5 text-[13px] text-muted-foreground transition hover:bg-accent hover:text-foreground"
+                        >
+                          {brand.label}
+                        </Link>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
             <div className="flex flex-col space-y-1">
               {navLinks.map((link) => {
                 const active = isActive(link.href);
@@ -260,12 +433,12 @@ export default function Navbar() {
               })}
             </div>
 
-            <div className="border-t border-border pt-4 flex flex-col space-y-2">
+            <div className="flex flex-col space-y-2 border-t border-border pt-4">
               {loadingUser ? null : user ? (
                 <>
                   <Link
                     href={isAdmin ? "/admin" : "/dashboard"}
-                    className="w-full text-center px-4 py-2 text-sm font-semibold rounded-lg border border-border bg-card hover:bg-accent transition focus:outline-none focus:ring-2 focus:ring-ring"
+                    className="w-full rounded-lg border border-border bg-card px-4 py-2 text-center text-sm font-semibold transition hover:bg-accent focus:outline-none focus:ring-2 focus:ring-ring"
                   >
                     {isAdmin ? "Admin" : "Dashboard"}
                   </Link>
@@ -274,7 +447,7 @@ export default function Navbar() {
                       setMobileOpen(false);
                       void handleLogout();
                     }}
-                    className="w-full px-4 py-2 text-sm font-semibold rounded-lg bg-secondary text-secondary-foreground hover:bg-accent transition focus:outline-none focus:ring-2 focus:ring-ring"
+                    className="w-full rounded-lg bg-secondary px-4 py-2 text-sm font-semibold text-secondary-foreground transition hover:bg-accent focus:outline-none focus:ring-2 focus:ring-ring"
                   >
                     Logout
                   </button>
@@ -283,26 +456,19 @@ export default function Navbar() {
                 <>
                   <Link
                     href="/login"
-                    className="w-full text-center px-4 py-2 text-sm font-semibold rounded-lg border border-border bg-card hover:bg-accent transition focus:outline-none focus:ring-2 focus:ring-ring"
+                    className="w-full rounded-lg border border-border bg-card px-4 py-2 text-center text-sm font-semibold transition hover:bg-accent focus:outline-none focus:ring-2 focus:ring-ring"
                   >
                     Login
                   </Link>
                   <Link
                     href="/register"
-                    className="w-full text-center px-4 py-2 text-sm font-semibold rounded-lg bg-primary text-primary-foreground hover:opacity-90 transition focus:outline-none focus:ring-2 focus:ring-ring"
+                    className="w-full rounded-lg bg-primary px-4 py-2 text-center text-sm font-semibold text-primary-foreground transition hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-ring"
                   >
                     Register
                   </Link>
                 </>
               )}
             </div>
-
-            {/* Optional: tiny hint if Appwrite env isn't set (hidden by default) */}
-            {/* {!appwriteReady && (
-              <p className="text-[11px] text-muted-foreground">
-                Auth is unavailable: missing NEXT_PUBLIC_APPWRITE_ENDPOINT / NEXT_PUBLIC_APPWRITE_PROJECT_ID.
-              </p>
-            )} */}
           </div>
         </div>
       )}

@@ -13,6 +13,12 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Client, Account, Databases, Storage, ID, Query, Permission, Role } from "appwrite";
 import { CheckCircleIcon, XCircleIcon } from "@heroicons/react/24/solid";
+import {
+  CAMERA_CATEGORY_SECTIONS,
+  findCameraCategorySectionKey,
+  getCameraCategorySectionByKey,
+  getGearTypeLabel,
+} from "@/lib/camera-categories";
 
 // -----------------------------
 // Appwrite (browser)
@@ -206,17 +212,31 @@ function listingTitle(l: Listing) {
   return safeStr(l.item_title) || safeStr((l as any).title) || safeStr(l.registration) || "Untitled listing";
 }
 
+function formatConditionLabel(v?: string | null) {
+  const raw = safeStr(v);
+  if (!raw) return "";
+  return raw.replace(/_/g, " ");
+}
+
 function listingSubtitle(l: Listing) {
-  const bits = [safeStr(l.brand), safeStr(l.model), safeStr(l.gear_type), safeStr(l.condition)]
+  const bits = [
+    safeStr(l.brand),
+    safeStr(l.model),
+    getGearTypeLabel(l.gear_type),
+    formatConditionLabel(l.condition),
+  ]
     .filter(Boolean)
     .slice(0, 3);
+
   return bits.length ? bits.join(" • ") : "Camera listing";
 }
 
 function formatLondon(iso?: string) {
   if (!iso) return "—";
   try {
-    return new Date(iso).toLocaleString("en-GB", { timeZone: "Europe/London" });
+    return new Date(iso).toLocaleString("en-GB", {
+      timeZone: "Europe/London",
+    });
   } catch {
     return "—";
   }
@@ -292,28 +312,29 @@ export default function DashboardPage() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
 
   // Sell form (camera)
-  const [sellForm, setSellForm] = useState({
-    item_title: "",
-    gear_type: "",
-    brand: "",
-    model: "",
-    era: "",
-    condition: "",
-    description: "",
+ const [sellForm, setSellForm] = useState({
+  item_title: "",
+  category_group: "",
+  gear_type: "",
+  brand: "",
+  model: "",
+  era: "",
+  condition: "",
+  description: "",
 
-    // ✅ Extra fields that exist in Appwrite
-    shutter_count: "",
-    lens_mount: "",
-    focal_length: "",
-    max_aperture: "",
+  // ✅ Extra fields that exist in Appwrite
+  shutter_count: "",
+  lens_mount: "",
+  focal_length: "",
+  max_aperture: "",
 
-    reserve_price: "",
-    starting_price: "",
-    buy_now: "",
-    owner_confirmed: false,
-    agreed_terms: false,
-    relist_until_sold: false,
-  });
+  reserve_price: "",
+  starting_price: "",
+  buy_now: "",
+  owner_confirmed: false,
+  agreed_terms: false,
+  relist_until_sold: false,
+});
 
   // ✅ Photos (multi)
   const [sellPhotos, setSellPhotos] = useState<SellPreview[]>([]);
@@ -354,20 +375,33 @@ export default function DashboardPage() {
   const [editError, setEditError] = useState("");
   const [editSaving, setEditSaving] = useState(false);
 
-  const [editForm, setEditForm] = useState({
-    item_title: "",
-    gear_type: "",
-    brand: "",
-    model: "",
-    era: "",
-    condition: "",
-    description: "",
-    reserve_price: "",
-    starting_price: "",
-    buy_now: "",
-    relist_until_sold: false,
-  });
+ const [editForm, setEditForm] = useState({
+  item_title: "",
+  category_group: "",
+  gear_type: "",
+  brand: "",
+  model: "",
+  era: "",
+  condition: "",
+  description: "",
+  reserve_price: "",
+  starting_price: "",
+  buy_now: "",
+  relist_until_sold: false,
+});
+const sellSelectedSection = useMemo(() => {
+  return (
+    getCameraCategorySectionByKey(sellForm.category_group) ||
+    getCameraCategorySectionByKey(findCameraCategorySectionKey(sellForm.gear_type))
+  );
+}, [sellForm.category_group, sellForm.gear_type]);
 
+const editSelectedSection = useMemo(() => {
+  return (
+    getCameraCategorySectionByKey(editForm.category_group) ||
+    getCameraCategorySectionByKey(findCameraCategorySectionKey(editForm.gear_type))
+  );
+}, [editForm.category_group, editForm.gear_type]);
   // -----------------------------
   // Multi-photo helpers
   // -----------------------------
@@ -903,28 +937,41 @@ export default function DashboardPage() {
   // -----------------------------
   // Sell form handlers
   // -----------------------------
-  const handleSellChange = (e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
-    const target = e.target as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
-    const { name, value, type } = target;
+  const handleSellChange = (
+  e: ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>
+) => {
+  const target = e.target as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
+  const { name, value, type } = target;
 
-    let val: any;
-    if (type === "checkbox") val = (target as HTMLInputElement).checked;
-    else if (type === "number") val = value === "" ? "" : Number(value);
-    else val = value;
+  let val: any;
+  if (type === "checkbox") val = (target as HTMLInputElement).checked;
+  else if (type === "number") val = value === "" ? "" : Number(value);
+  else val = value;
 
-    setSellForm((prev) => ({ ...prev, [name]: val }));
-    setSellError("");
-
-    if (name === "reserve_price") {
-      const num = parseFloat(String(value));
-      if (!isNaN(num)) calculateFees(num);
-      else {
-        setCommissionRate(0);
-        setCommissionValue(0);
-        setExpectedReturn(0);
-      }
+  setSellForm((prev) => {
+    if (name === "category_group") {
+      return {
+        ...prev,
+        category_group: String(val),
+        gear_type: "",
+      };
     }
-  };
+
+    return { ...prev, [name]: val };
+  });
+
+  setSellError("");
+
+  if (name === "reserve_price") {
+    const num = parseFloat(String(value));
+    if (!isNaN(num)) calculateFees(num);
+    else {
+      setCommissionRate(0);
+      setCommissionValue(0);
+      setExpectedReturn(0);
+    }
+  }
+};
 
   // -----------------------------
   // Upload photos for dashboard sell (multi)
@@ -1091,27 +1138,27 @@ export default function DashboardPage() {
 
       // ✅ Reset form (include extra fields)
       setSellForm({
-        item_title: "",
-        gear_type: "",
-        brand: "",
-        model: "",
-        era: "",
-        condition: "",
-        description: "",
+  item_title: "",
+  category_group: "",
+  gear_type: "",
+  brand: "",
+  model: "",
+  era: "",
+  condition: "",
+  description: "",
 
-        shutter_count: "",
-        lens_mount: "",
-        focal_length: "",
-        max_aperture: "",
+  shutter_count: "",
+  lens_mount: "",
+  focal_length: "",
+  max_aperture: "",
 
-        reserve_price: "",
-        starting_price: "",
-        buy_now: "",
-        owner_confirmed: false,
-        agreed_terms: false,
-        relist_until_sold: false,
-      });
-
+  reserve_price: "",
+  starting_price: "",
+  buy_now: "",
+  owner_confirmed: false,
+  agreed_terms: false,
+  relist_until_sold: false,
+});
       setCommissionRate(0);
       setCommissionValue(0);
       setExpectedReturn(0);
@@ -1128,25 +1175,26 @@ export default function DashboardPage() {
   // NOTE: These must NOT be nested inside other functions.
   // -----------------------------
   function openEditQueuedModal(l: Listing) {
-    setBannerError("");
-    setBannerSuccess("");
-    setEditError("");
-    setEditingListing(l);
+  setBannerError("");
+  setBannerSuccess("");
+  setEditError("");
+  setEditingListing(l);
 
-    setEditForm({
-      item_title: safeStr(l.item_title),
-      gear_type: safeStr(l.gear_type),
-      brand: safeStr(l.brand),
-      model: safeStr(l.model),
-      era: safeStr(l.era),
-      condition: safeStr(l.condition),
-      description: safeStr(l.description),
-      reserve_price: String(toNum(l.reserve_price, 0)),
-      starting_price: String(toNum(l.starting_price, 0)),
-      buy_now: String(toNum(l.buy_now, 0)),
-      relist_until_sold: !!l.relist_until_sold,
-    });
-  }
+  setEditForm({
+    item_title: safeStr(l.item_title),
+    category_group: findCameraCategorySectionKey(safeStr(l.gear_type)),
+    gear_type: safeStr(l.gear_type),
+    brand: safeStr(l.brand),
+    model: safeStr(l.model),
+    era: safeStr(l.era),
+    condition: safeStr(l.condition),
+    description: safeStr(l.description),
+    reserve_price: String(toNum(l.reserve_price, 0)),
+    starting_price: String(toNum(l.starting_price, 0)),
+    buy_now: String(toNum(l.buy_now, 0)),
+    relist_until_sold: !!l.relist_until_sold,
+  });
+}
 
   function closeEditQueuedModal() {
     setEditingListing(null);
@@ -1156,11 +1204,28 @@ export default function DashboardPage() {
 
   async function saveQueuedEdit() {
     if (!user?.email || !editingListing) return;
+    if (!safeStr(editForm.category_group)) {
+  setEditError("Please choose a category.");
+  return;
+}
+
+if (!safeStr(editForm.gear_type)) {
+  setEditError("Please choose an item type.");
+  return;
+}
 
     const reserve = parseFloat(String(editForm.reserve_price));
     const starting = editForm.starting_price === "" ? 0 : parseFloat(String(editForm.starting_price));
     const buyNow = editForm.buy_now === "" ? 0 : parseFloat(String(editForm.buy_now));
+    if (!safeStr(sellForm.category_group)) {
+  setSellError("Please choose a category.");
+  return;
+}
 
+if (!safeStr(sellForm.gear_type)) {
+  setSellError("Please choose an item type.");
+  return;
+}
     if (isNaN(reserve) || reserve < 10) {
       setEditError("Minimum reserve price is £10.");
       return;
@@ -1522,159 +1587,189 @@ export default function DashboardPage() {
             )}
 
             <form onSubmit={handleSellSubmit} className="space-y-5">
-              {/* Item basics */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-semibold text-neutral-400 mb-1">Item title</label>
-                  <input
-                    name="item_title"
-                    value={sellForm.item_title}
-                    onChange={handleSellChange}
-                    className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-sky-500"
-                    placeholder="e.g. Canon EOS R6 Mark II body"
-                  />
-                </div>
+                   {/* Item basics */}
+<div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+  <div>
+    <label className="block text-xs font-semibold text-neutral-400 mb-1">
+      Item title
+    </label>
+    <input
+      name="item_title"
+      value={sellForm.item_title}
+      onChange={handleSellChange}
+      className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-sky-500"
+      placeholder="e.g. Canon EOS R6 Mark II body"
+    />
+  </div>
 
-                <div>
-                  <label className="block text-xs font-semibold text-neutral-400 mb-1">
-                    Gear type
-                  </label>
-                  <select
-                    name="gear_type"
-                    value={sellForm.gear_type}
-                    onChange={handleSellChange}
-                    className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
-                  >
-                    <option value="">Select type</option>
-                    <option value="camera">Camera</option>
-                    <option value="lens">Lens</option>
-                    <option value="film_camera">Film camera</option>
-                    <option value="bundle">Bundle</option>
-                    <option value="accessory">Accessory</option>
-                    <option value="other">Other</option>
-                  </select>
-                </div>
+  <div>
+    <label className="block text-xs font-semibold text-neutral-400 mb-1">
+      Category
+    </label>
+    <select
+      name="category_group"
+      value={(sellForm as any).category_group}
+      onChange={handleSellChange}
+      className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
+    >
+      <option value="">Select category</option>
+      {CAMERA_CATEGORY_SECTIONS.map((section) => (
+        <option key={section.key} value={section.key}>
+          {section.label}
+        </option>
+      ))}
+    </select>
+  </div>
 
-                <div>
-                  <label className="block text-xs font-semibold text-neutral-400 mb-1">Brand (optional)</label>
-                  <input
-                    name="brand"
-                    value={sellForm.brand}
-                    onChange={handleSellChange}
-                    className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-sky-500"
-                    placeholder="e.g. Canon"
-                  />
-                </div>
+  <div>
+    <label className="block text-xs font-semibold text-neutral-400 mb-1">
+      Item type
+    </label>
+    <select
+      name="gear_type"
+      value={sellForm.gear_type}
+      onChange={handleSellChange}
+      disabled={!(sellForm as any).category_group}
+      className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-sky-500 disabled:opacity-50 disabled:cursor-not-allowed"
+    >
+      <option value="">Select item type</option>
+      {(sellSelectedSection?.options || []).map((option) => (
+        <option key={option.value} value={option.value}>
+          {option.label}
+        </option>
+      ))}
+    </select>
+    <p className="mt-1 text-[11px] text-neutral-500">
+      Choose the broad category first, then the exact type.
+    </p>
+  </div>
 
-                <div>
-                  <label className="block text-xs font-semibold text-neutral-400 mb-1">Model (optional)</label>
-                  <input
-                    name="model"
-                    value={sellForm.model}
-                    onChange={handleSellChange}
-                    className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-sky-500"
-                    placeholder="e.g. R6 Mark II"
-                  />
-                </div>
+  <div>
+    <label className="block text-xs font-semibold text-neutral-400 mb-1">
+      Brand (optional)
+    </label>
+    <input
+      name="brand"
+      value={sellForm.brand}
+      onChange={handleSellChange}
+      className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-sky-500"
+      placeholder="e.g. Canon"
+    />
+  </div>
 
-                <div>
-                  <label className="block text-xs font-semibold text-neutral-400 mb-1">Era (optional)</label>
-                  <input
-                    name="era"
-                    value={sellForm.era}
-                    onChange={handleSellChange}
-                    className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-sky-500"
-                    placeholder="e.g. Modern / Vintage / 1980s"
-                  />
-                </div>
+  <div>
+    <label className="block text-xs font-semibold text-neutral-400 mb-1">
+      Model (optional)
+    </label>
+    <input
+      name="model"
+      value={sellForm.model}
+      onChange={handleSellChange}
+      className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-sky-500"
+      placeholder="e.g. R6 Mark II"
+    />
+  </div>
 
-                <div>
-                  <label className="block text-xs font-semibold text-neutral-400 mb-1">Condition (optional)</label>
-                  <select
-                    name="condition"
-                    value={sellForm.condition}
-                    onChange={handleSellChange}
-                    className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
-                  >
-                    <option value="">Select condition</option>
-                    <option value="new">New</option>
-                    <option value="like_new">Like new</option>
-                    <option value="excellent">Excellent</option>
-                    <option value="good">Good</option>
-                    <option value="fair">Fair</option>
-                    <option value="spares_repairs">Spares / repairs</option>
-                  </select>
-                </div>
+  <div>
+    <label className="block text-xs font-semibold text-neutral-400 mb-1">
+      Era (optional)
+    </label>
+    <input
+      name="era"
+      value={sellForm.era}
+      onChange={handleSellChange}
+      className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-sky-500"
+      placeholder="e.g. Modern / Vintage / 1980s"
+    />
+  </div>
 
-                {/* Extra details (optional) */}
-                <div>
-                  <label className="block text-xs font-semibold text-neutral-400 mb-1">
-                    Shutter count (optional)
-                  </label>
-                  <input
-                    name="shutter_count"
-                    value={(sellForm as any).shutter_count || ""}
-                    onChange={handleSellChange}
-                    className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-sky-500"
-                    placeholder="e.g. 12450"
-                    inputMode="numeric"
-                  />
-                </div>
+  <div>
+    <label className="block text-xs font-semibold text-neutral-400 mb-1">
+      Condition (optional)
+    </label>
+    <select
+      name="condition"
+      value={sellForm.condition}
+      onChange={handleSellChange}
+      className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
+    >
+      <option value="">Select condition</option>
+      <option value="new">New</option>
+      <option value="like_new">Like new</option>
+      <option value="excellent">Excellent</option>
+      <option value="good">Good</option>
+      <option value="fair">Fair</option>
+      <option value="spares_repairs">Spares / repairs</option>
+    </select>
+  </div>
 
-                <div>
-                  <label className="block text-xs font-semibold text-neutral-400 mb-1">
-                    Lens mount (optional)
-                  </label>
-                  <input
-                    name="lens_mount"
-                    value={(sellForm as any).lens_mount || ""}
-                    onChange={handleSellChange}
-                    className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-sky-500"
-                    placeholder="e.g. Canon RF / Sony E / Nikon F"
-                  />
-                </div>
+  <div>
+    <label className="block text-xs font-semibold text-neutral-400 mb-1">
+      Shutter count (optional)
+    </label>
+    <input
+      name="shutter_count"
+      value={(sellForm as any).shutter_count || ""}
+      onChange={handleSellChange}
+      className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-sky-500"
+      placeholder="e.g. 12450"
+      inputMode="numeric"
+    />
+  </div>
 
-                <div>
-                  <label className="block text-xs font-semibold text-neutral-400 mb-1">
-                    Focal length (optional)
-                  </label>
-                  <input
-                    name="focal_length"
-                    value={(sellForm as any).focal_length || ""}
-                    onChange={handleSellChange}
-                    className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-sky-500"
-                    placeholder="e.g. 24–70mm"
-                  />
-                </div>
+  <div>
+    <label className="block text-xs font-semibold text-neutral-400 mb-1">
+      Lens mount (optional)
+    </label>
+    <input
+      name="lens_mount"
+      value={(sellForm as any).lens_mount || ""}
+      onChange={handleSellChange}
+      className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-sky-500"
+      placeholder="e.g. Canon RF / Sony E / Nikon F"
+    />
+  </div>
 
-                <div>
-                  <label className="block text-xs font-semibold text-neutral-400 mb-1">
-                    Max aperture (optional)
-                  </label>
-                  <input
-                    name="max_aperture"
-                    value={(sellForm as any).max_aperture || ""}
-                    onChange={handleSellChange}
-                    className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-sky-500"
-                    placeholder="e.g. f/2.8"
-                  />
-                </div>
-              </div>
+  <div>
+    <label className="block text-xs font-semibold text-neutral-400 mb-1">
+      Focal length (optional)
+    </label>
+    <input
+      name="focal_length"
+      value={(sellForm as any).focal_length || ""}
+      onChange={handleSellChange}
+      className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-sky-500"
+      placeholder="e.g. 24–70mm"
+    />
+  </div>
 
-              {/* Description */}
-              <div>
-                <label className="block text-xs font-semibold text-neutral-400 mb-1">
-                  Description (optional)
-                </label>
-                <textarea
-                  name="description"
-                  value={sellForm.description}
-                  onChange={handleSellChange}
-                  className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm min-h-[90px] bg-neutral-950/40 text-neutral-100 placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-sky-500"
-                  placeholder="What’s included, condition details, any marks, shutter count, lens fungus, etc."
-                />
-              </div>
+  <div>
+    <label className="block text-xs font-semibold text-neutral-400 mb-1">
+      Max aperture (optional)
+    </label>
+    <input
+      name="max_aperture"
+      value={(sellForm as any).max_aperture || ""}
+      onChange={handleSellChange}
+      className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-950/40 text-neutral-100 placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-sky-500"
+      placeholder="e.g. f/2.8"
+    />
+  </div>
+</div>
 
+{/* Description */}
+<div>
+  <label className="block text-xs font-semibold text-neutral-400 mb-1">
+    Description (optional)
+  </label>
+  <textarea
+    name="description"
+    value={sellForm.description}
+    onChange={handleSellChange}
+    className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm min-h-[90px] bg-neutral-950/40 text-neutral-100 placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-sky-500"
+    placeholder="What’s included, condition details, any marks, shutter count, lens fungus, etc."
+  />
+</div>
               {/* Photos Upload (multi) */}
               <div>
                 <div className="flex items-center justify-between gap-3">
@@ -2545,60 +2640,100 @@ export default function DashboardPage() {
                 )}
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {[
-                    ["item_title", "Item title"],
-                    ["brand", "Brand (optional)"],
-                    ["model", "Model (optional)"],
-                    ["era", "Era (optional)"],
-                  ].map(([key, label]) => (
-                    <div key={key}>
-                      <label className="block text-xs font-semibold text-neutral-400 mb-1">{label}</label>
-                      <input
-                        value={(editForm as any)[key]}
-                        onChange={(e) => setEditForm((p) => ({ ...p, [key]: e.target.value }))}
-                        className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-900/40 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
-                      />
-                    </div>
-                  ))}
+  <div>
+    <label className="block text-xs font-semibold text-neutral-400 mb-1">Item title</label>
+    <input
+      value={editForm.item_title}
+      onChange={(e) => setEditForm((p) => ({ ...p, item_title: e.target.value }))}
+      className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-900/40 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
+    />
+  </div>
 
-                  <div>
-                    <label className="block text-xs font-semibold text-neutral-400 mb-1">
-                      Gear type
-                    </label>
-                    <select
-                      value={editForm.gear_type}
-                      onChange={(e) =>
-                        setEditForm((p) => ({ ...p, gear_type: e.target.value }))
-                      }
-                      className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-900/40 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
-                    >
-                      <option value="">Select type</option>
-                      <option value="camera">Camera</option>
-                      <option value="lens">Lens</option>
-                      <option value="film_camera">Film camera</option>
-                      <option value="bundle">Bundle</option>
-                      <option value="accessory">Accessory</option>
-                      <option value="other">Other</option>
-                    </select>
-                  </div>
+  <div>
+    <label className="block text-xs font-semibold text-neutral-400 mb-1">Category</label>
+    <select
+      value={(editForm as any).category_group}
+      onChange={(e) =>
+        setEditForm((p) => ({
+          ...p,
+          category_group: e.target.value,
+          gear_type: "",
+        }))
+      }
+      className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-900/40 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
+    >
+      <option value="">Select category</option>
+      {CAMERA_CATEGORY_SECTIONS.map((section) => (
+        <option key={section.key} value={section.key}>
+          {section.label}
+        </option>
+      ))}
+    </select>
+  </div>
 
-                  <div>
-                    <label className="block text-xs font-semibold text-neutral-400 mb-1">Condition</label>
-                    <select
-                      value={editForm.condition}
-                      onChange={(e) => setEditForm((p) => ({ ...p, condition: e.target.value }))}
-                      className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-900/40 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
-                    >
-                      <option value="">Select condition</option>
-                      <option value="new">New</option>
-                      <option value="like_new">Like new</option>
-                      <option value="excellent">Excellent</option>
-                      <option value="good">Good</option>
-                      <option value="fair">Fair</option>
-                      <option value="spares_repairs">Spares / repairs</option>
-                    </select>
-                  </div>
-                </div>
+  <div>
+    <label className="block text-xs font-semibold text-neutral-400 mb-1">
+      Item type
+    </label>
+    <select
+      value={editForm.gear_type}
+      onChange={(e) => setEditForm((p) => ({ ...p, gear_type: e.target.value }))}
+      disabled={!(editForm as any).category_group}
+      className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-900/40 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-sky-500 disabled:opacity-50 disabled:cursor-not-allowed"
+    >
+      <option value="">Select item type</option>
+      {(editSelectedSection?.options || []).map((option) => (
+        <option key={option.value} value={option.value}>
+          {option.label}
+        </option>
+      ))}
+    </select>
+  </div>
+
+  <div>
+    <label className="block text-xs font-semibold text-neutral-400 mb-1">Brand (optional)</label>
+    <input
+      value={editForm.brand}
+      onChange={(e) => setEditForm((p) => ({ ...p, brand: e.target.value }))}
+      className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-900/40 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
+    />
+  </div>
+
+  <div>
+    <label className="block text-xs font-semibold text-neutral-400 mb-1">Model (optional)</label>
+    <input
+      value={editForm.model}
+      onChange={(e) => setEditForm((p) => ({ ...p, model: e.target.value }))}
+      className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-900/40 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
+    />
+  </div>
+
+  <div>
+    <label className="block text-xs font-semibold text-neutral-400 mb-1">Era (optional)</label>
+    <input
+      value={editForm.era}
+      onChange={(e) => setEditForm((p) => ({ ...p, era: e.target.value }))}
+      className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-900/40 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
+    />
+  </div>
+
+  <div>
+    <label className="block text-xs font-semibold text-neutral-400 mb-1">Condition</label>
+    <select
+      value={editForm.condition}
+      onChange={(e) => setEditForm((p) => ({ ...p, condition: e.target.value }))}
+      className="border border-neutral-700 rounded-md w-full px-3 py-2 text-sm bg-neutral-900/40 text-neutral-100 focus:outline-none focus:ring-2 focus:ring-sky-500"
+    >
+      <option value="">Select condition</option>
+      <option value="new">New</option>
+      <option value="like_new">Like new</option>
+      <option value="excellent">Excellent</option>
+      <option value="good">Good</option>
+      <option value="fair">Fair</option>
+      <option value="spares_repairs">Spares / repairs</option>
+    </select>
+  </div>
+</div>
 
                 <div>
                   <label className="block text-xs font-semibold text-neutral-400 mb-1">Description</label>

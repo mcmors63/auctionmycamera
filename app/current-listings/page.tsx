@@ -4,6 +4,13 @@ import Script from "next/script";
 import Link from "next/link";
 import CurrentListingsClient from "./CurrentListingsClient";
 import { Client, Databases, Query } from "node-appwrite";
+import {
+  CAMERA_BRANDS,
+  CAMERA_CATEGORY_SECTIONS,
+  findCameraCategorySectionKey,
+  getCameraCategorySectionByKey,
+  getGearTypeLabel,
+} from "@/lib/camera-categories";
 
 export const runtime = "nodejs";
 
@@ -11,6 +18,18 @@ export const runtime = "nodejs";
 export const revalidate = 300; // 5 minutes
 
 const PROD_SITE_URL = "https://auctionmycamera.co.uk";
+
+type SearchParamValue = string | string[] | undefined;
+type PageSearchParams = Record<string, SearchParamValue>;
+type PageProps = {
+  searchParams?: Promise<PageSearchParams> | PageSearchParams;
+};
+
+type ListingFilters = {
+  section: string;
+  gearType: string;
+  brand: string;
+};
 
 function isProdEnv() {
   if (process.env.VERCEL_ENV) return process.env.VERCEL_ENV === "production";
@@ -41,27 +60,129 @@ function getSiteUrl() {
 
 const SITE_URL = getSiteUrl();
 
-export const metadata: Metadata = {
-  title: "Current Camera Gear Auctions | AuctionMyCamera",
-  description:
-    "Browse live camera, lens and photography gear auctions and upcoming queued listings. Secure Stripe payments, weekly schedule, and optional free auto-relist until sold.",
-  alternates: { canonical: `${SITE_URL}/current-listings` },
-  openGraph: {
-    title: "Current Camera Gear Auctions | AuctionMyCamera",
-    description:
-      "Browse live camera, lens and photography gear auctions and upcoming queued listings. Secure Stripe payments, weekly schedule, and optional free auto-relist until sold.",
-    url: `${SITE_URL}/current-listings`,
-    siteName: "AuctionMyCamera",
-    type: "website",
-  },
-  twitter: {
-    card: "summary_large_image",
-    title: "Current Camera Gear Auctions | AuctionMyCamera",
-    description:
-      "Browse live camera, lens and photography gear auctions and upcoming queued listings. Secure Stripe payments, weekly schedule, and optional free auto-relist until sold.",
-  },
-  robots: { index: true, follow: true },
-};
+async function resolveSearchParams(
+  input?: Promise<PageSearchParams> | PageSearchParams
+): Promise<PageSearchParams> {
+  if (!input) return {};
+  return await input;
+}
+
+function getSingleSearchParam(params: PageSearchParams, key: string) {
+  const raw = params[key];
+  if (Array.isArray(raw)) return String(raw[0] || "").trim();
+  return String(raw || "").trim();
+}
+
+function getFiltersFromSearchParams(params: PageSearchParams): ListingFilters {
+  return {
+    section: getSingleSearchParam(params, "section"),
+    gearType: getSingleSearchParam(params, "gear_type"),
+    brand: getSingleSearchParam(params, "brand"),
+  };
+}
+
+function hasActiveFilters(filters: ListingFilters) {
+  return Boolean(filters.section || filters.gearType || filters.brand);
+}
+
+function buildFilterQueryString(filters: ListingFilters) {
+  const qs = new URLSearchParams();
+  if (filters.section) qs.set("section", filters.section);
+  if (filters.gearType) qs.set("gear_type", filters.gearType);
+  if (filters.brand) qs.set("brand", filters.brand);
+  return qs.toString();
+}
+
+function buildFilteredUrl(filters: ListingFilters) {
+  const qs = buildFilterQueryString(filters);
+  return qs ? `${SITE_URL}/current-listings?${qs}` : `${SITE_URL}/current-listings`;
+}
+
+function getSectionLabel(sectionKey?: string) {
+  return getCameraCategorySectionByKey(sectionKey)?.label || "";
+}
+
+function getBrandLabel(brandValue?: string) {
+  const raw = String(brandValue || "").trim();
+  if (!raw) return "";
+  const matched = CAMERA_BRANDS.find(
+    (brand) => brand.value.toLowerCase() === raw.toLowerCase()
+  );
+  return matched?.label || raw;
+}
+
+function buildPageTitle(filters: ListingFilters) {
+  const brandLabel = getBrandLabel(filters.brand);
+  const gearTypeLabel = getGearTypeLabel(filters.gearType);
+  const sectionLabel = getSectionLabel(filters.section);
+
+  if (brandLabel && gearTypeLabel) {
+    return `${brandLabel} ${gearTypeLabel} Auctions | AuctionMyCamera`;
+  }
+  if (gearTypeLabel) {
+    return `${gearTypeLabel} Auctions | AuctionMyCamera`;
+  }
+  if (sectionLabel) {
+    return `${sectionLabel} Auctions | AuctionMyCamera`;
+  }
+  if (brandLabel) {
+    return `${brandLabel} Camera Gear Auctions | AuctionMyCamera`;
+  }
+
+  return "Current Camera Gear Auctions | AuctionMyCamera";
+}
+
+function buildPageDescription(filters: ListingFilters) {
+  const brandLabel = getBrandLabel(filters.brand);
+  const gearTypeLabel = getGearTypeLabel(filters.gearType);
+  const sectionLabel = getSectionLabel(filters.section);
+
+  if (brandLabel && gearTypeLabel) {
+    return `Browse live and queued ${brandLabel} ${gearTypeLabel.toLowerCase()} auctions on AuctionMyCamera. Weekly UK auction schedule, secure payments, and clear post-sale steps.`;
+  }
+  if (gearTypeLabel) {
+    return `Browse live and queued ${gearTypeLabel.toLowerCase()} auctions on AuctionMyCamera. Weekly UK auction schedule, secure payments, and clear post-sale steps.`;
+  }
+  if (sectionLabel) {
+    return `Browse live and queued ${sectionLabel.toLowerCase()} auctions on AuctionMyCamera. Weekly UK auction schedule, secure payments, and clear post-sale steps.`;
+  }
+  if (brandLabel) {
+    return `Browse live and queued ${brandLabel} camera gear auctions on AuctionMyCamera. Weekly UK auction schedule, secure payments, and clear post-sale steps.`;
+  }
+
+  return "Browse live camera, lens and photography gear auctions and upcoming queued listings. Secure Stripe payments, weekly schedule, and optional free auto-relist until sold.";
+}
+
+export async function generateMetadata({
+  searchParams,
+}: PageProps): Promise<Metadata> {
+  const params = await resolveSearchParams(searchParams);
+  const filters = getFiltersFromSearchParams(params);
+  const filtered = hasActiveFilters(filters);
+
+  return {
+    title: buildPageTitle(filters),
+    description: buildPageDescription(filters),
+    alternates: {
+      canonical: `${SITE_URL}/current-listings`,
+    },
+    openGraph: {
+      title: buildPageTitle(filters),
+      description: buildPageDescription(filters),
+      url: filtered ? `${SITE_URL}/current-listings` : `${SITE_URL}/current-listings`,
+      siteName: "AuctionMyCamera",
+      type: "website",
+    },
+    twitter: {
+      card: "summary_large_image",
+      title: buildPageTitle(filters),
+      description: buildPageDescription(filters),
+    },
+    robots: filtered
+      ? { index: false, follow: true }
+      : { index: true, follow: true },
+  };
+}
 
 // ----------------------------------------------------
 // Appwrite (server/admin)
@@ -148,7 +269,7 @@ function getListingTitle(doc: any) {
   if (bm) return bm;
 
   const gearType = String(doc?.gear_type || doc?.type || "").trim();
-  if (gearType) return `${capitalize(gearType)} listing`;
+  if (gearType) return `${getGearTypeLabel(gearType) || capitalize(gearType)} listing`;
 
   return "Camera gear listing";
 }
@@ -156,7 +277,14 @@ function getListingTitle(doc: any) {
 function getListingLabel(doc: any) {
   const gearType = String(doc?.gear_type || "").trim();
   const era = String(doc?.era || "").trim();
-  const bits = [gearType && capitalize(gearType), era && capitalize(era)].filter(Boolean);
+  const brand = String(doc?.brand || "").trim();
+
+  const bits = [
+    brand,
+    gearType ? getGearTypeLabel(gearType) : "",
+    era && capitalize(era),
+  ].filter(Boolean);
+
   return bits.length ? bits.join(" • ") : "";
 }
 
@@ -201,7 +329,82 @@ function firstQueuedStartingText(soon: any[]) {
   return label ? `Next queued listing starts ${label} UK time` : "Queued listings are lined up for the next window";
 }
 
-export default async function CurrentListingsPage() {
+function matchesListingFilters(doc: any, filters: ListingFilters) {
+  const docGearType = String(doc?.gear_type || "").trim();
+  const docBrand = String(doc?.brand || "").trim().toLowerCase();
+  const docSection = findCameraCategorySectionKey(docGearType);
+
+  if (filters.section && docSection !== filters.section) return false;
+  if (filters.gearType && docGearType !== filters.gearType) return false;
+  if (filters.brand && docBrand !== filters.brand.toLowerCase()) return false;
+
+  return true;
+}
+
+function filterListings(docs: any[], filters: ListingFilters) {
+  if (!hasActiveFilters(filters)) return docs;
+  return docs.filter((doc) => matchesListingFilters(doc, filters));
+}
+
+function buildHeroHeading(filters: ListingFilters) {
+  const brandLabel = getBrandLabel(filters.brand);
+  const gearTypeLabel = getGearTypeLabel(filters.gearType);
+  const sectionLabel = getSectionLabel(filters.section);
+
+  if (brandLabel && gearTypeLabel) return `${brandLabel} ${gearTypeLabel} auctions`;
+  if (gearTypeLabel) return `${gearTypeLabel} auctions`;
+  if (sectionLabel) return `${sectionLabel} auctions`;
+  if (brandLabel) return `${brandLabel} camera gear auctions`;
+
+  return "Current camera gear auctions";
+}
+
+function buildHeroDescription(filters: ListingFilters) {
+  const brandLabel = getBrandLabel(filters.brand);
+  const gearTypeLabel = getGearTypeLabel(filters.gearType);
+  const sectionLabel = getSectionLabel(filters.section);
+
+  if (brandLabel && gearTypeLabel) {
+    return `Showing live and queued listings for ${brandLabel} ${gearTypeLabel.toLowerCase()}.`;
+  }
+  if (gearTypeLabel) {
+    return `Showing live and queued listings for ${gearTypeLabel.toLowerCase()}.`;
+  }
+  if (sectionLabel) {
+    return `Showing live and queued listings from the ${sectionLabel.toLowerCase()} category.`;
+  }
+  if (brandLabel) {
+    return `Showing live and queued listings for ${brandLabel} camera gear.`;
+  }
+
+  return "Browse live auctions and queued listings for cameras, lenses, and photography gear. See what is active now, what is coming next, and move into a clearer post-sale process when an item is won.";
+}
+
+function buildActiveFilterPills(filters: ListingFilters) {
+  const pills: { label: string; href?: string }[] = [];
+
+  if (filters.section) {
+    const section = getCameraCategorySectionByKey(filters.section);
+    if (section) {
+      pills.push({ label: `Category: ${section.label}` });
+    }
+  }
+
+  if (filters.gearType) {
+    pills.push({ label: `Type: ${getGearTypeLabel(filters.gearType)}` });
+  }
+
+  if (filters.brand) {
+    pills.push({ label: `Brand: ${getBrandLabel(filters.brand)}` });
+  }
+
+  return pills;
+}
+
+export default async function CurrentListingsPage({ searchParams }: PageProps) {
+  const params = await resolveSearchParams(searchParams);
+  const filters = getFiltersFromSearchParams(params);
+
   let live: any[] = [];
   let soon: any[] = [];
   let loadFailed = false;
@@ -210,16 +413,23 @@ export default async function CurrentListingsPage() {
     const LIVE_STATUSES = ["live", "active"];
     const SOON_STATUSES = ["queued", "upcoming"];
 
-    [live, soon] = await Promise.all([
+    const [allLive, allSoon] = await Promise.all([
       fetchByStatuses(LIVE_STATUSES, { field: "auction_end", dir: "asc" }),
       fetchByStatuses(SOON_STATUSES, { field: "auction_start", dir: "asc" }),
     ]);
+
+    live = filterListings(allLive, filters);
+    soon = filterListings(allSoon, filters);
   } catch (err) {
     console.error("Failed to load current listings (server):", err);
     loadFailed = true;
     live = [];
     soon = [];
   }
+
+  const filtered = hasActiveFilters(filters);
+  const activeFilterPills = buildActiveFilterPills(filters);
+  const filteredUrl = buildFilteredUrl(filters);
 
   const combinedForLd = [...live, ...soon].slice(0, 50);
 
@@ -240,18 +450,29 @@ export default async function CurrentListingsPage() {
     }),
   };
 
+  const breadcrumbItems: Array<{ "@type": "ListItem"; position: number; name: string; item: string }> = [
+    { "@type": "ListItem", position: 1, name: "Home", item: `${SITE_URL}/` },
+    {
+      "@type": "ListItem",
+      position: 2,
+      name: "Current auctions",
+      item: `${SITE_URL}/current-listings`,
+    },
+  ];
+
+  if (filtered) {
+    breadcrumbItems.push({
+      "@type": "ListItem",
+      position: 3,
+      name: buildHeroHeading(filters),
+      item: filteredUrl,
+    });
+  }
+
   const jsonLdBreadcrumbs = {
     "@context": "https://schema.org",
     "@type": "BreadcrumbList",
-    itemListElement: [
-      { "@type": "ListItem", position: 1, name: "Home", item: `${SITE_URL}/` },
-      {
-        "@type": "ListItem",
-        position: 2,
-        name: "Current auctions",
-        item: `${SITE_URL}/current-listings`,
-      },
-    ],
+    itemListElement: breadcrumbItems,
   };
 
   const topLive = live.slice(0, 8);
@@ -283,14 +504,38 @@ export default async function CurrentListingsPage() {
             </p>
 
             <h1 className="mt-4 text-3xl md:text-5xl font-extrabold tracking-tight">
-              Current camera gear auctions
+              {buildHeroHeading(filters)}
             </h1>
 
             <p className="mt-4 max-w-3xl text-sm md:text-base leading-relaxed text-muted-foreground">
-              Browse live auctions and queued listings for cameras, lenses, and photography
-              gear. See what is active now, what is coming next, and move into a
-              clearer post-sale process when an item is won.
+              {buildHeroDescription(filters)}
             </p>
+
+            {filtered && (
+              <div className="mt-5">
+                <div className="flex flex-wrap gap-2">
+                  {activeFilterPills.map((pill) => (
+                    <span
+                      key={pill.label}
+                      className="inline-flex items-center rounded-full border border-border bg-card px-3 py-1 text-xs font-semibold text-foreground"
+                    >
+                      {pill.label}
+                    </span>
+                  ))}
+
+                  <Link
+                    href="/current-listings"
+                    className="inline-flex items-center rounded-full border border-border bg-background px-3 py-1 text-xs font-semibold text-primary underline-offset-2 hover:underline"
+                  >
+                    Clear filters
+                  </Link>
+                </div>
+
+                <p className="mt-2 text-xs text-muted-foreground">
+                  Filtered browse view. Canonical stays on the main current listings page.
+                </p>
+              </div>
+            )}
 
             <div className="mt-6 flex flex-wrap gap-3">
               <Link
@@ -350,6 +595,40 @@ export default async function CurrentListingsPage() {
                 FAQ
               </Link>
             </div>
+
+            {!filtered && (
+              <div className="mt-8 grid md:grid-cols-2 gap-6">
+                <div className="rounded-2xl border border-border bg-card p-4">
+                  <h2 className="text-sm font-bold text-primary mb-3">Browse by category</h2>
+                  <div className="flex flex-wrap gap-2">
+                    {CAMERA_CATEGORY_SECTIONS.map((section) => (
+                      <Link
+                        key={section.key}
+                        href={section.href}
+                        className="rounded-full border border-border bg-background px-3 py-1.5 text-xs font-semibold transition hover:bg-accent"
+                      >
+                        {section.label}
+                      </Link>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-border bg-card p-4">
+                  <h2 className="text-sm font-bold text-primary mb-3">Popular brands</h2>
+                  <div className="flex flex-wrap gap-2">
+                    {CAMERA_BRANDS.slice(0, 10).map((brand) => (
+                      <Link
+                        key={brand.value}
+                        href={brand.href}
+                        className="rounded-full border border-border bg-background px-3 py-1.5 text-xs font-semibold transition hover:bg-accent"
+                      >
+                        {brand.label}
+                      </Link>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Featured previews */}
@@ -360,7 +639,9 @@ export default async function CurrentListingsPage() {
                   <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
                     Live now
                   </p>
-                  <h2 className="mt-1 text-lg font-bold">Auctions ending soon</h2>
+                  <h2 className="mt-1 text-lg font-bold">
+                    {filtered ? "Filtered live auctions" : "Auctions ending soon"}
+                  </h2>
                 </div>
                 <Link
                   href="#interactive-current-listings"
@@ -372,9 +653,13 @@ export default async function CurrentListingsPage() {
 
               {topLive.length === 0 ? (
                 <div className="mt-4 rounded-2xl border border-border bg-background p-4">
-                  <p className="text-sm">No live auctions right now.</p>
+                  <p className="text-sm">
+                    {filtered ? "No live auctions match this filter right now." : "No live auctions right now."}
+                  </p>
                   <p className="mt-1 text-sm text-muted-foreground">
-                    Check back soon or browse queued listings below.
+                    {filtered
+                      ? "Try clearing the filter or browse queued listings below."
+                      : "Check back soon or browse queued listings below."}
                   </p>
                 </div>
               ) : (
@@ -415,7 +700,9 @@ export default async function CurrentListingsPage() {
                   <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
                     Coming next
                   </p>
-                  <h2 className="mt-1 text-lg font-bold">Queued listings</h2>
+                  <h2 className="mt-1 text-lg font-bold">
+                    {filtered ? "Filtered queued listings" : "Queued listings"}
+                  </h2>
                 </div>
                 <Link
                   href="/sell"
@@ -427,9 +714,13 @@ export default async function CurrentListingsPage() {
 
               {topSoon.length === 0 ? (
                 <div className="mt-4 rounded-2xl border border-border bg-background p-4">
-                  <p className="text-sm">Nothing queued right now.</p>
+                  <p className="text-sm">
+                    {filtered ? "No queued listings match this filter right now." : "Nothing queued right now."}
+                  </p>
                   <p className="mt-1 text-sm text-muted-foreground">
-                    Sellers can submit items for the next weekly auction window.
+                    {filtered
+                      ? "Try clearing the filter or browse the main auctions page."
+                      : "Sellers can submit items for the next weekly auction window."}
                   </p>
                 </div>
               ) : (
@@ -470,9 +761,13 @@ export default async function CurrentListingsPage() {
           {/* Crawlable link lists */}
           <div className="mt-8 grid md:grid-cols-2 gap-6">
             <div className="rounded-2xl border border-border bg-card p-4">
-              <h2 className="text-sm font-bold text-primary mb-3">Browse live auction links</h2>
+              <h2 className="text-sm font-bold text-primary mb-3">
+                {filtered ? "Filtered live auction links" : "Browse live auction links"}
+              </h2>
               {live.length === 0 ? (
-                <p className="text-sm text-muted-foreground">No live auctions right now.</p>
+                <p className="text-sm text-muted-foreground">
+                  {filtered ? "No live auctions match this filter right now." : "No live auctions right now."}
+                </p>
               ) : (
                 <ul className="space-y-2 text-sm">
                   {live.slice(0, 16).map((doc) => {
@@ -494,9 +789,13 @@ export default async function CurrentListingsPage() {
             </div>
 
             <div className="rounded-2xl border border-border bg-card p-4">
-              <h2 className="text-sm font-bold text-primary mb-3">Browse queued listing links</h2>
+              <h2 className="text-sm font-bold text-primary mb-3">
+                {filtered ? "Filtered queued listing links" : "Browse queued listing links"}
+              </h2>
               {soon.length === 0 ? (
-                <p className="text-sm text-muted-foreground">Nothing queued right now.</p>
+                <p className="text-sm text-muted-foreground">
+                  {filtered ? "No queued listings match this filter right now." : "Nothing queued right now."}
+                </p>
               ) : (
                 <ul className="space-y-2 text-sm">
                   {soon.slice(0, 16).map((doc) => {
@@ -527,7 +826,9 @@ export default async function CurrentListingsPage() {
               <div>
                 <h3 className="text-sm font-bold text-primary mb-2">Live auctions</h3>
                 {live.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">No live auctions right now.</p>
+                  <p className="text-sm text-muted-foreground">
+                    {filtered ? "No live auctions match this filter right now." : "No live auctions right now."}
+                  </p>
                 ) : (
                   <ul className="space-y-2 text-sm">
                     {live.slice(0, 40).map((doc) => {
@@ -551,7 +852,9 @@ export default async function CurrentListingsPage() {
               <div>
                 <h3 className="text-sm font-bold text-primary mb-2">Coming next</h3>
                 {soon.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">Nothing queued right now.</p>
+                  <p className="text-sm text-muted-foreground">
+                    {filtered ? "No queued listings match this filter right now." : "Nothing queued right now."}
+                  </p>
                 ) : (
                   <ul className="space-y-2 text-sm">
                     {soon.slice(0, 40).map((doc) => {
