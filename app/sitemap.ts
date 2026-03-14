@@ -71,7 +71,8 @@ const BLOG_DB_ID =
 const BLOG_COLLECTION_ID =
   process.env.APPWRITE_BLOG_COLLECTION_ID || "blog_posts";
 
-const PUBLIC_LISTING_STATUSES = ["active", "ended", "sold"];
+// ✅ Must match app/listing/[id]/page.tsx indexable statuses
+const INDEXABLE_LISTING_STATUSES = ["live", "queued", "sold"];
 
 // -----------------------------
 // Fetch Listings
@@ -84,7 +85,7 @@ async function fetchListingUrls(db: Databases): Promise<MetadataRoute.Sitemap> {
 
   while (true) {
     const queries: string[] = [
-      Query.equal("status", PUBLIC_LISTING_STATUSES),
+      Query.equal("status", INDEXABLE_LISTING_STATUSES),
       Query.orderAsc("$id"),
       Query.limit(100),
     ];
@@ -100,7 +101,7 @@ async function fetchListingUrls(db: Databases): Promise<MetadataRoute.Sitemap> {
     for (const doc of page.documents as any[]) {
       urls.push({
         url: `${SITE_URL}/listing/${doc.$id}`,
-        lastModified: new Date(doc.$updatedAt),
+        lastModified: doc.$updatedAt ? new Date(doc.$updatedAt) : undefined,
         changeFrequency: "daily",
         priority: 0.8,
       });
@@ -138,11 +139,12 @@ async function fetchBlogUrls(db: Databases): Promise<MetadataRoute.Sitemap> {
     );
 
     for (const doc of page.documents as any[]) {
+      const slug = String(doc.slug || "").trim();
+      if (!slug) continue;
+
       urls.push({
-        url: `${SITE_URL}/blog/${doc.slug}`,
-        lastModified: doc.$updatedAt
-          ? new Date(doc.$updatedAt)
-          : new Date(),
+        url: `${SITE_URL}/blog/${slug}`,
+        lastModified: doc.$updatedAt ? new Date(doc.$updatedAt) : undefined,
         changeFrequency: "monthly",
         priority: 0.6,
       });
@@ -159,19 +161,17 @@ async function fetchBlogUrls(db: Databases): Promise<MetadataRoute.Sitemap> {
 // Main Sitemap
 // -----------------------------
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
-  const now = new Date();
-
   const staticRoutes: MetadataRoute.Sitemap = [
-    { url: `${SITE_URL}/`, lastModified: now, changeFrequency: "daily", priority: 1 },
-    { url: `${SITE_URL}/current-listings`, lastModified: now, changeFrequency: "hourly", priority: 0.9 },
-    { url: `${SITE_URL}/blog`, lastModified: now, changeFrequency: "weekly", priority: 0.7 },
-    { url: `${SITE_URL}/how-it-works`, lastModified: now, changeFrequency: "monthly", priority: 0.7 },
-    { url: `${SITE_URL}/fees`, lastModified: now, changeFrequency: "monthly", priority: 0.7 },
-    { url: `${SITE_URL}/faq`, lastModified: now, changeFrequency: "monthly", priority: 0.6 },
-    { url: `${SITE_URL}/about`, lastModified: now, changeFrequency: "monthly", priority: 0.5 },
-    { url: `${SITE_URL}/contact`, lastModified: now, changeFrequency: "yearly", priority: 0.4 },
-    { url: `${SITE_URL}/terms`, lastModified: now, changeFrequency: "yearly", priority: 0.2 },
-    { url: `${SITE_URL}/privacy`, lastModified: now, changeFrequency: "yearly", priority: 0.2 },
+    { url: `${SITE_URL}/`, changeFrequency: "daily", priority: 1 },
+    { url: `${SITE_URL}/current-listings`, changeFrequency: "hourly", priority: 0.9 },
+    { url: `${SITE_URL}/blog`, changeFrequency: "weekly", priority: 0.7 },
+    { url: `${SITE_URL}/how-it-works`, changeFrequency: "monthly", priority: 0.7 },
+    { url: `${SITE_URL}/fees`, changeFrequency: "monthly", priority: 0.7 },
+    { url: `${SITE_URL}/faq`, changeFrequency: "monthly", priority: 0.6 },
+    { url: `${SITE_URL}/about`, changeFrequency: "monthly", priority: 0.5 },
+    { url: `${SITE_URL}/contact`, changeFrequency: "yearly", priority: 0.4 },
+    { url: `${SITE_URL}/terms`, changeFrequency: "yearly", priority: 0.2 },
+    { url: `${SITE_URL}/privacy`, changeFrequency: "yearly", priority: 0.2 },
   ];
 
   if (!endpoint || !projectId || !apiKey) {
@@ -186,8 +186,10 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
 
     const db = new Databases(client);
 
-    const listingRoutes = await fetchListingUrls(db);
-    const blogRoutes = await fetchBlogUrls(db);
+    const [listingRoutes, blogRoutes] = await Promise.all([
+      fetchListingUrls(db),
+      fetchBlogUrls(db),
+    ]);
 
     return [...staticRoutes, ...listingRoutes, ...blogRoutes];
   } catch (err) {
