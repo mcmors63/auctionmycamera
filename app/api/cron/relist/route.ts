@@ -13,38 +13,37 @@ export const dynamic = "force-dynamic";
 const endpoint =
   (process.env.APPWRITE_ENDPOINT ||
     process.env.NEXT_PUBLIC_APPWRITE_ENDPOINT ||
-    ""
-  ).trim();
+    "").trim();
 
 const projectId =
   (process.env.APPWRITE_PROJECT_ID ||
     process.env.NEXT_PUBLIC_APPWRITE_PROJECT_ID ||
-    ""
-  ).trim();
+    "").trim();
 
 const apiKey = (process.env.APPWRITE_API_KEY || "").trim();
 
 // Cron secret (required)
-const cronSecret = (process.env.CRON_SECRET || process.env.AUCTION_CRON_SECRET || "").trim();
+const cronSecret = (
+  process.env.CRON_SECRET ||
+  process.env.AUCTION_CRON_SECRET ||
+  ""
+).trim();
 
 // DB / Collections
 const DB_ID =
   (process.env.APPWRITE_LISTINGS_DATABASE_ID ||
     process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_DATABASE_ID ||
-    ""
-  ).trim();
+    "").trim();
 
 const LISTINGS_COLLECTION_ID =
   (process.env.APPWRITE_LISTINGS_COLLECTION_ID ||
     process.env.NEXT_PUBLIC_APPWRITE_LISTINGS_COLLECTION_ID ||
-    ""
-  ).trim();
+    "").trim();
 
 // Site URL (camera default)
-const SITE_URL = (process.env.NEXT_PUBLIC_SITE_URL || "https://auctionmycamera.co.uk").replace(
-  /\/+$/,
-  ""
-);
+const SITE_URL = (
+  process.env.NEXT_PUBLIC_SITE_URL || "https://auctionmycamera.co.uk"
+).replace(/\/+$/, "");
 
 // SMTP
 const SMTP_HOST = (process.env.SMTP_HOST || "").trim();
@@ -73,7 +72,7 @@ const transporter = mailEnabled
   ? nodemailer.createTransport({
       host: SMTP_HOST,
       port: SMTP_PORT,
-      secure: SMTP_PORT === 465, // ✅ 465 secure, 587 not
+      secure: SMTP_PORT === 465,
       auth: { user: SMTP_USER, pass: SMTP_PASS },
     })
   : null;
@@ -82,7 +81,6 @@ const transporter = mailEnabled
 // Time formatting (London)
 // -----------------------------
 function fmtLondonTimeLabel(d: Date) {
-  // Example: "Monday 01:00"
   return d.toLocaleString("en-GB", {
     timeZone: "Europe/London",
     weekday: "long",
@@ -143,7 +141,7 @@ function isWithdrawAfter(doc: any) {
     Boolean(doc.withdraw_after) ||
     Boolean(doc.withdraw_after_auction) ||
     Boolean(doc.withdraw_after_sale) ||
-    Boolean(doc.withdraw_after_current) // you use this field in dashboard
+    Boolean(doc.withdraw_after_current)
   );
 }
 
@@ -162,6 +160,62 @@ function isAuthed(req: NextRequest) {
   return Boolean(cronSecret) && secret === cronSecret;
 }
 
+function extractUnknownAttribute(err: any): string | null {
+  const respRaw = typeof err?.response === "string" ? err.response : "";
+  let msg = "";
+
+  if (respRaw) {
+    try {
+      const parsed = JSON.parse(respRaw);
+      msg = String(parsed?.message || respRaw);
+    } catch {
+      msg = respRaw;
+    }
+  }
+
+  if (!msg) msg = String(err?.message || "");
+
+  const m = msg.match(/Unknown attribute:\s*["']?([A-Za-z0-9_]+)["']?/i);
+  return m?.[1] ? m[1] : null;
+}
+
+function getErrorMessage(err: any) {
+  if (!err) return "Unknown error";
+  if (typeof err?.message === "string" && err.message.trim()) return err.message.trim();
+  if (typeof err?.response === "string" && err.response.trim()) return err.response.trim();
+  try {
+    return JSON.stringify(err);
+  } catch {
+    return "Unknown error";
+  }
+}
+
+async function updateDocSchemaTolerant(params: {
+  db: Databases;
+  dbId: string;
+  colId: string;
+  docId: string;
+  data: Record<string, any>;
+}) {
+  const { db, dbId, colId, docId } = params;
+  const data: Record<string, any> = { ...params.data };
+
+  for (let i = 0; i < 16; i++) {
+    try {
+      return await db.updateDocument(dbId, colId, docId, data);
+    } catch (err: any) {
+      const bad = extractUnknownAttribute(err);
+      if (bad && bad in data) {
+        delete data[bad];
+        continue;
+      }
+      throw err;
+    }
+  }
+
+  return await db.updateDocument(dbId, colId, docId, data);
+}
+
 async function sendRelistedEmail(params: {
   sellerEmail: string;
   itemLabel: string;
@@ -173,11 +227,12 @@ async function sendRelistedEmail(params: {
 
   const { sellerEmail, itemLabel, start, end } = params;
 
-  const subject = safeHeaderValue(`Update: ${itemLabel} didn’t sell — we’ve re-listed it`);
+  const subject = safeHeaderValue(
+    `Update: ${itemLabel} didn’t sell — we’ve re-listed it`
+  );
 
   const dashboardLink = `${SITE_URL}/dashboard`;
 
-  // Match your style: Monday 01:00 / Sunday 23:00
   const startLabel = fmtLondonTimeLabel(start);
   const endLabel = fmtLondonTimeLabel(end);
 
@@ -196,14 +251,18 @@ ${dashboardLink}
 
   const html = `
     <p>Hi,</p>
-    <p>Your item <strong>${escapeHtml(itemLabel)}</strong> didn’t sell in the last auction, so we’ve automatically re-listed it for the next weekly auction (because you selected <strong>“Keep listing until sold”</strong>).</p>
+    <p>Your item <strong>${escapeHtml(
+      itemLabel
+    )}</strong> didn’t sell in the last auction, so we’ve automatically re-listed it for the next weekly auction (because you selected <strong>“Keep listing until sold”</strong>).</p>
     <p><strong>Next auction window (UK time):</strong><br/>
       Start: ${escapeHtml(startLabel)}<br/>
       End: ${escapeHtml(endLabel)} <em>(with 5-minute soft close)</em>
     </p>
     <p>
       You can view your listing and change your relist/withdraw settings here:<br/>
-      <a href="${escapeHtml(dashboardLink)}" target="_blank" rel="noopener noreferrer">${escapeHtml(
+      <a href="${escapeHtml(
+        dashboardLink
+      )}" target="_blank" rel="noopener noreferrer">${escapeHtml(
     dashboardLink
   )}</a>
     </p>
@@ -211,7 +270,10 @@ ${dashboardLink}
   `;
 
   await transporter.sendMail({
-    from: { name: safeHeaderValue(FROM_NAME, "AuctionMyCamera"), address: FROM_ADDRESS },
+    from: {
+      name: safeHeaderValue(FROM_NAME, "AuctionMyCamera"),
+      address: FROM_ADDRESS,
+    },
     to: sellerEmail,
     subject,
     text,
@@ -246,7 +308,10 @@ export async function GET(req: NextRequest) {
     }
 
     if (!endpoint || !projectId || !apiKey) {
-      return NextResponse.json({ ok: false, error: "Missing Appwrite server env config." }, { status: 500 });
+      return NextResponse.json(
+        { ok: false, error: "Missing Appwrite server env config." },
+        { status: 500 }
+      );
     }
 
     if (!DB_ID || !LISTINGS_COLLECTION_ID) {
@@ -268,8 +333,8 @@ export async function GET(req: NextRequest) {
     // -------------------------------------------------------
     let scannedQueued = 0;
     let activated = 0;
+    let activationErrors = 0;
 
-    // Extra monitoring counters (pure logging, no logic change)
     let queuedSkippedSold = 0;
     let queuedSkippedWithdrawn = 0;
     let queuedSkippedMissingWindow = 0;
@@ -293,35 +358,45 @@ export async function GET(req: NextRequest) {
         scannedQueued += page.documents.length;
 
         for (const doc of page.documents as any[]) {
-          if (isSold(doc)) {
-            queuedSkippedSold++;
-            continue;
-          }
-          if (isWithdrawAfter(doc)) {
-            queuedSkippedWithdrawn++;
-            continue;
-          }
+          try {
+            if (isSold(doc)) {
+              queuedSkippedSold++;
+              continue;
+            }
+            if (isWithdrawAfter(doc)) {
+              queuedSkippedWithdrawn++;
+              continue;
+            }
 
-          const startIso = doc.auction_start;
-          const endIso = doc.auction_end;
-          if (!startIso || !endIso) {
-            queuedSkippedMissingWindow++;
-            continue;
-          }
+            const startIso = doc.auction_start;
+            const endIso = doc.auction_end;
+            if (!startIso || !endIso) {
+              queuedSkippedMissingWindow++;
+              continue;
+            }
 
-          const startMs = Date.parse(startIso);
-          const endMs = Date.parse(endIso);
-          if (Number.isNaN(startMs) || Number.isNaN(endMs)) {
-            queuedSkippedBadWindow++;
-            continue;
-          }
+            const startMs = Date.parse(startIso);
+            const endMs = Date.parse(endIso);
+            if (Number.isNaN(startMs) || Number.isNaN(endMs)) {
+              queuedSkippedBadWindow++;
+              continue;
+            }
 
-          // If we are inside THIS listing's window, it should be live
-          if (nowMs >= startMs && nowMs < endMs) {
-            await db.updateDocument(DB_ID, LISTINGS_COLLECTION_ID, doc.$id, { status: "live" });
-            activated++;
-          } else {
-            queuedSkippedNotInWindow++;
+            if (nowMs >= startMs && nowMs < endMs) {
+              await updateDocSchemaTolerant({
+                db,
+                dbId: DB_ID,
+                colId: LISTINGS_COLLECTION_ID,
+                docId: doc.$id,
+                data: { status: "live" },
+              });
+              activated++;
+            } else {
+              queuedSkippedNotInWindow++;
+            }
+          } catch (err) {
+            activationErrors++;
+            console.error("[cron/relist] activation error for", doc?.$id, err);
           }
         }
 
@@ -332,15 +407,14 @@ export async function GET(req: NextRequest) {
 
     // -------------------------------------------------------
     // 2) RELIST: ended -> next/current window + reset weekly bid state
-    //    + SEND EMAIL (only when relisted)
     // -------------------------------------------------------
     let scannedRelist = 0;
     let relisted = 0;
+    let relistErrors = 0;
     let relistEmailsSent = 0;
     let relistEmailsFailed = 0;
     let relistEmailsSkipped = 0;
 
-    // Extra monitoring counters (pure logging, no logic change)
     let relistSkippedSold = 0;
     let relistSkippedWithdrawn = 0;
     let relistSkippedMissingEnd = 0;
@@ -365,86 +439,90 @@ export async function GET(req: NextRequest) {
         scannedRelist += page.documents.length;
 
         for (const doc of page.documents as any[]) {
-          if (isSold(doc)) {
-            relistSkippedSold++;
-            continue;
-          }
-          if (isWithdrawAfter(doc)) {
-            relistSkippedWithdrawn++;
-            continue;
-          }
-
-          const auctionEndIso = doc.auction_end;
-          if (!auctionEndIso) {
-            relistSkippedMissingEnd++;
-            continue;
-          }
-
-          const endMs = Date.parse(auctionEndIso);
-          if (Number.isNaN(endMs)) {
-            relistSkippedBadEnd++;
-            continue;
-          }
-
-          // Only relist those that have truly ended
-          if (nowMs <= endMs) {
-            relistSkippedNotEndedYet++;
-            continue;
-          }
-
-          // IMPORTANT:
-          // - If we're after this week's Sunday end, write NEXT window
-          // - Otherwise keep within the current weekly window (rare edge)
-          const useNext = nowMs > currentEnd.getTime();
-          const start = useNext ? nextStart : currentStart;
-          const end = useNext ? nextEnd : currentEnd;
-
-          // queued until start, then activation pass flips it to live
-          const newStatus = nowMs >= start.getTime() && nowMs < end.getTime() ? "live" : "queued";
-
-          await db.updateDocument(DB_ID, LISTINGS_COLLECTION_ID, doc.$id, {
-            status: newStatus,
-            auction_start: start.toISOString(),
-            auction_end: end.toISOString(),
-
-            // reset weekly bid state
-            current_bid: null,
-            highest_bidder: null,
-            last_bidder: null,
-            last_bid_time: null,
-            bids: 0,
-            bidder_email: null,
-            bidder_id: null,
-          });
-
-          relisted++;
-
-          // ✅ Email seller (best-effort; do not fail cron if SMTP is down)
-          const sellerEmail = String(doc.seller_email || doc.sellerEmail || "").trim();
-
-          if (!sellerEmail) {
-            relistEmailsSkipped++;
-            relistSkippedMissingSeller++;
-            continue;
-          }
-
-          if (!mailEnabled) {
-            relistEmailsSkipped++;
-            continue;
-          }
-
           try {
-            await sendRelistedEmail({
-              sellerEmail,
-              itemLabel: getItemLabel(doc),
-              start,
-              end,
-              listingId: doc.$id,
+            if (isSold(doc)) {
+              relistSkippedSold++;
+              continue;
+            }
+            if (isWithdrawAfter(doc)) {
+              relistSkippedWithdrawn++;
+              continue;
+            }
+
+            const auctionEndIso = doc.auction_end;
+            if (!auctionEndIso) {
+              relistSkippedMissingEnd++;
+              continue;
+            }
+
+            const endMs = Date.parse(auctionEndIso);
+            if (Number.isNaN(endMs)) {
+              relistSkippedBadEnd++;
+              continue;
+            }
+
+            if (nowMs <= endMs) {
+              relistSkippedNotEndedYet++;
+              continue;
+            }
+
+            const useNext = nowMs > currentEnd.getTime();
+            const start = useNext ? nextStart : currentStart;
+            const end = useNext ? nextEnd : currentEnd;
+
+            const newStatus =
+              nowMs >= start.getTime() && nowMs < end.getTime() ? "live" : "queued";
+
+            await updateDocSchemaTolerant({
+              db,
+              dbId: DB_ID,
+              colId: LISTINGS_COLLECTION_ID,
+              docId: doc.$id,
+              data: {
+                status: newStatus,
+                auction_start: start.toISOString(),
+                auction_end: end.toISOString(),
+
+                // reset weekly bid state
+                current_bid: 0,
+                bids: 0,
+                bidder_email: null,
+                bidder_id: null,
+                reserve_met: false,
+              },
             });
-            relistEmailsSent++;
-          } catch (mailErr) {
-            console.error("[cron/relist] Failed to send relist email for", doc.$id, mailErr);
-            relistEmailsFailed++;
+
+            relisted++;
+
+            const sellerEmail = String(doc.seller_email || doc.sellerEmail || "").trim();
+
+            if (!sellerEmail) {
+              relistEmailsSkipped++;
+              relistSkippedMissingSeller++;
+              continue;
+            }
+
+            if (!mailEnabled) {
+              relistEmailsSkipped++;
+              continue;
+            }
+
+            try {
+              await sendRelistedEmail({
+                sellerEmail,
+                itemLabel: getItemLabel(doc),
+                start,
+                end,
+                listingId: doc.$id,
+              });
+              relistEmailsSent++;
+            } catch (mailErr) {
+              console.error("[cron/relist] Failed to send relist email for", doc.$id, mailErr);
+              relistEmailsFailed++;
+            }
+          } catch (err) {
+            relistErrors++;
+            console.error("[cron/relist] relist error for", doc?.$id, err);
           }
         }
 
@@ -458,9 +536,9 @@ export async function GET(req: NextRequest) {
       now: now.toISOString(),
       mailEnabled,
 
-      // Activation
       scannedQueued,
       activated,
+      activationErrors,
       queuedSkips: {
         sold: queuedSkippedSold,
         withdrawn: queuedSkippedWithdrawn,
@@ -469,9 +547,9 @@ export async function GET(req: NextRequest) {
         notInWindow: queuedSkippedNotInWindow,
       },
 
-      // Relist
       scannedRelist,
       relisted,
+      relistErrors,
       relistEmailsSent,
       relistEmailsFailed,
       relistEmailsSkipped,
@@ -484,7 +562,6 @@ export async function GET(req: NextRequest) {
         missingSeller: relistSkippedMissingSeller,
       },
 
-      // Window visibility (monitoring)
       window: {
         currentStart: currentStart.toISOString(),
         currentEnd: currentEnd.toISOString(),
@@ -495,7 +572,7 @@ export async function GET(req: NextRequest) {
   } catch (err: any) {
     console.error("[cron/relist] error:", err);
     return NextResponse.json(
-      { ok: false, error: err?.message || "Unknown error" },
+      { ok: false, error: getErrorMessage(err) },
       { status: 500 }
     );
   }
