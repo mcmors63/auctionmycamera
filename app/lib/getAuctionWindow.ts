@@ -25,7 +25,17 @@ export type AuctionWindow = {
 
 const LONDON_TZ = "Europe/London";
 
-function getZonedParts(date: Date, timeZone: string) {
+type ZonedParts = {
+  year: number;
+  month: number;
+  day: number;
+  hour: number;
+  minute: number;
+  second: number;
+  weekday: string;
+};
+
+function getZonedParts(date: Date, timeZone: string): ZonedParts {
   const dtf = new Intl.DateTimeFormat("en-GB", {
     timeZone,
     year: "numeric",
@@ -35,57 +45,36 @@ function getZonedParts(date: Date, timeZone: string) {
     minute: "2-digit",
     second: "2-digit",
     hour12: false,
+    hourCycle: "h23",
     weekday: "short",
   });
 
   const parts = dtf.formatToParts(date);
   const map: Record<string, string> = {};
+
   for (const p of parts) {
     if (p.type !== "literal") map[p.type] = p.value;
   }
 
-  const year = Number(map.year);
-  const month = Number(map.month);
-  const day = Number(map.day);
-  const hour = Number(map.hour);
-  const minute = Number(map.minute);
-  const second = Number(map.second);
-  const weekday = map.weekday;
-
-  return { year, month, day, hour, minute, second, weekday };
-}
-
-function getTimeZoneOffsetMinutes(date: Date, timeZone: string) {
-  const p = getZonedParts(date, timeZone);
-  const asIfUTC = Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second);
-  return (asIfUTC - date.getTime()) / 60000;
-}
-
-function londonWallTimeToDateUTC(
-  year: number,
-  month: number,
-  day: number,
-  hour = 0,
-  minute = 0,
-  second = 0
-) {
-  let guess = new Date(Date.UTC(year, month - 1, day, hour, minute, second));
-
-  // Pass 1
-  let offset = getTimeZoneOffsetMinutes(guess, LONDON_TZ);
-  guess = new Date(guess.getTime() - offset * 60000);
-
-  // Pass 2 (stabilise around DST boundaries)
-  offset = getTimeZoneOffsetMinutes(guess, LONDON_TZ);
-  guess = new Date(guess.getTime() - offset * 60000);
-
-  return guess;
+  return {
+    year: Number(map.year),
+    month: Number(map.month),
+    day: Number(map.day),
+    hour: Number(map.hour),
+    minute: Number(map.minute),
+    second: Number(map.second),
+    weekday: map.weekday || "",
+  };
 }
 
 function addDaysToYMD(year: number, month: number, day: number, addDays: number) {
-  const d = new Date(Date.UTC(year, month - 1, day, 12, 0, 0)); // noon UTC
+  const d = new Date(Date.UTC(year, month - 1, day, 12, 0, 0)); // noon UTC avoids date-edge weirdness
   d.setUTCDate(d.getUTCDate() + addDays);
-  return { year: d.getUTCFullYear(), month: d.getUTCMonth() + 1, day: d.getUTCDate() };
+  return {
+    year: d.getUTCFullYear(),
+    month: d.getUTCMonth() + 1,
+    day: d.getUTCDate(),
+  };
 }
 
 function weekdayToISO(weekdayShort: string) {
@@ -99,50 +88,131 @@ function weekdayToISO(weekdayShort: string) {
   return 7; // Sun
 }
 
+/**
+ * Convert a London wall-clock time (e.g. 2026-03-29 23:00 London)
+ * into the real UTC Date that represents that instant.
+ *
+ * This iterative approach is reliable across DST changes.
+ */
+function londonWallTimeToDateUTC(
+  year: number,
+  month: number,
+  day: number,
+  hour = 0,
+  minute = 0,
+  second = 0
+) {
+  // Start by pretending the London wall time is UTC.
+  let guess = new Date(Date.UTC(year, month - 1, day, hour, minute, second));
+
+  // Iteratively correct until the London-local parts match the requested wall time.
+  for (let i = 0; i < 6; i++) {
+    const actual = getZonedParts(guess, LONDON_TZ);
+
+    const wantedAsUtc = Date.UTC(year, month - 1, day, hour, minute, second);
+    const actualAsUtc = Date.UTC(
+      actual.year,
+      actual.month - 1,
+      actual.day,
+      actual.hour,
+      actual.minute,
+      actual.second
+    );
+
+    const diffMs = wantedAsUtc - actualAsUtc;
+
+    if (diffMs === 0) return guess;
+
+    guess = new Date(guess.getTime() + diffMs);
+  }
+
+  return guess;
+}
+
 export function getAuctionWindow(now: Date = new Date()): AuctionWindow {
   const londonNow = getZonedParts(now, LONDON_TZ);
   const isoWeekday = weekdayToISO(londonNow.weekday);
 
-  // This week's Monday (London calendar date)
-  const mondayYMD = addDaysToYMD(londonNow.year, londonNow.month, londonNow.day, -(isoWeekday - 1));
+  // Calendar Monday for "this week" in London
+  const thisMondayYMD = addDaysToYMD(
+    londonNow.year,
+    londonNow.month,
+    londonNow.day,
+    -(isoWeekday - 1)
+  );
 
   // Monday 01:00 London for this week
   const thisWeekMonday01 = londonWallTimeToDateUTC(
-    mondayYMD.year,
-    mondayYMD.month,
-    mondayYMD.day,
+    thisMondayYMD.year,
+    thisMondayYMD.month,
+    thisMondayYMD.day,
     1,
     0,
     0
   );
 
-  // If now is before this week's Monday 01:00 London, current window is last week
-  const currentStart =
+  // If we're before this week's Monday 01:00 London, current window is last week
+  const currentStartYMD =
     now.getTime() < thisWeekMonday01.getTime()
-      ? (() => {
-          const prevMondayYMD = addDaysToYMD(mondayYMD.year, mondayYMD.month, mondayYMD.day, -7);
-          return londonWallTimeToDateUTC(prevMondayYMD.year, prevMondayYMD.month, prevMondayYMD.day, 1, 0, 0);
-        })()
-      : thisWeekMonday01;
+      ? addDaysToYMD(thisMondayYMD.year, thisMondayYMD.month, thisMondayYMD.day, -7)
+      : thisMondayYMD;
 
-  // Current end = Sunday 23:00 of currentStart's week (London calendar)
-  const currentStartLondon = getZonedParts(currentStart, LONDON_TZ);
-  const startMondayYMD = addDaysToYMD(
-    currentStartLondon.year,
-    currentStartLondon.month,
-    currentStartLondon.day,
+  const currentStart = londonWallTimeToDateUTC(
+    currentStartYMD.year,
+    currentStartYMD.month,
+    currentStartYMD.day,
+    1,
+    0,
     0
   );
 
-  const sundayYMD = addDaysToYMD(startMondayYMD.year, startMondayYMD.month, startMondayYMD.day, 6);
-  const currentEnd = londonWallTimeToDateUTC(sundayYMD.year, sundayYMD.month, sundayYMD.day, 23, 0, 0);
+  const currentEndYMD = addDaysToYMD(
+    currentStartYMD.year,
+    currentStartYMD.month,
+    currentStartYMD.day,
+    6
+  );
 
-  // Next window
-  const nextMondayYMD = addDaysToYMD(startMondayYMD.year, startMondayYMD.month, startMondayYMD.day, 7);
-  const nextStart = londonWallTimeToDateUTC(nextMondayYMD.year, nextMondayYMD.month, nextMondayYMD.day, 1, 0, 0);
+  const currentEnd = londonWallTimeToDateUTC(
+    currentEndYMD.year,
+    currentEndYMD.month,
+    currentEndYMD.day,
+    23,
+    0,
+    0
+  );
 
-  const nextSundayYMD = addDaysToYMD(nextMondayYMD.year, nextMondayYMD.month, nextMondayYMD.day, 6);
-  const nextEnd = londonWallTimeToDateUTC(nextSundayYMD.year, nextSundayYMD.month, nextSundayYMD.day, 23, 0, 0);
+  const nextStartYMD = addDaysToYMD(
+    currentStartYMD.year,
+    currentStartYMD.month,
+    currentStartYMD.day,
+    7
+  );
+
+  const nextStart = londonWallTimeToDateUTC(
+    nextStartYMD.year,
+    nextStartYMD.month,
+    nextStartYMD.day,
+    1,
+    0,
+    0
+  );
+
+  const nextEndYMD = addDaysToYMD(
+    nextStartYMD.year,
+    nextStartYMD.month,
+    nextStartYMD.day,
+    6
+  );
+
+  const nextEnd = londonWallTimeToDateUTC(
+    nextEndYMD.year,
+    nextEndYMD.month,
+    nextEndYMD.day,
+    23,
+    0,
+    0
+  );
 
   const isLive = now.getTime() >= currentStart.getTime() && now.getTime() <= currentEnd.getTime();
   const isComing = now.getTime() < currentStart.getTime();
