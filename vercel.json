@@ -1,7 +1,7 @@
 {
   "crons": [
     {
-      "path": "/api/cron/relist",
+      "path": "/api/auction-scheduler",
       "schedule": "*/10 * * * *"
     }
   ]
