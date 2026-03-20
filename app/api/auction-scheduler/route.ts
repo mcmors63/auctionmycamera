@@ -179,6 +179,50 @@ function getErrorMessage(err: any) {
   }
 }
 
+function extractUnknownAttribute(err: any): string | null {
+  const respRaw = typeof err?.response === "string" ? err.response : "";
+  let msg = "";
+
+  if (respRaw) {
+    try {
+      const parsed = JSON.parse(respRaw);
+      msg = String(parsed?.message || respRaw);
+    } catch {
+      msg = respRaw;
+    }
+  }
+
+  if (!msg) msg = String(err?.message || "");
+  const m = msg.match(/Unknown attribute:\s*["']?([A-Za-z0-9_]+)["']?/i);
+  return m?.[1] ? m[1] : null;
+}
+
+async function updateDocSchemaTolerant(params: {
+  databases: Databases;
+  dbId: string;
+  colId: string;
+  docId: string;
+  data: Record<string, any>;
+}) {
+  const { databases, dbId, colId, docId } = params;
+  const data: Record<string, any> = { ...params.data };
+
+  for (let i = 0; i < 16; i++) {
+    try {
+      return await databases.updateDocument(dbId, colId, docId, data);
+    } catch (err: any) {
+      const bad = extractUnknownAttribute(err);
+      if (bad && bad in data) {
+        delete data[bad];
+        continue;
+      }
+      throw err;
+    }
+  }
+
+  return await databases.updateDocument(dbId, colId, docId, data);
+}
+
 // -----------------------------
 // CAMERA POLICY (No DVLA fee)
 // -----------------------------
@@ -387,7 +431,6 @@ async function createTransactionForWinner(params: {
     return null;
   }
 
-  // prevent duplicate tx creation (scheduler reruns)
   const existing = await findAnyTransactionForListing(databases, String(listing.$id || ""));
   if (existing && String(existing.payment_status || "").toLowerCase() === "paid") {
     return existing;
@@ -399,7 +442,7 @@ async function createTransactionForWinner(params: {
   const sellerEmail = String(listing.seller_email || listing.sellerEmail || "").trim();
 
   const commissionRate = getNumeric(listing.commission_rate); // %
-  const salePrice = roundTo2(finalBidAmount); // keep pennies
+  const salePrice = roundTo2(finalBidAmount);
 
   const commissionAmount = roundTo2(commissionRate > 0 ? (salePrice * commissionRate) / 100 : 0);
   const sellerPayout = roundTo2(Math.max(0, salePrice - commissionAmount - EXTRA_FEE_GBP));
@@ -468,7 +511,6 @@ async function createPaymentFailedTransaction(params: {
 
   if (!TRANSACTIONS_COLLECTION_ID) return null;
 
-  // prevent endless failure tx spam
   const existing = await findAnyTransactionForListing(databases, String(listing.$id || ""));
   if (existing && String(existing.transaction_status || "").toLowerCase() === "payment_failed") {
     return existing;
@@ -788,10 +830,17 @@ export async function GET(req: NextRequest) {
           const end = useNext ? nextEnd : currentEnd;
 
           try {
-            await databases.updateDocument(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, lid, {
-              auction_start: start.toISOString(),
-              auction_end: end.toISOString(),
+            await updateDocSchemaTolerant({
+              databases,
+              dbId: LISTINGS_DB_ID,
+              colId: LISTINGS_COLLECTION_ID,
+              docId: lid,
+              data: {
+                auction_start: start.toISOString(),
+                auction_end: end.toISOString(),
+              },
             });
+
             repairedQueuedDates++;
             startTs = start.getTime();
             endTs = end.getTime();
@@ -810,7 +859,13 @@ export async function GET(req: NextRequest) {
         if (startTs > nowTs) continue;
 
         try {
-          await databases.updateDocument(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, lid, { status: "live" });
+          await updateDocSchemaTolerant({
+            databases,
+            dbId: LISTINGS_DB_ID,
+            colId: LISTINGS_COLLECTION_ID,
+            docId: lid,
+            data: { status: "live" },
+          });
           promoted++;
         } catch (err: any) {
           const message = getErrorMessage(err);
@@ -866,8 +921,14 @@ export async function GET(req: NextRequest) {
 
         if (hasBid && reserveMet) {
           try {
-            const updated = await databases.updateDocument(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, lid, {
-              status: "completed",
+            const updated = await updateDocSchemaTolerant({
+              databases,
+              dbId: LISTINGS_DB_ID,
+              colId: LISTINGS_COLLECTION_ID,
+              docId: lid,
+              data: {
+                status: "completed",
+              },
             });
             completed++;
             justCompletedForCharging.push(updated);
@@ -890,25 +951,33 @@ export async function GET(req: NextRequest) {
           const start = useNext ? nextStart : currentStart;
           const end = useNext ? nextEnd : currentEnd;
 
-          try {
-            await databases.updateDocument(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, lid, {
-              status: "queued",
-              auction_start: start.toISOString(),
-              auction_end: end.toISOString(),
+          const newStatus =
+            nowTs >= start.getTime() && nowTs < end.getTime() ? "live" : "queued";
 
-              current_bid: null,
-              highest_bidder: null,
-              last_bidder: null,
-              last_bid_time: null,
-              bids: 0,
-              bidder_email: null,
-              bidder_id: null,
+          try {
+            await updateDocSchemaTolerant({
+              databases,
+              dbId: LISTINGS_DB_ID,
+              colId: LISTINGS_COLLECTION_ID,
+              docId: lid,
+              data: {
+                status: newStatus,
+                auction_start: start.toISOString(),
+                auction_end: end.toISOString(),
+
+                // reset weekly bid state
+                current_bid: 0,
+                bids: 0,
+                bidder_email: null,
+                bidder_id: null,
+                reserve_met: false,
+              },
             });
 
             relisted++;
           } catch (err: any) {
             const message = getErrorMessage(err);
-            console.error(`[auction-scheduler] live->queued relist failed for ${lid}:`, err);
+            console.error(`[auction-scheduler] live->queued/live relist failed for ${lid}:`, err);
             liveEndErrors.push({
               listingId: lid,
               stage: "relist",
@@ -944,7 +1013,13 @@ End:   ${fmtLondon(end)}
         }
 
         try {
-          await databases.updateDocument(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, lid, { status: "not_sold" });
+          await updateDocSchemaTolerant({
+            databases,
+            dbId: LISTINGS_DB_ID,
+            colId: LISTINGS_COLLECTION_ID,
+            docId: lid,
+            data: { status: "not_sold" },
+          });
           markedNotSold++;
         } catch (err: any) {
           const message = getErrorMessage(err);
@@ -1007,7 +1082,6 @@ End:   ${fmtLondon(end)}
     for (const listing of justCompletedForCharging) {
       const lid = listing.$id as string;
 
-      // Appwrite-level idempotency: if already paid, do not re-charge
       const alreadyIntent = String(listing?.stripe_payment_intent_id || "").trim();
       if (alreadyIntent) {
         winnerCharges.push({ listingId: lid, skipped: true, reason: "listing already has stripe_payment_intent_id" });
@@ -1016,14 +1090,20 @@ End:   ${fmtLondon(end)}
 
       const existingPaidTx = await findExistingPaidTransaction(databases, lid);
       if (existingPaidTx) {
-        // best-effort: ensure listing ends up as sold (prevents “ended” weirdness)
         try {
-          await databases.updateDocument(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, lid, {
-            status: "sold",
-            sale_status: "winner_charged",
-            payment_status: "paid",
+          await updateDocSchemaTolerant({
+            databases,
+            dbId: LISTINGS_DB_ID,
+            colId: LISTINGS_COLLECTION_ID,
+            docId: lid,
+            data: {
+              status: "sold",
+              sale_status: "winner_charged",
+              payment_status: "paid",
+            },
           });
         } catch {}
+
         winnerCharges.push({ listingId: lid, skipped: true, reason: "paid transaction already exists" });
         continue;
       }
@@ -1045,7 +1125,6 @@ End:   ${fmtLondon(end)}
         continue;
       }
 
-      // Load bids
       let bids: any[] = [];
       try {
         bids = await listAllDocs({
@@ -1094,7 +1173,6 @@ End:   ${fmtLondon(end)}
       const totalToCharge = finalBidAmount;
       const amountInPence = Math.round(totalToCharge * 100);
 
-      // Load buyer profile snapshot from PROFILES_DB_ID (fixes delivery details)
       let buyerProfile: any = null;
       if ((winnerUserId || winnerEmail) && PROFILES_COLLECTION_ID) {
         if (winnerUserId) {
@@ -1125,14 +1203,19 @@ End:   ${fmtLondon(end)}
         const paymentMethod = await pickPaymentMethodForCustomer(customer.id);
 
         if (!paymentMethod) {
-          // align listing.status with public page + workflow
           try {
-            await databases.updateDocument(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, lid, {
-              status: "payment_required",
-              sale_status: "payment_required",
-              payment_status: "unpaid",
-              buyer_email: winnerEmail,
-              buyer_id: winnerUserId,
+            await updateDocSchemaTolerant({
+              databases,
+              dbId: LISTINGS_DB_ID,
+              colId: LISTINGS_COLLECTION_ID,
+              docId: lid,
+              data: {
+                status: "payment_required",
+                sale_status: "payment_required",
+                payment_status: "unpaid",
+                buyer_email: winnerEmail,
+                buyer_id: winnerUserId,
+              },
             });
           } catch {}
 
@@ -1170,7 +1253,6 @@ End:   ${fmtLondon(end)}
           continue;
         }
 
-        // Stronger idempotency: key is listingId only (not amount)
         const idempotencyKey = `winner-charge-${lid}`;
 
         const label = getListingLabel(listing);
@@ -1196,22 +1278,32 @@ End:   ${fmtLondon(end)}
           { idempotencyKey }
         );
 
-        // Write PI id onto listing immediately (prevents repeats)
         try {
-          await databases.updateDocument(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, lid, {
-            stripe_payment_intent_id: intent.id,
+          await updateDocSchemaTolerant({
+            databases,
+            dbId: LISTINGS_DB_ID,
+            colId: LISTINGS_COLLECTION_ID,
+            docId: lid,
+            data: {
+              stripe_payment_intent_id: intent.id,
+            },
           });
         } catch {}
 
         if (intent.status !== "succeeded") {
-          // align listing.status with public page + workflow
           try {
-            await databases.updateDocument(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, lid, {
-              status: "payment_failed",
-              sale_status: "payment_failed",
-              payment_status: "unpaid",
-              buyer_email: winnerEmail,
-              buyer_id: winnerUserId,
+            await updateDocSchemaTolerant({
+              databases,
+              dbId: LISTINGS_DB_ID,
+              colId: LISTINGS_COLLECTION_ID,
+              docId: lid,
+              data: {
+                status: "payment_failed",
+                sale_status: "payment_failed",
+                payment_status: "unpaid",
+                buyer_email: winnerEmail,
+                buyer_id: winnerUserId,
+              },
             });
           } catch {}
 
@@ -1252,26 +1344,31 @@ End:   ${fmtLondon(end)}
           continue;
         }
 
-        // Payment succeeded: mark listing SOLD
         try {
           const commissionRate = getNumeric(listing.commission_rate);
           const soldPrice = finalBidAmount;
           const saleFee = roundTo2(commissionRate > 0 ? (soldPrice * commissionRate) / 100 : 0);
           const sellerNetAmount = roundTo2(Math.max(0, soldPrice - saleFee));
 
-          await databases.updateDocument(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, lid, {
-            status: "sold",
-            buyer_email: winnerEmail,
-            buyer_id: winnerUserId,
+          await updateDocSchemaTolerant({
+            databases,
+            dbId: LISTINGS_DB_ID,
+            colId: LISTINGS_COLLECTION_ID,
+            docId: lid,
+            data: {
+              status: "sold",
+              buyer_email: winnerEmail,
+              buyer_id: winnerUserId,
 
-            sold_price: soldPrice,
-            sale_fee: saleFee,
-            seller_net_amount: sellerNetAmount,
+              sold_price: soldPrice,
+              sale_fee: saleFee,
+              seller_net_amount: sellerNetAmount,
 
-            sale_status: "winner_charged",
-            payment_status: "paid",
-            payout_status: "pending",
-            sold_at: new Date().toISOString(),
+              sale_status: "winner_charged",
+              payment_status: "paid",
+              payout_status: "pending",
+              sold_at: new Date().toISOString(),
+            },
           });
         } catch (updateErr) {
           console.error(`Failed to update listing doc for ${lid} after charge`, updateErr);
@@ -1323,15 +1420,20 @@ End:   ${fmtLondon(end)}
         const piId =
           anyErr?.raw?.payment_intent?.id || anyErr?.payment_intent?.id || anyErr?.paymentIntentId || "";
 
-        // align listing.status with public page + workflow
         try {
-          await databases.updateDocument(LISTINGS_DB_ID, LISTINGS_COLLECTION_ID, lid, {
-            status: "payment_failed",
-            sale_status: "payment_failed",
-            payment_status: "unpaid",
-            buyer_email: winnerEmail,
-            buyer_id: winnerUserId,
-            stripe_payment_intent_id: piId || "",
+          await updateDocSchemaTolerant({
+            databases,
+            dbId: LISTINGS_DB_ID,
+            colId: LISTINGS_COLLECTION_ID,
+            docId: lid,
+            data: {
+              status: "payment_failed",
+              sale_status: "payment_failed",
+              payment_status: "unpaid",
+              buyer_email: winnerEmail,
+              buyer_id: winnerUserId,
+              stripe_payment_intent_id: piId || "",
+            },
           });
         } catch {}
 
